@@ -1,0 +1,18 @@
+{
+  "name": "denchclaw-crm",
+  "version": "1.0.0",
+  "description": "Standalone DenchClaw CRM microservice for Tantra automation engines",
+  "main": "server/server.js",
+  "scripts": {
+    "start": "node server/server.js",
+    "dev": "node --watch server/server.js"
+  },
+  "dependencies": {
+    "express": "^4.21.2",
+    "pg": "^8.13.3",
+    "uuid": "^11.0.3"
+  },
+  "engines": {
+    "node": ">=18"
+  }
+}
