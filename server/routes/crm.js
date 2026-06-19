@@ -333,6 +333,11 @@ router.patch('/contacts/:id', async (req, res) => {
     for (const key of allowed) {
       if (updates[key] !== undefined) updateData[key] = updates[key];
     }
+    // Map 'company' → 'company_name' (automation_core sends 'company', DB column is 'company_name')
+    if (updateData.company !== undefined && updateData.company_name === undefined) {
+      updateData.company_name = updateData.company;
+    }
+    delete updateData.company;
 
     if (updates.lead_score) {
       updateData.lead_score_numeric = LEAD_SCORES[updates.lead_score] || 30;
