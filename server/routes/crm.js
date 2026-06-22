@@ -844,7 +844,14 @@ router.patch('/prospect-inbox/:id', validate(), async (req, res) => {
     const params = [];
     let idx = 1;
     if (status) { sets.push(`status = $${idx++}`); params.push(status); }
-    if (claimed_by !== undefined) { sets.push(`claimed_by = $${idx++}`); params.push(claimed_by); }
+    if (status === 'pending') {
+      // Release back to the queue (sweep / no-campaign path): clear claim ownership
+      // so a released row isn't left lying as still-claimed (stale claimed_by/at).
+      sets.push(`claimed_by = NULL`);
+      sets.push(`claimed_at = NULL`);
+    } else if (claimed_by !== undefined) {
+      sets.push(`claimed_by = $${idx++}`); params.push(claimed_by);
+    }
     if (status === 'claimed' || status === 'enrolled') { sets.push(`claimed_at = now()`); }
     if (sets.length === 0) return res.status(400).json({ error: 'nothing to update' });
     params.push(req.params.id, companyId);
