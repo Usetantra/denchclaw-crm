@@ -31,6 +31,8 @@ app.use(express.json({ limit: '2mb' }));
 app.use(express.urlencoded({ extended: true }));
 
 const crmRouter = require('./routes/crm');
+const chatRouter = require('./routes/chat');
+app.use('/api/crm/chat', chatRouter);
 app.use('/api/crm', crmRouter);
 
 app.get('/health', async (req, res) => {

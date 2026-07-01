@@ -1,0 +1,233 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>DenchClaw CRM</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Fraunces:ital,opsz,wght@0,9..144,300;0,9..144,400;0,9..144,500;1,9..144,400&family=Inter:wght@400;500;600&display=swap" rel="stylesheet">
+<style>
+  :root{
+    /* Tantra brand tokens (from usetantra.com) */
+    --bg:#ffffff; --ink:#0a0a0a; --ink-2:#2a2a2a; --ink-3:#4a4a4a; --ink-4:#6b6b6b; --ink-5:#d0d0d0;
+    --hair:#ececec; --hair-2:#f4f4f4; --radius:2px; --nav-h:64px; --maxw:1120px;
+    --sans:"Inter",-apple-system,BlinkMacSystemFont,"Helvetica Neue",Arial,sans-serif;
+    --serif:"Fraunces",Georgia,serif;
+    --hot:#b42318; --hot-bg:#fef3f2; --warm:#b54708; --warm-bg:#fffaeb;
+    --neutral:#4a4a4a; --neutral-bg:#f4f4f4; --cold:#175cd3; --cold-bg:#eff4ff; --live:#067647;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--ink);font:16px/1.6 var(--sans);-webkit-font-smoothing:antialiased}
+  .eyebrow{font-size:11px;letter-spacing:.18em;text-transform:uppercase;color:var(--ink-4);font-weight:500}
+
+  header{height:var(--nav-h);display:flex;align-items:center;justify-content:space-between;
+         padding:0 32px;border-bottom:1px solid var(--hair);position:sticky;top:0;background:rgba(255,255,255,.92);
+         backdrop-filter:saturate(180%) blur(8px);z-index:10}
+  .brand{display:flex;align-items:baseline;gap:12px}
+  .brand .mark{font-family:var(--serif);font-weight:400;font-style:italic;font-size:22px;letter-spacing:.06em}
+  .brand .sub{font-size:11px;letter-spacing:.18em;text-transform:uppercase;color:var(--ink-4)}
+  .status{display:flex;align-items:center;gap:7px;font-size:11px;letter-spacing:.14em;text-transform:uppercase;color:var(--ink-4)}
+  .status .dot{width:7px;height:7px;border-radius:50%;background:var(--ink-5)}
+  .status.ok .dot{background:var(--live)} .status.err .dot{background:var(--hot)}
+
+  main{padding:34px 32px 0;max-width:var(--maxw);margin:0 auto}
+  .err-banner{display:none;border:1px solid var(--hot);background:var(--hot-bg);color:var(--hot);
+              padding:12px 16px;border-radius:var(--radius);margin-bottom:22px;font-size:14px}
+  .layout{display:grid;grid-template-columns:1fr 372px;gap:28px;align-items:start}
+  @media (max-width:920px){.layout{grid-template-columns:1fr}}
+
+  .sechead{display:flex;align-items:center;gap:14px;margin:30px 0 14px}
+  .sechead .eyebrow{white-space:nowrap}
+  .sechead .rule{flex:1;height:1px;background:var(--hair)}
+
+  .cards{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:0;border:1px solid var(--hair);border-radius:var(--radius);overflow:hidden}
+  .card{padding:20px 22px;border-right:1px solid var(--hair)}
+  .card:last-child{border-right:none}
+  .card .label{font-size:11px;letter-spacing:.14em;text-transform:uppercase;color:var(--ink-4)}
+  .card .value{font-family:var(--serif);font-weight:300;font-size:40px;line-height:1.1;margin-top:8px;letter-spacing:-.01em}
+  .card .sub{color:var(--ink-4);font-size:12px;margin-top:4px}
+  @media (max-width:620px){.card{border-right:none;border-bottom:1px solid var(--hair)}}
+
+  .pipeline{display:grid;grid-template-columns:repeat(auto-fit,minmax(155px,1fr));gap:12px}
+  .stage{background:var(--bg);border:1px solid var(--hair);border-radius:var(--radius);padding:14px;min-height:88px}
+  .stage .head{display:flex;justify-content:space-between;align-items:baseline;margin-bottom:10px}
+  .stage .head .name{font-size:11px;letter-spacing:.12em;text-transform:uppercase;color:var(--ink-2);font-weight:600}
+  .stage .head .count{font-family:var(--serif);font-size:18px;color:var(--ink);font-weight:400}
+  .stage .contact{font-size:13px;padding:7px 9px;border-radius:var(--radius);background:var(--hair-2);margin-bottom:6px}
+  .stage .contact .c-name{font-weight:500} .stage .contact .c-co{color:var(--ink-4);font-size:12px}
+  .stage .empty{color:var(--ink-5);font-size:12px}
+
+  table{width:100%;border-collapse:collapse;border:1px solid var(--hair);border-radius:var(--radius);overflow:hidden}
+  th,td{text-align:left;padding:12px 14px;border-bottom:1px solid var(--hair);font-size:14px}
+  th{font-size:11px;letter-spacing:.12em;text-transform:uppercase;color:var(--ink-4);font-weight:500;background:var(--hair-2)}
+  tr:last-child td{border-bottom:none}
+  td .co{color:var(--ink-2)} td .email{color:var(--ink-4)}
+  .score{display:inline-block;padding:2px 9px;border-radius:999px;font-size:11px;font-weight:600;text-transform:capitalize;letter-spacing:.02em}
+  .score.hot{background:var(--hot-bg);color:var(--hot)} .score.warm{background:var(--warm-bg);color:var(--warm)}
+  .score.neutral{background:var(--neutral-bg);color:var(--neutral)} .score.cold{background:var(--cold-bg);color:var(--cold)}
+  .src{font-size:11px;color:var(--ink-4);letter-spacing:.06em;text-transform:uppercase}
+  .muted{color:var(--ink-4)}
+
+  /* Chat */
+  .chat{position:sticky;top:calc(var(--nav-h) + 30px);display:flex;flex-direction:column;
+        height:calc(100vh - var(--nav-h) - 64px);min-height:440px;
+        border:1px solid var(--hair);border-radius:var(--radius);background:var(--bg);overflow:hidden}
+  .chat .chead{padding:16px 18px;border-bottom:1px solid var(--hair);display:flex;align-items:center;gap:9px}
+  .chat .chead .dot{width:7px;height:7px;border-radius:50%;background:var(--live)}
+  .chat .chead b{font-family:var(--serif);font-style:italic;font-weight:400;font-size:16px;letter-spacing:.02em}
+  .chat .chead .model{margin-left:auto;font-size:10px;letter-spacing:.1em;text-transform:uppercase;color:var(--ink-5)}
+  .msgs{flex:1;overflow-y:auto;padding:18px;display:flex;flex-direction:column;gap:12px}
+  .msg{max-width:88%;padding:11px 13px;border-radius:var(--radius);font-size:14px;line-height:1.55;white-space:pre-wrap;word-wrap:break-word}
+  .msg.user{align-self:flex-end;background:var(--ink);color:#fff}
+  .msg.bot{align-self:flex-start;background:var(--hair-2);border:1px solid var(--hair);color:var(--ink-2)}
+  .msg.bot.typing{color:var(--ink-4);font-style:italic}
+  .suggest{display:flex;flex-wrap:wrap;gap:7px;padding:0 18px 12px}
+  .suggest button{background:none;border:1px solid var(--hair);color:var(--ink-3);font-size:11px;letter-spacing:.04em;
+        padding:6px 11px;border-radius:999px;cursor:pointer;font-family:var(--sans)}
+  .suggest button:hover{border-color:var(--ink);color:var(--ink)}
+  .composer{display:flex;gap:9px;padding:14px;border-top:1px solid var(--hair)}
+  .composer input{flex:1;background:var(--bg);border:1px solid var(--hair);border-radius:var(--radius);color:var(--ink);
+        padding:11px 13px;font-size:14px;outline:none;font-family:var(--sans)}
+  .composer input:focus{border-color:var(--ink)}
+  .composer button{background:var(--ink);border:none;color:#fff;border-radius:var(--radius);padding:0 18px;
+        font-size:11px;letter-spacing:.14em;text-transform:uppercase;font-weight:600;cursor:pointer;font-family:var(--sans)}
+  .composer button:disabled{opacity:.4;cursor:default}
+
+  footer{max-width:var(--maxw);margin:40px auto 0;padding:20px 32px 30px;border-top:1px solid var(--hair);
+         color:var(--ink-4);font-size:12px;display:flex;justify-content:space-between;flex-wrap:wrap;gap:8px}
+  footer .eyebrow{font-size:10px}
+  code{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:11px;color:var(--ink-3)}
+</style>
+</head>
+<body>
+<header>
+  <div class="brand"><span class="mark">DenchClaw</span><span class="sub">CRM</span></div>
+  <span id="status" class="status"><span class="dot"></span><span id="statusText">Connecting</span></span>
+</header>
+
+<main>
+  <div id="err" class="err-banner"></div>
+  <div class="layout">
+    <div>
+      <div class="cards" id="cards"></div>
+
+      <div class="sechead"><span class="eyebrow">Pipeline</span><span class="rule"></span></div>
+      <div class="pipeline" id="pipeline"></div>
+
+      <div class="sechead"><span class="eyebrow">Contacts</span><span class="rule"></span></div>
+      <table id="contacts">
+        <thead><tr><th>Name</th><th>Company</th><th>Email</th><th>Stage</th><th>Score</th><th>Source</th><th>Created</th></tr></thead>
+        <tbody><tr><td colspan="7" class="muted">loading…</td></tr></tbody>
+      </table>
+    </div>
+
+    <aside class="chat">
+      <div class="chead"><span class="dot"></span><b>Chat with DenchClaw</b><span class="model" id="chatmeta"></span></div>
+      <div class="msgs" id="msgs">
+        <div class="msg bot">Hi — I'm DenchClaw. Ask me anything about your pipeline: contacts, stages, sources, follow-ups.</div>
+      </div>
+      <div class="suggest" id="suggest">
+        <button>How many contacts do I have?</button>
+        <button>Who's in the contacted stage?</button>
+        <button>Summarize my pipeline</button>
+      </div>
+      <form class="composer" id="composer" autocomplete="off">
+        <input id="input" placeholder="Ask DenchClaw…" />
+        <button id="send" type="submit">Send</button>
+      </form>
+    </aside>
+  </div>
+</main>
+
+<footer>
+  <span class="eyebrow">DenchClaw CRM · Tantra RevOps</span>
+  <span>Read-only · <code>denchclaw-crm</code> on <code>127.0.0.1:3100</code> · <span id="refreshed"></span></span>
+</footer>
+
+<script>
+// Absolute, mount-anchored base so fetch never mis-resolves (page served at /crm/).
+const API = (location.pathname.replace(/\/+$/,"").replace(/\/[^/]*$/,"") || "/crm") + "/api";
+const $ = s => document.querySelector(s);
+const esc = s => (s==null?"":String(s)).replace(/[&<>"]/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));
+const fmtDate = s => { if(!s) return "—"; try{ return new Date(s).toLocaleDateString(undefined,{month:"short",day:"numeric"});}catch{ return "—";} };
+
+async function get(path){
+  const r = await fetch(`${API}/${path}`, {headers:{"Accept":"application/json"}});
+  if(!r.ok) throw new Error(`${path} → HTTP ${r.status}`);
+  return r.json();
+}
+function setStatus(ok,msg){ const el=$("#status"); el.className="status "+(ok?"ok":"err"); $("#statusText").textContent=msg; }
+function showErr(msg){ const e=$("#err"); e.style.display="block"; e.textContent=msg; }
+
+function renderCards(s){
+  const c=s.contacts||{}, d=s.deals||{};
+  const cards=[
+    {label:"Contacts", value:c.total??0, sub:`${c.hot??0} hot · ${c.warm??0} warm`},
+    {label:"New this week", value:c.new_this_week??0, sub:`${c.new_today??0} today`},
+    {label:"Open deals", value:d.open??0, sub:`${d.total??0} total`},
+    {label:"Pipeline value", value:`$${(d.pipeline_value??0).toLocaleString()}`, sub:`$${(d.won_value??0).toLocaleString()} won`},
+  ];
+  $("#cards").innerHTML=cards.map(k=>`<div class="card"><div class="label">${esc(k.label)}</div>
+    <div class="value">${esc(k.value)}</div><div class="sub">${esc(k.sub)}</div></div>`).join("");
+}
+function renderPipeline(p){
+  const stages=p.pipeline||{};
+  const order=["lead","contacted","qualified","proposal","negotiation","onboarding","won"];
+  const keys=Object.keys(stages).sort((a,b)=>{const ia=order.indexOf(a),ib=order.indexOf(b);return (ia<0?99:ia)-(ib<0?99:ib);})
+    .filter(k=>(stages[k].count||0)>0||order.includes(k));
+  $("#pipeline").innerHTML=keys.map(k=>{
+    const st=stages[k];
+    const items=(st.contacts||[]).slice(0,4).map(ct=>`<div class="contact"><div class="c-name">${esc(ct.name||"—")}</div>
+      <div class="c-co">${esc(ct.company||"")}</div></div>`).join("")||`<div class="empty">No contacts</div>`;
+    return `<div class="stage"><div class="head"><span class="name">${esc(k)}</span><span class="count">${st.count||0}</span></div>${items}</div>`;
+  }).join("");
+}
+function renderContacts(list){
+  const rows=(list||[]).map(c=>`<tr>
+    <td>${esc(c.name||"—")}</td><td class="co">${esc(c.company_name||"")}</td><td class="email">${esc(c.email||"")}</td>
+    <td style="text-transform:capitalize">${esc(c.deal_stage||"")}</td>
+    <td><span class="score ${esc(c.lead_score||"neutral")}">${esc(c.lead_score||"—")}</span></td>
+    <td><span class="src">${esc(c.source||"")}</span></td><td class="muted">${fmtDate(c.created_at)}</td></tr>`).join("");
+  $("#contacts tbody").innerHTML=rows||`<tr><td colspan="7" class="muted">No contacts yet.</td></tr>`;
+}
+async function load(){
+  try{
+    const [stats,pipeline,contacts]=await Promise.all([get("stats"),get("pipeline"),get("contacts?limit=50")]);
+    renderCards(stats); renderPipeline(pipeline); renderContacts(contacts.data||contacts.contacts||[]);
+    setStatus(true,"Live"); $("#refreshed").textContent="refreshed "+new Date().toLocaleTimeString();
+  }catch(e){ setStatus(false,"Error"); showErr("Could not reach CRM API: "+e.message);
+    $("#contacts tbody").innerHTML=`<tr><td colspan="7" class="muted">—</td></tr>`; }
+}
+
+/* Chat */
+const convo=[];
+const msgsEl=$("#msgs");
+function addMsg(role,text,cls){
+  const d=document.createElement("div");
+  d.className="msg "+(role==="user"?"user":"bot")+(cls?(" "+cls):"");
+  d.textContent=text; msgsEl.appendChild(d); msgsEl.scrollTop=msgsEl.scrollHeight; return d;
+}
+async function sendChat(text){
+  text=(text||"").trim(); if(!text) return;
+  $("#send").disabled=true; $("#input").value="";
+  addMsg("user",text); convo.push({role:"user",content:text});
+  const typing=addMsg("bot","DenchClaw is thinking…","typing");
+  try{
+    const r=await fetch(`${API}/chat`,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({messages:convo})});
+    const j=await r.json().catch(()=>({}));
+    if(!r.ok) throw new Error(j.error||`HTTP ${r.status}`);
+    typing.remove();
+    const reply=j.reply||"(no reply)";
+    addMsg("bot",reply); convo.push({role:"assistant",content:reply});
+    $("#chatmeta").textContent=j.model?j.model.split("/").pop():"";
+  }catch(e){ typing.remove(); addMsg("bot","⚠️ "+e.message); }
+  finally{ $("#send").disabled=false; $("#input").focus(); }
+}
+$("#composer").addEventListener("submit",e=>{e.preventDefault();sendChat($("#input").value);});
+$("#suggest").addEventListener("click",e=>{ if(e.target.tagName==="BUTTON") sendChat(e.target.textContent); });
+
+load(); setInterval(load,30000);
+</script>
+</body>
+</html>
