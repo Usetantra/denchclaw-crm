@@ -170,7 +170,7 @@ async function update(id, data, companyId) {
   const now = new Date().toISOString();
   data.updated_at = now;
 
-  const ALLOWED_CONTACT_COLUMNS = ['name','email','phone','company_name','title','linkedin_url','source','lead_score','lead_score_numeric','deal_stage','deal_value','tags','utm_source','utm_medium','utm_campaign','utm_content','metadata','last_contacted','next_follow_up','updated_at'];
+  const ALLOWED_CONTACT_COLUMNS = ['name','email','phone','company_name','title','linkedin_url','source','lead_score','lead_score_numeric','deal_stage','marketing_stage','deal_value','tags','utm_source','utm_medium','utm_campaign','utm_content','metadata','last_contacted','next_follow_up','updated_at'];
   const fields = Object.keys(data).filter(k => ALLOWED_CONTACT_COLUMNS.includes(k));
   if (fields.length === 0) return getById(id, companyId);
 

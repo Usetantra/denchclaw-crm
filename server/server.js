@@ -32,7 +32,11 @@ app.use(express.urlencoded({ extended: true }));
 
 const crmRouter = require('./routes/crm');
 const chatRouter = require('./routes/chat');
+const conversationsRouter = require('./routes/conversations');
+const analyticsRouter = require('./routes/analytics');
 app.use('/api/crm/chat', chatRouter);
+app.use('/api/crm', conversationsRouter);
+app.use('/api/crm', analyticsRouter);
 app.use('/api/crm', crmRouter);
 
 app.get('/health', async (req, res) => {

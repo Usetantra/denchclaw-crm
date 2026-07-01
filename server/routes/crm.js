@@ -93,6 +93,37 @@ async function getPipelineStages(companyId) {
   return entry;
 }
 
+// Named pipeline config cache — keyed by `companyId:pipelineKey`
+const _pipelineConfigCache = new Map();
+
+// Load a pipeline config by stable key. Prefers company-specific config over global defaults.
+async function getPipelineConfig(companyId, pipelineKey) {
+  const cacheKey = `${companyId}:${pipelineKey}`;
+  const cached = _pipelineConfigCache.get(cacheKey);
+  if (cached && Date.now() - cached.fetchedAt < PIPELINE_TTL_MS) return cached;
+
+  try {
+    const r = await query(
+      `SELECT stages FROM crm_pipeline_configs
+       WHERE key = $1 AND (company_id = $2 OR company_id IS NULL)
+       ORDER BY CASE WHEN company_id = $2 THEN 0 ELSE 1 END, created_at ASC
+       LIMIT 1`,
+      [pipelineKey, companyId]
+    );
+    if (!r.rows[0]) return null;
+    const stages = Array.isArray(r.rows[0].stages) ? r.rows[0].stages : [];
+    const entry = { stages, fetchedAt: Date.now() };
+    _pipelineConfigCache.set(cacheKey, entry);
+    return entry;
+  } catch (_e) { return null; }
+}
+
+// Return allowed next-stage keys from a loaded pipeline config.
+function getPipelineTransitions(pipeline, currentStage) {
+  const s = pipeline.stages.find(s => s.key === currentStage);
+  return s ? (s.transitions || []) : [];
+}
+
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 
 async function loadDeals(companyId, { limit = 500 } = {}) {
@@ -441,6 +472,105 @@ router.post('/contacts/:id/activity', validate(), async (req, res) => {
   }
 });
 
+// ─── STAGE ADVANCE (pipeline-aware, transition-enforcing) ────────────────────
+
+// POST /api/crm/contacts/:id/advance
+// Advances a contact through a named pipeline. Validates against the pipeline's
+// allowed_transitions; rejects illegal jumps with 409. Idempotent if already at stage.
+// pipeline_key='marketing' → updates contacts.marketing_stage (mirrors to deal_stage)
+// pipeline_key='sales'     → updates the contact's active deals row
+router.post('/contacts/:id/advance', async (req, res) => {
+  try {
+    const companyId = getUserCompanyId(req);
+    if (!companyId) return res.status(401).json({ error: 'Authentication required' });
+
+    const { pipeline_key, stage, reason, actor } = req.body;
+    if (!pipeline_key || !stage) return res.status(400).json({ error: 'pipeline_key and stage required' });
+
+    const contact = await contactDb.getById(req.params.id, companyId);
+    if (!contact) return res.status(404).json({ error: 'contact not found' });
+
+    const pipeline = await getPipelineConfig(companyId, pipeline_key);
+    if (!pipeline) return res.status(404).json({ error: `Pipeline '${pipeline_key}' not configured` });
+
+    if (pipeline_key === 'marketing') {
+      const currentStage = contact.marketing_stage || 'sourced';
+      if (currentStage === stage) {
+        return res.json({ contact_id: contact.id, pipeline_key, stage, previous: currentStage, changed: false });
+      }
+
+      const allowed = getPipelineTransitions(pipeline, currentStage);
+      if (!allowed.includes(stage)) {
+        return res.status(409).json({ error: 'Illegal stage transition', current: currentStage, requested: stage, allowed });
+      }
+
+      // Update both marketing_stage and the legacy deal_stage mirror
+      await query(
+        `UPDATE contacts SET marketing_stage=$1, deal_stage=$1, updated_at=now() WHERE id=$2 AND company_id=$3`,
+        [stage, contact.id, companyId]
+      );
+
+      await addContactActivity(contact.id, {
+        type: 'stage_change',
+        message: `Marketing stage: ${currentStage} → ${stage}${reason ? ' (' + reason + ')' : ''}`,
+        agent: actor || 'system',
+        channel: null,
+        data: { pipeline_key, from: currentStage, to: stage, reason: reason || null },
+      });
+
+      // Bust pipeline config cache so a fresh read picks up the new stage
+      _pipelineConfigCache.delete(`${companyId}:marketing`);
+
+      return res.json({ contact_id: contact.id, pipeline_key, stage, previous: currentStage, changed: true });
+    }
+
+    if (pipeline_key === 'sales') {
+      const dealRes = await query(
+        `SELECT * FROM deals WHERE contact_id=$1 AND company_id=$2 AND stage NOT IN ('won','lost')
+         ORDER BY created_at DESC LIMIT 1`,
+        [contact.id, companyId]
+      );
+      const deal = dealRes.rows[0];
+      if (!deal) return res.status(404).json({ error: 'No active sales deal found for this contact' });
+
+      const currentStage = deal.stage;
+      if (currentStage === stage) {
+        return res.json({ contact_id: contact.id, deal_id: deal.id, pipeline_key, stage, previous: currentStage, changed: false });
+      }
+
+      const allowed = getPipelineTransitions(pipeline, currentStage);
+      if (!allowed.includes(stage)) {
+        return res.status(409).json({ error: 'Illegal stage transition', current: currentStage, requested: stage, allowed });
+      }
+
+      const meta = (typeof deal.metadata === 'string' ? JSON.parse(deal.metadata) : deal.metadata) || {};
+      const activity = meta.activity || [];
+      activity.push({ type: 'stage_change', message: `Stage: ${currentStage} → ${stage}`, timestamp: new Date().toISOString(), actor: actor || 'system' });
+      if (['won', 'lost'].includes(stage)) meta.closed_at = new Date().toISOString();
+
+      await query(
+        `UPDATE deals SET stage=$1, metadata=$2, updated_at=now() WHERE id=$3 AND company_id=$4`,
+        [stage, JSON.stringify({ ...meta, activity }), deal.id, companyId]
+      );
+
+      await addContactActivity(contact.id, {
+        type: 'stage_change',
+        message: `Sales stage: ${currentStage} → ${stage}${reason ? ' (' + reason + ')' : ''}`,
+        agent: actor || 'system',
+        channel: null,
+        data: { pipeline_key, deal_id: deal.id, from: currentStage, to: stage, reason: reason || null },
+      });
+
+      return res.json({ contact_id: contact.id, deal_id: deal.id, pipeline_key, stage, previous: currentStage, changed: true });
+    }
+
+    return res.status(400).json({ error: `Unknown pipeline_key '${pipeline_key}' — use 'marketing' or 'sales'` });
+  } catch (err) {
+    console.error('[CRM] POST /contacts/:id/advance error:', err.message);
+    res.status(500).json({ error: 'advance failed' });
+  }
+});
+
 // ─── DEALS / PIPELINE ────────────────────────────────────────────────────────
 
 // GET /api/crm/deals
@@ -490,7 +620,7 @@ router.post('/deals', validate(), async (req, res) => {
       activity: [
         { type: 'created', message: 'Deal created', timestamp: new Date().toISOString() }
       ],
-      companyId: getUserCompanyId(req) || 'growthclub',
+      companyId: getUserCompanyId(req),
       created_at: new Date().toISOString(),
       updated_at: new Date().toISOString(),
       closed_at: null
@@ -688,11 +818,54 @@ router.get('/activity/recent', async (req, res) => {
   }
 });
 
-// GET /api/crm/pipeline
+// GET /api/crm/pipeline — pipeline-aware via ?pipeline_key=marketing|sales
+// Omitting pipeline_key returns the legacy flat view (backward-compat).
 router.get('/pipeline', async (req, res) => {
   try {
     const companyId = getUserCompanyId(req);
     if (!companyId) return res.status(401).json({ error: 'Authentication required' });
+    const pipelineKey = req.query.pipeline_key;
+
+    if (pipelineKey === 'marketing') {
+      const pipelineConfig = await getPipelineConfig(companyId, 'marketing');
+      const stages = pipelineConfig
+        ? pipelineConfig.stages.map(s => s.key)
+        : ['sourced','enriched','segmented','queued','engaged','responded','mql','nurture','suppressed'];
+      const contacts = await contactDb.list(companyId, {});
+      const pipeline = {};
+      stages.forEach(stage => {
+        const sc = contacts.filter(c => (c.marketing_stage || c.deal_stage) === stage);
+        pipeline[stage] = {
+          count: sc.length,
+          contacts: sc.map(c => ({
+            id: c.id, name: c.name, company: c.company_name, lead_score: c.lead_score,
+            tags: c.tags, last_contacted: c.last_contacted, linkedin_url: c.linkedin_url,
+            source: c.source, created_at: c.created_at,
+          }))
+        };
+      });
+      return res.json({ pipeline_key: 'marketing', pipeline });
+    }
+
+    if (pipelineKey === 'sales') {
+      const pipelineConfig = await getPipelineConfig(companyId, 'sales');
+      const stages = pipelineConfig
+        ? pipelineConfig.stages.map(s => s.key)
+        : ['accepted','contacted','qualified','proposal','negotiation','onboarding','won','lost','no_show','unqualified'];
+      const deals = await loadDeals(companyId);
+      const pipeline = {};
+      stages.forEach(stage => {
+        const sd = deals.filter(d => d.stage === stage);
+        pipeline[stage] = {
+          count: sd.length,
+          value: sd.reduce((s, d) => s + (d.value || 0), 0),
+          deals: sd,
+        };
+      });
+      return res.json({ pipeline_key: 'sales', pipeline });
+    }
+
+    // Legacy flat view — no pipeline_key (backward-compat for existing consumers)
     const contacts = await contactDb.list(companyId, {});
     const pipeline = {};
     DEAL_STAGES.forEach(stage => {
@@ -783,6 +956,7 @@ router.post('/prospect-inbox', validate(), async (req, res) => {
 
 // POST /api/crm/prospect-inbox/claim — atomically claim pending rows for an engine
 // (+ broadcast rows). FOR UPDATE SKIP LOCKED prevents double-claim under concurrency.
+// T3: when target_engine='sales', auto-creates a deals row at 'accepted' if none exists.
 router.post('/prospect-inbox/claim', validate(), async (req, res) => {
   try {
     const companyId = getUserCompanyId(req);
@@ -801,6 +975,42 @@ router.post('/prospect-inbox/claim', validate(), async (req, res) => {
        RETURNING *`,
       [companyId, target_engine, claimed_by, lim]
     );
+
+    // T3: MQL → Sales handoff. Auto-create a deals row at 'accepted' for each claimed
+    // sales prospect. Idempotent: skips if an open deal already exists for the contact.
+    if (target_engine === 'sales' && r.rows.length > 0) {
+      for (const row of r.rows) {
+        if (!row.contact_id) continue;
+        try {
+          const existing = await query(
+            `SELECT id FROM deals WHERE contact_id=$1 AND company_id=$2
+             AND stage NOT IN ('won','lost') LIMIT 1`,
+            [row.contact_id, companyId]
+          );
+          if (existing.rows.length === 0) {
+            const meta = (typeof row.metadata === 'string' ? JSON.parse(row.metadata) : row.metadata) || {};
+            await query(
+              `INSERT INTO deals
+                 (id, company_id, contact_id, title, value, stage, source, metadata, created_at, updated_at)
+               VALUES ($1,$2,$3,$4,0,'accepted','prospect_inbox',$5,now(),now())`,
+              [
+                uuidv4(), companyId, row.contact_id,
+                `MQL Handoff${meta.reason ? ' — ' + meta.reason : ''}`,
+                JSON.stringify({
+                  source_engine: row.source_engine,
+                  suggested_campaign: row.suggested_campaign,
+                  ...meta,
+                  activity: [{ type: 'created', message: 'Deal created from MQL handoff', timestamp: new Date().toISOString() }],
+                }),
+              ]
+            );
+          }
+        } catch (dealErr) {
+          console.error('[CRM] claim: failed to create sales deal for contact', row.contact_id, dealErr.message);
+        }
+      }
+    }
+
     res.json({ claimed: r.rows });
   } catch (err) {
     console.error('[CRM] POST /prospect-inbox/claim error:', err.message);
