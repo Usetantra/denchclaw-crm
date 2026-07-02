@@ -29,9 +29,11 @@ const MAX_CONTEXT_CONTACTS = 80;
 // Loopback base for internal self-calls — 127.0.0.1 satisfies the auth CIDR gate.
 const SELF_BASE = `http://127.0.0.1:${process.env.PORT || 3100}/api/crm`;
 
-// Fallback only — the live list is built from crm_pipeline_configs at request
-// time (getDealStages) so the prompt can never drift from the seeded configs.
-const FALLBACK_DEAL_STAGES = ['lead', 'accepted', 'contacted', 'booked', 'qualified', 'no_show', 'unqualified', 'proposal', 'negotiation', 'onboarding', 'won', 'lost', 'nurture'];
+// Fallback only — the live list is derived from crm_pipeline_configs per
+// request (via the shared 60s-TTL loader) so the prompt tracks the seeded
+// configs instead of a hardcoded list. 'lead'/'proposal_accepted' are legacy
+// stages contacts can still sit in.
+const FALLBACK_DEAL_STAGES = ['lead', 'accepted', 'contacted', 'booked', 'qualified', 'no_show', 'unqualified', 'proposal', 'proposal_accepted', 'negotiation', 'onboarding', 'won', 'lost', 'nurture'];
 const LEAD_SCORES = ['hot', 'warm', 'neutral', 'cold'];
 
 // Build the deal-stage vocabulary from the sales pipeline JSONB config (same

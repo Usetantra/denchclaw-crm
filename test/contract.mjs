@@ -323,6 +323,20 @@ async function main() {
         r.status === 200 && r.json?.changed === false, `status=${r.status} body=${JSON.stringify(r.json)}`);
     }
 
+    // 27b — migration-007 receipt: no_show → booked is legal in the live config
+    // (walk contacted→booked→no_show→booked; pins 006+007 at the enforcement layer)
+    {
+      const toBooked = await advance(salesContactId, { pipeline_key: 'sales', stage: 'booked' });
+      const toNoShow = await advance(salesContactId, { pipeline_key: 'sales', stage: 'no_show' });
+      const rebook = await advance(salesContactId, { pipeline_key: 'sales', stage: 'booked' });
+      // return to contacted for later funnel assertions
+      await advance(salesContactId, { pipeline_key: 'sales', stage: 'no_show' });
+      await advance(salesContactId, { pipeline_key: 'sales', stage: 'contacted' });
+      check('migration 007: no_show→booked rebooking legal', 'CP5',
+        toBooked.status === 200 && toNoShow.status === 200 && rebook.status === 200 && rebook.json?.changed === true,
+        `booked=${toBooked.status} no_show=${toNoShow.status} rebook=${rebook.status}`);
+    }
+
     // 28 — unknown pipeline_key → 404 (no such pipeline config)
     {
       const r = await advance(salesContactId, { pipeline_key: 'bogus', stage: 'contacted' });
