@@ -92,3 +92,15 @@ Rollback if ever needed: `pg_restore -c -d <DBURL> /home/yogi/denchclaw-backup-2
   deal creation / manual add) — decide whether to backfill.
 - Local dev gotcha: the shared env file's `INTERNAL_API_KEYS` is not JSON — always
   set `INTERNAL_API_KEYS` explicitly when booting locally (see test/run-local.sh).
+
+## Addendum (2026-07-02, later): unified UI login + workflow page
+
+- **One Basic-auth login for every staging UI** (user-directed): user `adi`, password
+  in `/home/yogi/ui-password.txt` (box-only, 600; same value as the old outreach
+  password). Covers /crm/, /outreach-engine/, /content-engine/, /nurturing-engine/.
+  All three htpasswd files rewritten (backups: `*.bak-<ts>` beside them); nginx
+  tested + reloaded; 401/200 matrix verified on all five URLs.
+- **Engine workflow visualization** shipped: `web/denchclaw-crm-workflow.html`
+  (commit 1f013c3) → served at /crm/denchclaw-crm-workflow.html behind the same
+  gate. Full system reference: both state machines with every legal edge, dedupe
+  tree, handoff lifecycle, analytics flow, 10-table ERD, auth ladder, ops.
