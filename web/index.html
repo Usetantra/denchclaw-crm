@@ -212,6 +212,25 @@
   .field input:focus,.field select:focus,.field textarea:focus{border-color:var(--ink)}
   .field textarea{min-height:70px;resize:vertical}
   .field-row{display:flex;gap:12px} .field-row .field{flex:1}
+
+  /* Pipelines editor */
+  #deal-pipe-sel{border:1px solid var(--hair);border-radius:6px;padding:8px 10px;font-size:12px;color:var(--ink-2);background:#fff;cursor:pointer;font-family:var(--sans);font-weight:600}
+  .pipe-layout{display:grid;grid-template-columns:250px 1fr;gap:20px;align-items:start}
+  @media(max-width:760px){.pipe-layout{grid-template-columns:1fr}}
+  .pipe-list{border:1px solid var(--hair);border-radius:10px;overflow:hidden}
+  .pl-item{padding:12px 14px;border-bottom:1px solid var(--hair);cursor:pointer;display:flex;justify-content:space-between;align-items:center;font-size:13px;gap:8px}
+  .pl-item:last-child{border-bottom:none}
+  .pl-item.active{background:var(--hair-2)}
+  .pl-item .tag{font-size:9px;letter-spacing:.1em;text-transform:uppercase;font-weight:700;color:var(--ink-4)}
+  .pipe-editor{border:1px solid var(--hair);border-radius:10px;padding:18px}
+  .stage-row{display:flex;align-items:center;gap:10px;padding:8px 9px;border:1px solid var(--hair);border-radius:8px;margin-bottom:8px;background:#fff}
+  .stage-row.dragging{opacity:.4}
+  .stage-row .handle{cursor:grab;color:var(--ink-5);font-size:16px;user-select:none}
+  .stage-row input.sname{flex:1;border:1px solid transparent;border-radius:5px;padding:6px 8px;font-size:13px;font-family:var(--sans)}
+  .stage-row input.sname:focus{border-color:var(--hair);outline:none;background:var(--hair-2)}
+  .stage-row input.scolor{width:28px;height:28px;padding:0;border:1px solid var(--hair);border-radius:6px;cursor:pointer;background:none}
+  .stage-row .del{border:none;background:none;color:var(--ink-4);cursor:pointer;font-size:17px;line-height:1}
+  .stage-row .del:hover{color:var(--hot)}
 </style>
 </head>
 <body>
@@ -225,6 +244,7 @@
   <button data-tab="board">Deals</button>
   <button data-tab="contacts">Contacts</button>
   <button data-tab="companies">Companies</button>
+  <button data-tab="pipelines">Pipelines</button>
   <button data-tab="inbox">Inbox</button>
   <button data-tab="analytics">Analytics</button>
 </div></div>
@@ -268,12 +288,12 @@
 
   <!-- ── BOARD ──────────────────────────────────────────────────────────── -->
   <div id="view-board" style="display:none">
-  <div class="sechead">
-    <span class="eyebrow">Deals · Sales Pipeline</span><span class="rule"></span>
+  <div class="toolbar">
+    <h2 class="h1" style="margin-right:12px">Deals</h2>
+    <select id="deal-pipe-sel"></select>
     <span class="muted" style="font-size:11px">drag cards to advance stages</span>
-  </div>
-  <div class="board-tabs" id="board-tabs">
-    <button data-view="sales" class="active">Sales Pipeline</button>
+    <span class="spacer"></span>
+    <button class="btn primary" id="new-deal">+ New opportunity</button>
   </div>
   <div class="board" id="board"></div>
   </div><!-- /view-board -->
@@ -311,6 +331,20 @@
     </div>
     <div id="companies-list"><div class="muted">loading…</div></div>
   </div><!-- /view-companies -->
+
+  <!-- ── PIPELINES ──────────────────────────────────────────────────────── -->
+  <div id="view-pipelines" style="display:none">
+    <div class="toolbar">
+      <h2 class="h1" style="margin-right:12px">Pipelines</h2>
+      <span class="spacer"></span>
+      <button class="btn primary" id="new-pipeline">+ New pipeline</button>
+    </div>
+    <p class="muted" style="font-size:12px;margin:-4px 0 16px">Editing the built-in <b>Sales</b>/<b>Marketing</b> pipelines changes the stage machine for your workspace (keep automation in sync). Custom pipelines apply to deals and move freely.</p>
+    <div class="pipe-layout">
+      <div class="pipe-list" id="pipe-list"></div>
+      <div class="pipe-editor" id="pipe-editor"><div class="muted">Select a pipeline to edit its stages.</div></div>
+    </div>
+  </div><!-- /view-pipelines -->
 
   <!-- ── INBOX ──────────────────────────────────────────────────────────── -->
   <div id="view-inbox" style="display:none">
@@ -531,22 +565,20 @@ function initBoardDnD(){
   board.addEventListener("drop",async e=>{
     const col=e.target.closest(".gcol");if(!col||!dragInfo||col.dataset.type!==dragInfo.type)return;
     e.preventDefault();
-    const to=col.dataset.stage,{type,id,from}=dragInfo;clearHi();
+    const to=col.dataset.stage,{id,from}=dragInfo;clearHi();
     if(to===from)return;
     try{
-      if(type==="deal") await patch(`deals/${id}`,{stage:to});
-      else await post(`contacts/${id}/advance`,{pipeline_key:"marketing",stage:to});
-      toast(`Moved to ${nice(to)}`);load();
+      await patch(`deals/${id}`,{stage:to,pipeline_key:selDealPipe});
+      toast(`Moved to ${nice(to)}`);loadBoard();
     }catch(err){
       const allowed=err.allowed;
       const msg=allowed
         ?`Can't move ${nice(from)} → ${nice(to)}. Allowed: ${allowed.map(nice).join(", ")||"none"}`
         :err.message;
-      toast(msg,true);load();
+      toast(msg,true);loadBoard();
     }
   });
 }
-$("#board-tabs").addEventListener("click",e=>{const b=e.target.closest("button");if(!b)return;boardView=b.dataset.view;drawBoard();});
 
 // ── Inbox ────────────────────────────────────────────────────────────────────
 let inboxFilter="open";
@@ -682,7 +714,7 @@ async function load(){
     renderCards(stats);
     renderPipeline(mktPipeline);
     renderContacts(clist.slice(0,50));
-    drawBoard();
+    if(window.loadBoard)loadBoard();
     setStatus(true,"Live");
     $("#refreshed").textContent="refreshed "+new Date().toLocaleTimeString();
   }catch(e){
@@ -695,13 +727,15 @@ async function load(){
 let _inboxLoaded=false,_analyticsLoaded=false;
 function setTab(tab){
   document.querySelectorAll(".tabbar button").forEach(b=>b.classList.toggle("active",b.dataset.tab===tab));
-  ["dashboard","board","contacts","companies","inbox","analytics"].forEach(v=>{
+  ["dashboard","board","contacts","companies","pipelines","inbox","analytics"].forEach(v=>{
     const el=$(`#view-${v}`);if(el)el.style.display=v===tab?"":"none";
   });
   if(tab==="inbox"&&!_inboxLoaded){loadInbox();_inboxLoaded=true;}
   if(tab==="analytics"&&!_analyticsLoaded){loadAnalytics();_analyticsLoaded=true;}
   if(tab==="contacts")loadContacts();
   if(tab==="companies")loadCompanies();
+  if(tab==="board")loadBoard();
+  if(tab==="pipelines")loadPipelinesTab();
 }
 $(".tabbar").addEventListener("click",e=>{const b=e.target.closest("button[data-tab]");if(!b)return;setTab(b.dataset.tab);});
 
@@ -844,6 +878,118 @@ function companyModal(c){
     try{if(edit)await patch(`companies/${c.id}`,v);else await post("companies",v);closeModal();toast(edit?"Saved":"Company created");loadCompanies();}
     catch(e){toast(e.message,true);}};
 }
+
+// ── Deals board (pipeline-aware) ──────────────────────────────────────────────
+let selDealPipe="sales";
+let DEAL_PIPES=[];
+async function ensureDealPipes(){ const r=await get("pipelines"); DEAL_PIPES=(r.pipelines||[]).filter(p=>p.applies_to==="deal"); }
+async function loadBoard(){
+  try{
+    await ensureDealPipes();
+    if(!DEAL_PIPES.find(p=>p.key===selDealPipe)) selDealPipe=(DEAL_PIPES[0]||{}).key||"sales";
+    const sel=$("#deal-pipe-sel");
+    if(sel) sel.innerHTML=DEAL_PIPES.map(p=>`<option value="${esc(p.key)}" ${p.key===selDealPipe?"selected":""}>${esc(p.name)}</option>`).join("");
+    const def=DEAL_PIPES.find(p=>p.key===selDealPipe);
+    if(!def){$("#board").innerHTML=`<div class="gempty">No pipeline.</div>`;return;}
+    const data=await get(`pipeline?pipeline_key=${encodeURIComponent(selDealPipe)}`);
+    renderDealBoard(def,data.pipeline||{});
+  }catch(e){$("#board").innerHTML=`<div class="gempty">${esc(e.message)}</div>`;}
+}
+function renderDealBoard(def,buckets){
+  const b=$("#board");b.className="board";
+  b.innerHTML=(def.stages||[]).map(s=>{
+    const bucket=buckets[s.key]||{count:0,deals:[]};
+    const items=bucket.deals||[];
+    const total=items.reduce((x,d)=>x+(parseFloat(d.value)||0),0);
+    const color=s.color||"#98a2b3";
+    const cards=items.map(d=>`<div class="gcard" draggable="true" data-type="deal" data-id="${esc(d.id)}" data-stage="${esc(s.key)}" style="--cc:${color}">
+      <div class="gtitle">${esc(d.title||"—")}</div>
+      ${parseFloat(d.value)>0?`<div class="gval">$${parseFloat(d.value).toLocaleString()}</div>`:""}
+      ${d.contact_name?`<div class="gmeta"><span class="avatar">${esc(initials(d.contact_name))}</span><span class="gsub">${esc(d.contact_name)}</span></div>`:""}</div>`).join("")||`<div class="gempty">—</div>`;
+    return `<div class="gcol" data-type="deal" data-stage="${esc(s.key)}" style="--sc:${color}">
+      <div class="ghead"><div class="gname"><span class="cdot"></span>${esc(s.name)}</div>
+      <div class="gsum"><b>${items.length}</b>${total>0?` · $${total.toLocaleString()}`:""}</div></div>
+      <div class="gbody">${cards}</div></div>`;
+  }).join("")||`<div class="gempty">This pipeline has no stages.</div>`;
+}
+$("#deal-pipe-sel").addEventListener("change",e=>{selDealPipe=e.target.value;loadBoard();});
+$("#new-deal").onclick=()=>{
+  const def=DEAL_PIPES.find(p=>p.key===selDealPipe);
+  const stageOpts=(def?def.stages:[]).map(s=>({value:s.key,label:s.name}));
+  openModal("New opportunity",
+    field("Title","title",{placeholder:"Deal name"})+field("Value ($)","value",{type:"number"})+
+    field("Contact name","contact_name")+field("Stage","stage",{type:"select",options:stageOpts}),
+    `<button class="btn" onclick="closeModal()">Cancel</button><button class="btn primary" id="save-deal">Create</button>`);
+  $("#save-deal").onclick=async()=>{const v=formValues();if(!v.title)return toast("Title required",true);
+    try{await post("deals",{title:v.title,value:parseFloat(v.value)||0,contact_name:v.contact_name,stage:v.stage,pipeline_key:selDealPipe});closeModal();toast("Opportunity created");loadBoard();}
+    catch(e){toast(e.message,true);}};
+};
+
+// ── Pipelines management ──────────────────────────────────────────────────────
+let PIPES=[],editPipeKey=null,editStages=[];
+async function loadPipelinesTab(){
+  try{const r=await get("pipelines");PIPES=r.pipelines||[];
+    if(!editPipeKey||!PIPES.find(p=>p.key===editPipeKey))editPipeKey=(PIPES[0]||{}).key||null;
+    renderPipeList();renderPipeEditor();}
+  catch(e){$("#pipe-list").innerHTML=`<div class="pl-item muted">${esc(e.message)}</div>`;}
+}
+function renderPipeList(){
+  $("#pipe-list").innerHTML=PIPES.map(p=>`<div class="pl-item ${p.key===editPipeKey?"active":""}" data-key="${esc(p.key)}">
+    <span>${esc(p.name)}</span><span class="tag">${p.builtin?"built-in":"custom"}</span></div>`).join("")||`<div class="pl-item muted">None</div>`;
+}
+$("#pipe-list").addEventListener("click",e=>{const it=e.target.closest(".pl-item[data-key]");if(!it)return;editPipeKey=it.dataset.key;renderPipeList();renderPipeEditor();});
+function renderPipeEditor(){
+  const p=PIPES.find(x=>x.key===editPipeKey);
+  if(!p){$("#pipe-editor").innerHTML=`<div class="muted">Select a pipeline.</div>`;return;}
+  editStages=(p.stages||[]).map(s=>({...s}));
+  $("#pipe-editor").innerHTML=`
+    <div class="toolbar" style="margin-bottom:14px">
+      <input class="search" id="pipe-name" value="${esc(p.name)}" style="flex:0 0 240px">
+      <span class="spacer"></span>
+      ${p.builtin?"":`<button class="btn sm danger" id="pipe-del">Delete</button>`}
+    </div>
+    <div class="eyebrow" style="margin-bottom:10px">Stages — drag to reorder</div>
+    <div id="stage-rows"></div>
+    <button class="btn sm" id="add-stage" style="margin-top:6px">+ Add stage</button>
+    <div style="margin-top:18px;display:flex;justify-content:flex-end"><button class="btn primary" id="save-pipe">Save changes</button></div>`;
+  renderStageRows();
+  $("#add-stage").onclick=()=>{editStages.push({name:"New stage",color:"#667085"});renderStageRows();};
+  $("#save-pipe").onclick=savePipe;
+  const d=$("#pipe-del");if(d)d.onclick=()=>confirmDelete(`Delete pipeline "${p.name}"? Its deals move back to Sales.`,async()=>{await del(`pipelines/${p.key}`);editPipeKey=null;toast("Deleted");loadPipelinesTab();});
+}
+function renderStageRows(){
+  $("#stage-rows").innerHTML=editStages.map((s,i)=>`<div class="stage-row" draggable="true" data-idx="${i}">
+    <span class="handle">⠿</span><input class="scolor" type="color" value="${esc(s.color||"#667085")}" data-idx="${i}">
+    <input class="sname" value="${esc(s.name)}" data-idx="${i}" placeholder="Stage name">
+    <button class="del" data-idx="${i}">×</button></div>`).join("");
+}
+$("#pipe-editor").addEventListener("input",e=>{const i=e.target.dataset.idx;if(i==null)return;
+  if(e.target.classList.contains("sname"))editStages[i].name=e.target.value;
+  if(e.target.classList.contains("scolor"))editStages[i].color=e.target.value;});
+$("#pipe-editor").addEventListener("click",e=>{const d=e.target.closest(".del");if(d){editStages.splice(+d.dataset.idx,1);renderStageRows();}});
+let stageDrag=null;
+$("#pipe-editor").addEventListener("dragstart",e=>{const r=e.target.closest(".stage-row");if(!r)return;stageDrag=+r.dataset.idx;r.classList.add("dragging");});
+$("#pipe-editor").addEventListener("dragend",e=>{e.target.closest(".stage-row")?.classList.remove("dragging");stageDrag=null;});
+$("#pipe-editor").addEventListener("dragover",e=>{if(e.target.closest(".stage-row")&&stageDrag!=null)e.preventDefault();});
+$("#pipe-editor").addEventListener("drop",e=>{const r=e.target.closest(".stage-row");if(!r||stageDrag==null)return;e.preventDefault();
+  const to=+r.dataset.idx;if(to===stageDrag)return;const [m]=editStages.splice(stageDrag,1);editStages.splice(to,0,m);stageDrag=null;renderStageRows();});
+async function savePipe(){
+  const name=$("#pipe-name").value.trim();const stages=editStages.filter(s=>(s.name||"").trim());
+  if(!stages.length)return toast("Add at least one stage",true);
+  try{await patch(`pipelines/${editPipeKey}`,{name,stages});toast("Pipeline saved");DEAL_PIPES=[];loadPipelinesTab();}
+  catch(e){toast(e.message,true);}
+}
+$("#new-pipeline").onclick=async()=>{
+  let templates=[];try{templates=(await get("pipelines/templates")).templates||[];}catch(_){}
+  openModal("New pipeline",
+    field("Name","name",{placeholder:"e.g. Webinar Funnel"})+
+    field("Start from","template",{type:"select",options:[{value:"",label:"Blank"}].concat(templates.map(t=>({value:t.key,label:t.label})))}),
+    `<button class="btn" onclick="closeModal()">Cancel</button><button class="btn primary" id="save-np">Create</button>`);
+  $("#save-np").onclick=async()=>{const v=formValues();if(!v.name)return toast("Name required",true);
+    const body={name:v.name};if(v.template)body.template=v.template;else body.stages=[{name:"New",color:"#667085"},{name:"Won",color:"#12b76a"},{name:"Lost",color:"#f04438"}];
+    try{const p=await post("pipelines",body);closeModal();editPipeKey=p.key;DEAL_PIPES=[];toast("Pipeline created");loadPipelinesTab();}
+    catch(e){toast(e.message,true);}};
+};
 </script>
 </body>
 </html>
