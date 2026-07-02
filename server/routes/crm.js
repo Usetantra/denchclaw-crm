@@ -352,6 +352,39 @@ router.get('/contacts/:id', async (req, res) => {
   }
 });
 
+// POST /api/crm/contacts/bulk — { action:'delete'|'tag', ids:[], value? }
+// Stage changes are intentionally NOT bulk-editable here: a contact's pipeline
+// position is governed by the marketing/sales advance state machines
+// (POST /contacts/:id/advance, PATCH /deals/:id), not a free-set on the list.
+router.post('/contacts/bulk', async (req, res) => {
+  try {
+    const companyId = getUserCompanyId(req);
+    if (!companyId) return res.status(401).json({ error: 'Authentication required' });
+    const { action, ids, value } = req.body || {};
+    if (!Array.isArray(ids) || !ids.length) return res.status(400).json({ error: 'ids required' });
+
+    let affected = 0;
+    if (action === 'delete') {
+      const r = await query('DELETE FROM contacts WHERE company_id = $1 AND id = ANY($2::uuid[])', [companyId, ids]);
+      affected = r.rowCount;
+    } else if (action === 'tag') {
+      if (!value) return res.status(400).json({ error: 'value (tag) required' });
+      const r = await query(
+        `UPDATE contacts SET tags = (SELECT ARRAY(SELECT DISTINCT unnest(COALESCE(tags,'{}') || $1::text[]))),
+                updated_at = NOW() WHERE company_id = $2 AND id = ANY($3::uuid[])`,
+        [[value], companyId, ids]
+      );
+      affected = r.rowCount;
+    } else {
+      return res.status(400).json({ error: `unknown action: ${action}` });
+    }
+    res.json({ ok: true, affected });
+  } catch (err) {
+    console.error('[CRM] POST /contacts/bulk error:', err.message);
+    res.status(500).json({ error: 'bulk action failed' });
+  }
+});
+
 // PATCH /api/crm/contacts/:id
 router.patch('/contacts/:id', async (req, res) => {
   try {

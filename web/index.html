@@ -176,6 +176,42 @@
          color:var(--ink-4);font-size:12px;display:flex;justify-content:space-between;flex-wrap:wrap;gap:8px}
   footer .eyebrow{font-size:10px}
   code{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:11px;color:var(--ink-3)}
+
+  /* Lists (Contacts / Companies) + modal */
+  .h1{font-family:var(--serif);font-weight:300;font-size:28px;letter-spacing:-.01em;margin:0}
+  .toolbar{display:flex;gap:10px;align-items:center;flex-wrap:wrap;margin-bottom:14px}
+  .toolbar .search{flex:0 0 240px;border:1px solid var(--hair);border-radius:6px;padding:9px 12px;font-size:13px;outline:none;font-family:var(--sans)}
+  .toolbar .search:focus{border-color:var(--ink)}
+  .toolbar select{border:1px solid var(--hair);border-radius:6px;padding:8px 10px;font-size:12px;color:var(--ink-2);background:#fff;cursor:pointer;font-family:var(--sans)}
+  .toolbar .spacer{flex:1}
+  .btn{font-family:var(--sans);font-size:12px;font-weight:600;letter-spacing:.02em;padding:8px 14px;border-radius:6px;cursor:pointer;border:1px solid var(--hair);background:#fff;color:var(--ink-2)}
+  .btn:hover{border-color:var(--ink-4)}
+  .btn.primary{background:var(--ink);color:#fff;border-color:var(--ink)}
+  .btn.danger{background:var(--hot);color:#fff;border-color:var(--hot)}
+  .btn.sm{padding:5px 10px;font-size:11px}
+  .checkcell{width:34px;text-align:center} .checkcell input{cursor:pointer}
+  .rowact{display:flex;gap:6px;justify-content:flex-end}
+  tbody tr:hover{background:var(--hair-2)}
+  .linklike{color:var(--cold);cursor:pointer;text-decoration:none} .linklike:hover{text-decoration:underline}
+  .bulkbar{display:none;align-items:center;gap:12px;background:var(--ink);color:#fff;border-radius:8px;padding:9px 14px;margin-bottom:12px;font-size:13px}
+  .bulkbar.show{display:flex} .bulkbar .spacer{flex:1} .bulkbar span{font-weight:600}
+  .bulkbar .btn{background:rgba(255,255,255,.14);border-color:transparent;color:#fff} .bulkbar .btn:hover{background:rgba(255,255,255,.26)}
+  .bulkbar .btn.danger{background:var(--hot)}
+  .empty{padding:34px;text-align:center;color:var(--ink-5);font-size:13px;border:1px dashed var(--hair);border-radius:8px}
+  .modal-overlay{position:fixed;inset:0;background:rgba(10,10,10,.45);display:none;align-items:flex-start;justify-content:center;z-index:100;padding:56px 16px;overflow-y:auto}
+  .modal-overlay.show{display:flex}
+  .modal{background:#fff;border-radius:12px;width:100%;max-width:540px;box-shadow:0 20px 50px rgba(0,0,0,.25);overflow:hidden}
+  .modal .mhead{display:flex;justify-content:space-between;align-items:center;padding:17px 20px;border-bottom:1px solid var(--hair)}
+  .modal .mhead h3{margin:0;font-family:var(--serif);font-weight:400;font-size:19px}
+  .modal .mbody{padding:18px 20px;max-height:64vh;overflow-y:auto}
+  .modal .mfoot{display:flex;justify-content:flex-end;gap:10px;padding:14px 20px;border-top:1px solid var(--hair)}
+  .xclose{border:none;background:none;font-size:22px;color:var(--ink-4);cursor:pointer;line-height:1}
+  .field{margin-bottom:13px}
+  .field label{display:block;font-size:11px;letter-spacing:.06em;text-transform:uppercase;color:var(--ink-4);margin-bottom:5px;font-weight:600}
+  .field input,.field select,.field textarea{width:100%;border:1px solid var(--hair);border-radius:6px;padding:9px 11px;font-size:13px;outline:none;font-family:var(--sans)}
+  .field input:focus,.field select:focus,.field textarea:focus{border-color:var(--ink)}
+  .field textarea{min-height:70px;resize:vertical}
+  .field-row{display:flex;gap:12px} .field-row .field{flex:1}
 </style>
 </head>
 <body>
@@ -186,7 +222,9 @@
 
 <div class="tabbar"><div class="tabbar-inner">
   <button data-tab="dashboard" class="active">Dashboard</button>
-  <button data-tab="board">Board</button>
+  <button data-tab="board">Deals</button>
+  <button data-tab="contacts">Contacts</button>
+  <button data-tab="companies">Companies</button>
   <button data-tab="inbox">Inbox</button>
   <button data-tab="analytics">Analytics</button>
 </div></div>
@@ -231,16 +269,48 @@
   <!-- ── BOARD ──────────────────────────────────────────────────────────── -->
   <div id="view-board" style="display:none">
   <div class="sechead">
-    <span class="eyebrow">Pipeline Board</span><span class="rule"></span>
+    <span class="eyebrow">Deals · Sales Pipeline</span><span class="rule"></span>
     <span class="muted" style="font-size:11px">drag cards to advance stages</span>
   </div>
   <div class="board-tabs" id="board-tabs">
     <button data-view="sales" class="active">Sales Pipeline</button>
-    <button data-view="marketing">Marketing Pipeline</button>
-    <button data-view="company">Companies</button>
   </div>
   <div class="board" id="board"></div>
   </div><!-- /view-board -->
+
+  <!-- ── CONTACTS ───────────────────────────────────────────────────────── -->
+  <div id="view-contacts" style="display:none">
+    <div class="toolbar">
+      <h2 class="h1" style="margin-right:12px">Contacts</h2>
+      <input class="search" id="contact-search" type="search" placeholder="Search name, email, company…">
+      <select id="filter-score"><option value="">All scores</option><option>hot</option><option>warm</option><option>neutral</option><option>cold</option></select>
+      <select id="filter-source"><option value="">All sources</option></select>
+      <span class="spacer"></span>
+      <button class="btn primary" id="new-contact">+ New contact</button>
+    </div>
+    <div class="bulkbar" id="contact-bulk">
+      <span id="contact-selN">0 selected</span><span class="spacer"></span>
+      <button class="btn" id="bulk-tag">Add tag…</button>
+      <button class="btn" id="bulk-export">Export</button>
+      <button class="btn danger" id="bulk-del">Delete</button>
+    </div>
+    <div id="contacts-list"><div class="muted">loading…</div></div>
+  </div><!-- /view-contacts -->
+
+  <!-- ── COMPANIES ──────────────────────────────────────────────────────── -->
+  <div id="view-companies" style="display:none">
+    <div class="toolbar">
+      <h2 class="h1" style="margin-right:12px">Companies</h2>
+      <input class="search" id="company-search" type="search" placeholder="Search companies…">
+      <span class="spacer"></span>
+      <button class="btn primary" id="new-company">+ New company</button>
+    </div>
+    <div class="bulkbar" id="company-bulk">
+      <span id="company-selN">0 selected</span><span class="spacer"></span>
+      <button class="btn danger" id="company-bulk-del">Delete</button>
+    </div>
+    <div id="companies-list"><div class="muted">loading…</div></div>
+  </div><!-- /view-companies -->
 
   <!-- ── INBOX ──────────────────────────────────────────────────────────── -->
   <div id="view-inbox" style="display:none">
@@ -291,6 +361,12 @@
   </div>
   </div><!-- /view-analytics -->
 </main>
+
+<div class="modal-overlay" id="modal"><div class="modal">
+  <div class="mhead"><h3 id="modal-title">Title</h3><button class="xclose" id="modal-x">&times;</button></div>
+  <div class="mbody" id="modal-body"></div>
+  <div class="mfoot" id="modal-foot"></div>
+</div></div>
 
 <div class="toast" id="toast"></div>
 
@@ -619,16 +695,155 @@ async function load(){
 let _inboxLoaded=false,_analyticsLoaded=false;
 function setTab(tab){
   document.querySelectorAll(".tabbar button").forEach(b=>b.classList.toggle("active",b.dataset.tab===tab));
-  ["dashboard","board","inbox","analytics"].forEach(v=>{
+  ["dashboard","board","contacts","companies","inbox","analytics"].forEach(v=>{
     const el=$(`#view-${v}`);if(el)el.style.display=v===tab?"":"none";
   });
   if(tab==="inbox"&&!_inboxLoaded){loadInbox();_inboxLoaded=true;}
   if(tab==="analytics"&&!_analyticsLoaded){loadAnalytics();_analyticsLoaded=true;}
+  if(tab==="contacts")loadContacts();
+  if(tab==="companies")loadCompanies();
 }
 $(".tabbar").addEventListener("click",e=>{const b=e.target.closest("button[data-tab]");if(!b)return;setTab(b.dataset.tab);});
 
 // ── Boot ──────────────────────────────────────────────────────────────────────
 initBoardDnD();load();setInterval(load,30000);
+</script>
+
+<script>
+/* ── Contacts + Companies pages (list / search / CRUD / bulk) ─────────────────
+   Reuses the helpers defined in the first script (get/post/patch/esc/nice/
+   initials/fmtDate/toast/$). Contacts are a plain list here — pipeline position
+   is managed on the Deals board / marketing advance, not free-set in the list. */
+const $$=s=>[...document.querySelectorAll(s)];
+const del=p=>apiFetch("DELETE",p);
+const money=n=>"$"+(Number(n)||0).toLocaleString();
+const debounce=(fn,ms)=>{let t;return(...a)=>{clearTimeout(t);t=setTimeout(()=>fn(...a),ms);};};
+const SOURCES=["manual","website","referral","linkedin","webinar","content","paid_ads","whatsapp","sms","instantly","expandi"];
+const SCORES=["hot","warm","neutral","cold"];
+
+// modal
+function openModal(title,body,foot){$("#modal-title").textContent=title;$("#modal-body").innerHTML=body;$("#modal-foot").innerHTML=foot||"";$("#modal").classList.add("show");}
+function closeModal(){$("#modal").classList.remove("show");}
+$("#modal-x").onclick=closeModal;
+$("#modal").addEventListener("click",e=>{if(e.target.id==="modal")closeModal();});
+function field(label,name,opts={}){
+  const val=opts.value!=null?esc(opts.value):"";
+  if(opts.type==="select"){
+    const o=(opts.options||[]).map(x=>{const v=typeof x==="object"?x.value:x,l=typeof x==="object"?x.label:nice(x);
+      return `<option value="${esc(v)}" ${String(opts.value)===String(v)?"selected":""}>${esc(l)}</option>`;}).join("");
+    return `<div class="field"><label>${esc(label)}</label><select name="${name}">${o}</select></div>`;
+  }
+  if(opts.type==="textarea")return `<div class="field"><label>${esc(label)}</label><textarea name="${name}">${val}</textarea></div>`;
+  return `<div class="field"><label>${esc(label)}</label><input name="${name}" type="${opts.type||"text"}" value="${val}" placeholder="${esc(opts.placeholder||"")}"></div>`;
+}
+function formValues(){const o={};$("#modal-body").querySelectorAll("[name]").forEach(el=>o[el.name]=typeof el.value==="string"?el.value.trim():el.value);return o;}
+function confirmDelete(msg,fn){openModal("Confirm",`<p style="margin:4px 0 0">${esc(msg)}</p>`,`<button class="btn" onclick="closeModal()">Cancel</button><button class="btn danger" id="confirm-yes">Delete</button>`);
+  $("#confirm-yes").onclick=async()=>{try{await fn();closeModal();}catch(e){toast(e.message,true);}};}
+
+// ── Contacts ──────────────────────────────────────────────────────────────────
+let cList=[],cSel=new Set(),_srcFilled=false;
+function contactQuery(){const p=new URLSearchParams();
+  const s=$("#contact-search").value.trim();if(s)p.set("search",s);
+  const sc=$("#filter-score").value;if(sc)p.set("score",sc);
+  const so=$("#filter-source").value;if(so)p.set("source",so);
+  return p.toString();}
+async function loadContacts(){
+  try{
+    if(!_srcFilled){$("#filter-source").insertAdjacentHTML("beforeend",SOURCES.map(s=>`<option value="${s}">${nice(s)}</option>`).join(""));_srcFilled=true;}
+    const r=await get(`contacts${contactQuery()?"?"+contactQuery():""}`);
+    cList=r.contacts||r.data||[];cSel.clear();renderContactList();
+  }catch(e){$("#contacts-list").innerHTML=`<div class="empty">${esc(e.message)}</div>`;}
+}
+function renderContactList(){
+  if(!cList.length){$("#contacts-list").innerHTML=`<div class="empty">No contacts match. <a class="linklike" id="empty-nc">Add one</a>.</div>`;
+    $("#empty-nc")&&($("#empty-nc").onclick=()=>contactModal());updateContactBulk();return;}
+  const rows=cList.map(c=>`<tr>
+    <td class="checkcell"><input type="checkbox" class="csel" data-id="${esc(c.id)}"></td>
+    <td><b>${esc(c.name||"—")}</b></td><td class="co">${esc(c.company_name||"")}</td>
+    <td class="email">${esc(c.email||"")}</td>
+    <td style="text-transform:capitalize">${esc(nice(c.marketing_stage||c.deal_stage||""))}</td>
+    <td><span class="score ${esc(c.lead_score||"neutral")}">${esc(c.lead_score||"—")}</span></td>
+    <td><span class="src">${esc(c.source||"")}</span></td><td class="muted">${fmtDate(c.created_at)}</td>
+    <td><div class="rowact"><button class="btn sm" data-edit="${esc(c.id)}">Edit</button><button class="btn sm danger" data-del="${esc(c.id)}">Del</button></div></td></tr>`).join("");
+  $("#contacts-list").innerHTML=`<table><thead><tr><th class="checkcell"><input type="checkbox" id="csel-all"></th>
+    <th>Name</th><th>Company</th><th>Email</th><th>Stage</th><th>Score</th><th>Source</th><th>Created</th><th></th></tr></thead><tbody>${rows}</tbody></table>`;
+  updateContactBulk();
+}
+function updateContactBulk(){$("#contact-bulk").classList.toggle("show",cSel.size>0);$("#contact-selN").textContent=`${cSel.size} selected`;}
+$("#contacts-list").addEventListener("change",e=>{
+  if(e.target.id==="csel-all"){const on=e.target.checked;$$(".csel").forEach(cb=>{cb.checked=on;on?cSel.add(cb.dataset.id):cSel.delete(cb.dataset.id);});updateContactBulk();}
+  else if(e.target.classList.contains("csel")){e.target.checked?cSel.add(e.target.dataset.id):cSel.delete(e.target.dataset.id);updateContactBulk();}
+});
+$("#contacts-list").addEventListener("click",e=>{
+  const ed=e.target.closest("[data-edit]"),dl=e.target.closest("[data-del]");
+  if(ed)contactModal(cList.find(x=>x.id===ed.dataset.edit));
+  if(dl){const c=cList.find(x=>x.id===dl.dataset.del);confirmDelete(`Delete contact "${c?.name||c?.email||""}"?`,async()=>{await del(`contacts/${dl.dataset.del}`);toast("Deleted");loadContacts();});}
+});
+["#contact-search","#filter-score","#filter-source"].forEach(s=>$(s).addEventListener(s==="#contact-search"?"input":"change",debounce(loadContacts,250)));
+$("#new-contact").onclick=()=>contactModal();
+function contactModal(c){
+  const edit=!!c;
+  openModal(edit?"Edit contact":"New contact",
+    `<div class="field-row">${field("Name","name",{value:c?.name})}${field("Email","email",{value:c?.email})}</div>
+     <div class="field-row">${field("Phone","phone",{value:c?.phone})}${field("Company","company",{value:c?.company_name})}</div>
+     ${field("Title","title",{value:c?.title})}
+     <div class="field-row">${field("Lead score","lead_score",{type:"select",value:c?.lead_score||"neutral",options:SCORES})}${field("Source","source",{type:"select",value:c?.source||"manual",options:SOURCES})}</div>`,
+    `<button class="btn" onclick="closeModal()">Cancel</button><button class="btn primary" id="save-c">${edit?"Save":"Create"}</button>`);
+  $("#save-c").onclick=async()=>{const v=formValues();if(!v.name&&!v.email)return toast("Name or email required",true);
+    try{if(edit)await patch(`contacts/${c.id}`,v);else await post("contacts",v);closeModal();toast(edit?"Saved":"Contact created");loadContacts();}
+    catch(e){toast(e.message,true);}};
+}
+$("#bulk-del").onclick=()=>confirmDelete(`Delete ${cSel.size} contact(s)?`,async()=>{await post("contacts/bulk",{action:"delete",ids:[...cSel]});toast("Deleted");loadContacts();});
+$("#bulk-tag").onclick=()=>{openModal("Add tag",field("Tag","tag",{placeholder:"e.g. vip"}),`<button class="btn" onclick="closeModal()">Cancel</button><button class="btn primary" id="save-tag">Apply</button>`);
+  $("#save-tag").onclick=async()=>{const v=formValues();if(!v.tag)return;try{await post("contacts/bulk",{action:"tag",ids:[...cSel],value:v.tag});closeModal();toast("Tag added");loadContacts();}catch(e){toast(e.message,true);}};};
+$("#bulk-export").onclick=()=>{const sel=cList.filter(c=>cSel.has(c.id));const cols=["name","email","phone","company_name","marketing_stage","lead_score","source","created_at"];
+  const csv=[cols.join(",")].concat(sel.map(c=>cols.map(k=>`"${String(c[k]??"").replace(/"/g,'""')}"`).join(","))).join("\n");
+  const a=document.createElement("a");a.href=URL.createObjectURL(new Blob([csv],{type:"text/csv"}));a.download="contacts.csv";a.click();URL.revokeObjectURL(a.href);};
+
+// ── Companies ─────────────────────────────────────────────────────────────────
+let coList=[],coSel=new Set();
+async function loadCompanies(){
+  try{const s=$("#company-search").value.trim();const r=await get(`companies${s?"?search="+encodeURIComponent(s):""}`);
+    coList=r.companies||[];coSel.clear();renderCompanyList();}
+  catch(e){$("#companies-list").innerHTML=`<div class="empty">${esc(e.message)}</div>`;}
+}
+function renderCompanyList(){
+  if(!coList.length){$("#companies-list").innerHTML=`<div class="empty">No companies yet. <a class="linklike" id="empty-nco">Add one</a>.</div>`;
+    $("#empty-nco")&&($("#empty-nco").onclick=()=>companyModal());updateCompanyBulk();return;}
+  const rows=coList.map(c=>`<tr>
+    <td class="checkcell"><input type="checkbox" class="cosel" data-id="${esc(c.id)}"></td>
+    <td><b>${esc(c.name)}</b></td><td>${esc(c.industry||"")}</td><td>${c.contact_count||0}</td><td>${money(c.pipeline_value)}</td>
+    <td>${c.website?`<a class="linklike" href="${esc(/^https?:/.test(c.website)?c.website:"https://"+c.website)}" target="_blank" rel="noopener">${esc(c.website)}</a>`:""}</td>
+    <td><div class="rowact"><button class="btn sm" data-edit="${esc(c.id)}">Edit</button><button class="btn sm danger" data-del="${esc(c.id)}">Del</button></div></td></tr>`).join("");
+  $("#companies-list").innerHTML=`<table><thead><tr><th class="checkcell"><input type="checkbox" id="cosel-all"></th>
+    <th>Company</th><th>Industry</th><th>Contacts</th><th>Pipeline</th><th>Website</th><th></th></tr></thead><tbody>${rows}</tbody></table>`;
+  updateCompanyBulk();
+}
+function updateCompanyBulk(){$("#company-bulk").classList.toggle("show",coSel.size>0);$("#company-selN").textContent=`${coSel.size} selected`;}
+$("#companies-list").addEventListener("change",e=>{
+  if(e.target.id==="cosel-all"){const on=e.target.checked;$$(".cosel").forEach(cb=>{cb.checked=on;on?coSel.add(cb.dataset.id):coSel.delete(cb.dataset.id);});updateCompanyBulk();}
+  else if(e.target.classList.contains("cosel")){e.target.checked?coSel.add(e.target.dataset.id):coSel.delete(e.target.dataset.id);updateCompanyBulk();}
+});
+$("#companies-list").addEventListener("click",e=>{
+  const ed=e.target.closest("[data-edit]"),dl=e.target.closest("[data-del]");
+  if(ed)companyModal(coList.find(x=>x.id===ed.dataset.edit));
+  if(dl){const c=coList.find(x=>x.id===dl.dataset.del);confirmDelete(`Delete company "${c?.name}"?`,async()=>{await del(`companies/${dl.dataset.del}`);toast("Deleted");loadCompanies();});}
+});
+$("#company-search").addEventListener("input",debounce(loadCompanies,250));
+$("#new-company").onclick=()=>companyModal();
+$("#company-bulk-del").onclick=()=>confirmDelete(`Delete ${coSel.size} compan${coSel.size>1?"ies":"y"}?`,async()=>{await post("companies/bulk",{action:"delete",ids:[...coSel]});toast("Deleted");loadCompanies();});
+function companyModal(c){
+  const edit=!!c;
+  openModal(edit?"Edit company":"New company",
+    field("Name","name",{value:c?.name})+
+    `<div class="field-row">${field("Industry","industry",{value:c?.industry})}${field("Size","size",{value:c?.size,placeholder:"e.g. 11-50"})}</div>`+
+    `<div class="field-row">${field("Website","website",{value:c?.website})}${field("Location","location",{value:c?.location})}</div>`+
+    field("Notes","notes",{type:"textarea",value:c?.notes}),
+    `<button class="btn" onclick="closeModal()">Cancel</button><button class="btn primary" id="save-co">${edit?"Save":"Create"}</button>`);
+  $("#save-co").onclick=async()=>{const v=formValues();if(!v.name)return toast("Name required",true);
+    try{if(edit)await patch(`companies/${c.id}`,v);else await post("companies",v);closeModal();toast(edit?"Saved":"Company created");loadCompanies();}
+    catch(e){toast(e.message,true);}};
+}
 </script>
 </body>
 </html>
