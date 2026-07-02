@@ -470,10 +470,18 @@ router.patch('/contacts/:id', async (req, res) => {
 
     const allowed = ['name', 'email', 'phone', 'company', 'title', 'linkedin_url', 'source',
                       'lead_score', 'deal_stage', 'deal_value', 'tags', 'next_follow_up', 'last_contacted',
-                      'company_name'];
+                      'company_name', 'metadata'];
     const updateData = {};
     for (const key of allowed) {
       if (updates[key] !== undefined) updateData[key] = updates[key];
+    }
+    // metadata is a JSONB property bag (e.g. the nurturing engine's per-contact
+    // timezone). MERGE with the existing bag — a partial PATCH must not wipe
+    // keys other writers own; send an explicit null to delete a key.
+    if (updateData.metadata !== undefined) {
+      const merged = { ...(existing.metadata || {}), ...(updateData.metadata || {}) };
+      for (const k of Object.keys(merged)) if (merged[k] === null) delete merged[k];
+      updateData.metadata = merged;
     }
     // Map 'company' → 'company_name' (automation_core sends 'company', DB column is 'company_name')
     if (updateData.company !== undefined && updateData.company_name === undefined) {
