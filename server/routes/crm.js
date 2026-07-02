@@ -43,17 +43,20 @@ const ENGAGEMENT_WEIGHTS = {
 };
 
 const DEFAULT_STAGE_TRANSITIONS = {
-  lead: ['contacted', 'unqualified', 'lost'],
-  contacted: ['qualified', 'unqualified', 'lost'],
-  qualified: ['proposal', 'no_show', 'unqualified', 'lost'],
-  no_show: ['contacted', 'qualified', 'lost'],
-  unqualified: ['lead', 'contacted', 'lost'],
-  proposal: ['proposal_accepted', 'negotiation', 'lost'],
+  lead:              ['accepted', 'contacted', 'lost'],
+  accepted:          ['contacted', 'lost'],
+  contacted:         ['booked', 'unqualified', 'nurture', 'lost'],
+  booked:            ['qualified', 'no_show', 'contacted'],
+  qualified:         ['proposal', 'unqualified', 'nurture', 'lost'],
+  no_show:           ['contacted', 'lost'],
+  unqualified:       ['nurture', 'lost'],
+  proposal:          ['negotiation', 'nurture', 'lost'],
   proposal_accepted: ['negotiation', 'onboarding', 'lost'],
-  negotiation: ['won', 'lost'],
-  onboarding: ['won', 'lost'],
-  won: [],
-  lost: ['lead'],
+  negotiation:       ['onboarding', 'lost'],
+  onboarding:        ['won', 'lost'],
+  won:               [],
+  lost:              ['accepted'],
+  nurture:           ['contacted', 'lost'],
 };
 const STAGE_TRANSITIONS = DEFAULT_STAGE_TRANSITIONS;
 
