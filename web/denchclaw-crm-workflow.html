@@ -1,0 +1,1009 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>DenchClaw CRM — The Complete Engine Workflow</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Fraunces:ital,opsz,wght@0,9..144,300;0,9..144,400;0,9..144,500;1,9..144,400&family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+<style>
+  :root{
+    --bg:#ffffff;--ink:#0a0a0a;--ink-2:#2a2a2a;--ink-3:#4a4a4a;--ink-4:#6b6b6b;--ink-5:#d0d0d0;
+    --hair:#ececec;--hair-2:#f4f4f4;--radius:2px;--maxw:1120px;
+    --sans:"Inter",-apple-system,BlinkMacSystemFont,"Helvetica Neue",Arial,sans-serif;
+    --serif:"Fraunces",Georgia,serif;
+    --hot:#b42318;--hot-bg:#fef3f2;--warm:#b54708;--warm-bg:#fffaeb;
+    --cold:#175cd3;--cold-bg:#eff4ff;--live:#067647;--live-bg:#ecfdf3;
+    /* stage palette — identical to the dashboard */
+    --c-sourced:#667085;--c-enriched:#2e90fa;--c-segmented:#7a5af8;--c-queued:#f79009;
+    --c-engaged:#6172f3;--c-responded:#15b79e;--c-mql:#12b76a;--c-suppressed:#98a2b3;
+    --c-accepted:#2e90fa;--c-contacted:#6172f3;--c-booked:#7a5af8;--c-qualified:#15b79e;
+    --c-proposal:#f97316;--c-negotiation:#f79009;--c-onboarding:#0ba5ec;
+    --c-won:#12b76a;--c-lost:#f04438;--c-noshow:#f04438;--c-unqualified:#98a2b3;--c-nurture:#0ba5ec;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--ink);font:16px/1.65 var(--sans);-webkit-font-smoothing:antialiased}
+  .eyebrow{font-size:11px;letter-spacing:.18em;text-transform:uppercase;color:var(--ink-4);font-weight:600}
+  code{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:.86em;background:var(--hair-2);
+       border:1px solid var(--hair);border-radius:3px;padding:1px 5px;color:var(--ink-2);white-space:nowrap}
+
+  header{border-bottom:1px solid var(--hair);padding:26px 32px;display:flex;align-items:baseline;justify-content:space-between;gap:16px;flex-wrap:wrap}
+  .brand{display:flex;align-items:baseline;gap:12px}
+  .brand .mark{font-family:var(--serif);font-weight:400;font-style:italic;font-size:24px;letter-spacing:.06em}
+  .brand .sub{font-size:11px;letter-spacing:.18em;text-transform:uppercase;color:var(--ink-4)}
+  header .meta{font-size:12px;color:var(--ink-4)}
+
+  main{max-width:var(--maxw);margin:0 auto;padding:0 32px 90px}
+
+  .hero{padding:72px 0 40px;border-bottom:1px solid var(--hair)}
+  .hero h1{font-family:var(--serif);font-weight:300;font-size:52px;line-height:1.12;margin:14px 0 22px;letter-spacing:-.01em;max-width:20ch}
+  .hero h1 em{font-style:italic;font-weight:400}
+  .hero p.lede{font-size:19px;line-height:1.7;color:var(--ink-3);max-width:62ch;margin:0}
+  .hero .contract{margin-top:28px;font-size:13px;color:var(--ink-4)}
+
+  /* table of contents */
+  .toc{display:grid;grid-template-columns:repeat(auto-fill,minmax(230px,1fr));gap:0;border:1px solid var(--hair);
+       border-radius:var(--radius);overflow:hidden;margin:36px 0 0}
+  .toc a{display:block;padding:16px 18px;border-right:1px solid var(--hair);border-bottom:1px solid var(--hair);
+       text-decoration:none;color:var(--ink-2);font-size:13px;line-height:1.45}
+  .toc a:hover{background:var(--hair-2)}
+  .toc a b{display:block;font-family:var(--serif);font-weight:400;font-size:15px;color:var(--ink);margin-bottom:2px}
+  .toc a .n{color:var(--ink-5);font-family:var(--serif);font-style:italic;margin-right:6px}
+
+  section{padding:64px 0 8px}
+  .chap{display:flex;align-items:baseline;gap:16px;margin-bottom:6px}
+  .chap .num{font-family:var(--serif);font-style:italic;font-weight:300;font-size:44px;color:var(--ink-5);line-height:1}
+  .chap h2{font-family:var(--serif);font-weight:400;font-size:32px;margin:0;letter-spacing:-.01em}
+  section > p.intro{color:var(--ink-3);max-width:68ch;font-size:16.5px;margin:10px 0 28px}
+  section > p.intro b{color:var(--ink)}
+
+  .sechead{display:flex;align-items:center;gap:14px;margin:34px 0 14px}
+  .sechead .eyebrow{white-space:nowrap}
+  .sechead .rule{flex:1;height:1px;background:var(--hair)}
+
+  figure{margin:22px 0;border:1px solid var(--hair);border-radius:var(--radius);background:#fff;overflow-x:auto}
+  figure svg{display:block;min-width:940px;width:100%;height:auto}
+  figcaption{border-top:1px solid var(--hair);padding:12px 18px;font-size:13px;color:var(--ink-4);background:var(--hair-2)}
+  figcaption b{color:var(--ink-2)}
+
+  table{width:100%;border-collapse:collapse;border:1px solid var(--hair);font-size:13.5px;margin:18px 0}
+  th,td{text-align:left;padding:11px 14px;border-bottom:1px solid var(--hair);vertical-align:top}
+  th{font-size:10px;letter-spacing:.12em;text-transform:uppercase;color:var(--ink-4);font-weight:600;background:var(--hair-2)}
+  tr:last-child td{border-bottom:none}
+  td .stagechip{display:inline-block;font-size:11px;font-weight:700;letter-spacing:.05em;text-transform:uppercase;
+     padding:2px 9px;border-radius:999px;color:#fff;white-space:nowrap}
+  td.who{color:var(--ink-4);font-size:12.5px;white-space:nowrap}
+
+  .callout{border:1px solid var(--hair);border-left:3px solid var(--ink);border-radius:var(--radius);
+     padding:16px 20px;margin:20px 0;font-size:14.5px;color:var(--ink-2);background:#fff;max-width:100%}
+  .callout .eyebrow{display:block;margin-bottom:6px}
+  .callout.win{border-left-color:var(--c-mql)}
+  .callout.warn{border-left-color:var(--c-queued)}
+  .callout.stop{border-left-color:var(--c-lost)}
+
+  .grid2{display:grid;grid-template-columns:1fr 1fr;gap:22px}
+  @media(max-width:860px){.grid2{grid-template-columns:1fr}}
+
+  .plainbox{border:1px solid var(--hair);border-radius:var(--radius);padding:18px 20px;font-size:14px;color:var(--ink-3)}
+  .plainbox b{color:var(--ink)}
+  .plainbox .eyebrow{display:block;margin-bottom:8px}
+  .plainbox ul{margin:8px 0 0;padding-left:18px}
+  .plainbox li{margin-bottom:7px}
+  .plainbox li:last-child{margin-bottom:0}
+
+  .kv{display:grid;grid-template-columns:repeat(auto-fill,minmax(250px,1fr));gap:0;border:1px solid var(--hair);border-radius:var(--radius);overflow:hidden;margin:18px 0}
+  .kv .cell{padding:14px 18px;border-right:1px solid var(--hair);border-bottom:1px solid var(--hair)}
+  .kv .cell .k{font-size:10px;letter-spacing:.12em;text-transform:uppercase;color:var(--ink-4);font-weight:600}
+  .kv .cell .v{font-size:13.5px;color:var(--ink-2);margin-top:4px;line-height:1.5}
+
+  footer{border-top:1px solid var(--hair);margin-top:40px;padding:26px 32px;display:flex;justify-content:space-between;
+     flex-wrap:wrap;gap:10px;font-size:12px;color:var(--ink-4);max-width:var(--maxw);margin-left:auto;margin-right:auto}
+
+  /* svg text defaults */
+  svg text{font-family:var(--sans)}
+  svg .nlabel{font-size:12px;font-weight:700;letter-spacing:.04em;fill:#fff}
+  svg .nlabel.dark{fill:var(--ink-2)}
+  svg .elabel{font-size:10.5px;fill:var(--ink-4)}
+  svg .elabel.em{fill:var(--ink-2);font-weight:600}
+  svg .heading{font-size:11px;font-weight:700;letter-spacing:.14em;fill:var(--ink-4)}
+  svg .serif{font-family:var(--serif);font-style:italic}
+</style>
+</head>
+<body>
+
+<header>
+  <div class="brand"><span class="mark">DenchClaw</span><span class="sub">CRM · Engine Workflow</span></div>
+  <span class="meta">Verified against the live build · 2026-07-02 · <code>docs/API_CONTRACT.md</code> is the API authority</span>
+</header>
+
+<main>
+
+<!-- ══════════════════════════ HERO ══════════════════════════ -->
+<div class="hero">
+  <span class="eyebrow">A field guide for every developer on the team</span>
+  <h1>How a stranger becomes <em>revenue</em>, one legal move at a time.</h1>
+  <p class="lede">
+    The DenchClaw CRM is the <b>system of record</b> for the whole Tantra engine suite. Four automation
+    engines — outreach, nurturing, content, personalization — do the talking; the CRM remembers
+    <b>who</b> every contact is, <b>what happened</b> to them, <b>where they stand</b> in two pipelines,
+    and <b>which engine should work them next</b>. This page walks the complete machine, end to end,
+    with nothing skipped: every stage, every transition, every automation, every table.
+  </p>
+  <p class="contract">Node/Express + PostgreSQL · port 3100 (loopback) behind pm2 on staging.usetantra.com · dashboard at <code>/crm/</code> · engines call it over HTTP via <code>automation_core/crm.py</code> with <code>CRM_BACKEND=api</code></p>
+
+  <nav class="toc">
+    <a href="#map"><b><span class="n">1</span>The Big Picture</b>who talks to whom</a>
+    <a href="#born"><b><span class="n">2</span>A Contact Is Born</b>ingestion &amp; the dedupe rule</a>
+    <a href="#marketing"><b><span class="n">3</span>The Marketing Pipeline</b>9 stages, sourced → mql</a>
+    <a href="#inbox"><b><span class="n">4</span>Engagement &amp; the AI Inbox</b>replies, scoring, escalation</a>
+    <a href="#handoff"><b><span class="n">5</span>The MQL → Sales Handoff</b>prospect_inbox lifecycle</a>
+    <a href="#sales"><b><span class="n">6</span>The Sales Pipeline</b>12 stages, accepted → won</a>
+    <a href="#analytics"><b><span class="n">7</span>Analytics</b>events → rollups → funnels</a>
+    <a href="#ui"><b><span class="n">8</span>The Dashboard &amp; Tantra</b>7 tabs + the chat assistant</a>
+    <a href="#data"><b><span class="n">9</span>The Data Model</b>all ten tables</a>
+    <a href="#security"><b><span class="n">10</span>Security &amp; Tenancy</b>the four-gate auth ladder</a>
+    <a href="#ops"><b><span class="n">11</span>Operations</b>deploys, migrations, budgets</a>
+  </nav>
+</div>
+
+<!-- ══════════════════════════ 1 · BIG PICTURE ══════════════════════════ -->
+<section id="map">
+  <div class="chap"><span class="num">1</span><h2>The Big Picture</h2></div>
+  <p class="intro">
+    Five callers, one API, one database. The <b>engines</b> and the <b>human dashboard</b> never touch
+    PostgreSQL directly — everything flows through the CRM's HTTP API, which enforces authentication,
+    tenant isolation, and the pipeline state machines on every single request.
+  </p>
+
+  <figure>
+  <svg viewBox="0 0 1060 620" xmlns="http://www.w3.org/2000/svg">
+    <defs>
+      <marker id="arr" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+        <path d="M0,0 L10,5 L0,10 z" fill="#6b6b6b"/></marker>
+      <marker id="arrD" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+        <path d="M0,0 L10,5 L0,10 z" fill="#d0d0d0"/></marker>
+    </defs>
+
+    <!-- callers row -->
+    <text x="60" y="34" class="heading">THE CALLERS</text>
+    <g font-size="12">
+      <rect x="60"  y="48" width="158" height="66" rx="4" fill="#fff" stroke="#ececec"/>
+      <text x="139" y="76" text-anchor="middle" font-weight="700" fill="#2a2a2a">Outreach Engine</text>
+      <text x="139" y="94" text-anchor="middle" class="elabel">cold email · LinkedIn · SMS · WA</text>
+
+      <rect x="234" y="48" width="158" height="66" rx="4" fill="#fff" stroke="#ececec"/>
+      <text x="313" y="76" text-anchor="middle" font-weight="700" fill="#2a2a2a">Nurturing Engine</text>
+      <text x="313" y="94" text-anchor="middle" class="elabel">webinar ladders · drips</text>
+
+      <rect x="408" y="48" width="158" height="66" rx="4" fill="#fff" stroke="#ececec"/>
+      <text x="487" y="76" text-anchor="middle" font-weight="700" fill="#2a2a2a">Content Engine</text>
+      <text x="487" y="94" text-anchor="middle" class="elabel">organic posts · engagement</text>
+
+      <rect x="582" y="48" width="170" height="66" rx="4" fill="#fff" stroke="#ececec"/>
+      <text x="667" y="76" text-anchor="middle" font-weight="700" fill="#2a2a2a">Personalization Engine</text>
+      <text x="667" y="94" text-anchor="middle" class="elabel">research → context → activity</text>
+
+      <rect x="768" y="48" width="130" height="66" rx="4" fill="#fff" stroke="#d0d0d0" stroke-dasharray="5 4"/>
+      <text x="833" y="76" text-anchor="middle" font-weight="700" fill="#6b6b6b">Yogi V2 chat</text>
+      <text x="833" y="94" text-anchor="middle" class="elabel">orchestrator — planned</text>
+
+      <rect x="914" y="48" width="118" height="66" rx="4" fill="#0a0a0a"/>
+      <text x="973" y="76" text-anchor="middle" font-weight="700" fill="#fff">You, in a browser</text>
+      <text x="973" y="94" text-anchor="middle" font-size="10.5" fill="#d0d0d0">/crm/ dashboard</text>
+    </g>
+
+    <!-- arrows down to transport -->
+    <g stroke="#6b6b6b" stroke-width="1.2" fill="none">
+      <path d="M139 114 V 152" marker-end="url(#arr)"/>
+      <path d="M313 114 V 152" marker-end="url(#arr)"/>
+      <path d="M487 114 V 152" marker-end="url(#arr)"/>
+      <path d="M667 114 V 152" marker-end="url(#arr)"/>
+      <path d="M973 114 V 152" marker-end="url(#arr)"/>
+    </g>
+    <path d="M833 114 V 152" stroke="#d0d0d0" stroke-width="1.2" fill="none" stroke-dasharray="5 4" marker-end="url(#arrD)"/>
+
+    <!-- transport bar -->
+    <rect x="60" y="156" width="972" height="58" rx="4" fill="#f4f4f4" stroke="#ececec"/>
+    <text x="76" y="180" font-size="12" font-weight="700" fill="#2a2a2a">TRANSPORT + FRONT DOOR</text>
+    <text x="76" y="198" class="elabel">engines: loopback HTTP with <tspan font-weight="600">X-Internal-Key + X-Company-Id</tspan> headers · humans: nginx at /crm/ does a Basic-auth login, then injects those same headers server-side (the browser never sees the key)</text>
+
+    <path d="M546 214 V 250" stroke="#6b6b6b" stroke-width="1.4" fill="none" marker-end="url(#arr)"/>
+
+    <!-- auth gate -->
+    <rect x="266" y="254" width="560" height="46" rx="4" fill="#fff" stroke="#0a0a0a" stroke-width="1.4"/>
+    <text x="546" y="273" text-anchor="middle" font-size="12" font-weight="700" fill="#0a0a0a">AUTH GATE — every request, no exceptions</text>
+    <text x="546" y="290" text-anchor="middle" class="elabel">known key? → 401 · caller IP in CIDR? → 403 · company bound to key? → 403 · row belongs to company? → 404</text>
+
+    <path d="M546 300 V 334" stroke="#6b6b6b" stroke-width="1.4" fill="none" marker-end="url(#arr)"/>
+
+    <!-- API box -->
+    <rect x="60" y="338" width="972" height="128" rx="4" fill="#fff" stroke="#ececec"/>
+    <text x="76" y="364" font-size="13" font-weight="700" fill="#0a0a0a">THE CRM API — base /api/crm  ·  Express routers in server/routes/</text>
+    <g font-size="11.5" fill="#4a4a4a">
+      <text x="76"  y="390">• contacts — CRUD, search, filters, bulk-import, CSV export, follow-ups</text>
+      <text x="76"  y="410">• /contacts/:id/advance — THE stage authority for both pipelines (409 on illegal moves)</text>
+      <text x="76"  y="430">• deals + /pipelines — sales board, custom deal pipelines, stage enforcement</text>
+      <text x="76"  y="450">• /prospect-inbox — cross-engine handoff queue (enqueue / claim / list / complete)</text>
+      <text x="560" y="390">• conversations + messages — the Unified AI Inbox</text>
+      <text x="560" y="410">• /campaign-events + /analytics/* — event ingest → rollups → funnels</text>
+      <text x="560" y="430">• /companies — account records for the Companies tab</text>
+      <text x="560" y="450">• /chat — the Tantra assistant (reads + guarded writes)</text>
+    </g>
+
+    <path d="M546 466 V 500" stroke="#6b6b6b" stroke-width="1.4" fill="none" marker-end="url(#arr)"/>
+
+    <!-- DB -->
+    <rect x="130" y="504" width="832" height="88" rx="4" fill="#0a0a0a"/>
+    <text x="546" y="532" text-anchor="middle" font-size="13" font-weight="700" fill="#fff">PostgreSQL — the isolated `denchclaw` database (never shared with the engines' DBs)</text>
+    <g font-size="11" fill="#d0d0d0">
+      <text x="546" y="554" text-anchor="middle">contacts · contact_activity · deals · companies · crm_pipeline_configs · prospect_inbox</text>
+      <text x="546" y="572" text-anchor="middle">conversations · messages · campaign_events · campaign_event_rollups</text>
+    </g>
+  </svg>
+  <figcaption><b>One door, one gatekeeper, one memory.</b> Every caller — machine or human — passes the same auth gate and the same state machines. Schema changes only ever arrive as numbered migration files applied by an operator.</figcaption>
+  </figure>
+
+  <div class="callout">
+    <span class="eyebrow">The one-sentence version</span>
+    Engines generate attention and conversations; the CRM turns those into an auditable ledger of
+    <b>contacts moving through two pipelines</b> — and refuses any move the pipeline rules don't allow.
+  </div>
+</section>
+
+<!-- ══════════════════════════ 2 · A CONTACT IS BORN ══════════════════════════ -->
+<section id="born">
+  <div class="chap"><span class="num">2</span><h2>A Contact Is Born</h2></div>
+  <p class="intro">
+    Contacts enter three ways: an engine scrapes or imports a prospect list (<code>POST /contacts/bulk-import</code>),
+    an engine or the dashboard creates one directly (<code>POST /contacts</code>), or the Tantra chat creates one on
+    your behalf. Every new contact starts at marketing stage <b>sourced</b> with a dedicated
+    <b>UUID contact id</b> — the identity every other table hangs off.
+  </p>
+
+  <figure>
+  <svg viewBox="0 0 1060 330" xmlns="http://www.w3.org/2000/svg">
+    <defs><marker id="arr2" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M0,0 L10,5 L0,10 z" fill="#6b6b6b"/></marker></defs>
+
+    <text x="60" y="34" class="heading">THE DEDUPE DECISION — email is the identity, everything else is a hint</text>
+
+    <rect x="60" y="60" width="190" height="56" rx="4" fill="#fff" stroke="#ececec"/>
+    <text x="155" y="84" text-anchor="middle" font-size="12" font-weight="700" fill="#2a2a2a">A record arrives</text>
+    <text x="155" y="102" text-anchor="middle" class="elabel">name · email? · phone? · linkedin?</text>
+
+    <path d="M250 88 H 302" stroke="#6b6b6b" stroke-width="1.3" fill="none" marker-end="url(#arr2)"/>
+
+    <rect x="306" y="60" width="170" height="56" rx="4" fill="#f4f4f4" stroke="#ececec"/>
+    <text x="391" y="84" text-anchor="middle" font-size="12" font-weight="700" fill="#2a2a2a">Does it have an email?</text>
+    <text x="391" y="102" text-anchor="middle" class="elabel">the authoritative key</text>
+
+    <!-- yes branch -->
+    <path d="M476 78 H 560" stroke="#6b6b6b" stroke-width="1.3" fill="none" marker-end="url(#arr2)"/>
+    <text x="518" y="70" text-anchor="middle" class="elabel em">YES</text>
+    <rect x="564" y="50" width="200" height="56" rx="4" fill="#fff" stroke="#ececec"/>
+    <text x="664" y="74" text-anchor="middle" font-size="12" font-weight="700" fill="#2a2a2a">Exact email match?</text>
+    <text x="664" y="92" text-anchor="middle" class="elabel">case-insensitive, within the tenant</text>
+
+    <path d="M764 68 H 848" stroke="#6b6b6b" stroke-width="1.3" fill="none" marker-end="url(#arr2)"/>
+    <text x="806" y="60" text-anchor="middle" class="elabel em">MATCH</text>
+    <rect x="852" y="42" width="150" height="52" rx="4" fill="#ecfdf3" stroke="#12b76a"/>
+    <text x="927" y="64" text-anchor="middle" font-size="12" font-weight="700" fill="#067647">UPDATE existing</text>
+    <text x="927" y="82" text-anchor="middle" class="elabel">fields merge, no duplicate</text>
+
+    <path d="M764 96 C 800 96, 820 118, 848 122" stroke="#6b6b6b" stroke-width="1.3" fill="none" marker-end="url(#arr2)"/>
+    <text x="812" y="120" text-anchor="middle" class="elabel em">NO MATCH</text>
+    <rect x="852" y="104" width="150" height="52" rx="4" fill="#eff4ff" stroke="#2e90fa"/>
+    <text x="927" y="126" text-anchor="middle" font-size="12" font-weight="700" fill="#175cd3">CREATE new</text>
+    <text x="927" y="144" text-anchor="middle" class="elabel">even if phone/linkedin collide!</text>
+
+    <!-- no branch -->
+    <path d="M391 116 V 180" stroke="#6b6b6b" stroke-width="1.3" fill="none" marker-end="url(#arr2)"/>
+    <text x="405" y="152" class="elabel em">NO EMAIL</text>
+    <rect x="306" y="184" width="170" height="56" rx="4" fill="#fff" stroke="#ececec"/>
+    <text x="391" y="208" text-anchor="middle" font-size="12" font-weight="700" fill="#2a2a2a">Phone digits match?</text>
+    <text x="391" y="226" text-anchor="middle" class="elabel">normalized: digits only</text>
+
+    <path d="M476 212 H 560" stroke="#6b6b6b" stroke-width="1.3" fill="none" marker-end="url(#arr2)"/>
+    <text x="518" y="204" text-anchor="middle" class="elabel em">NO</text>
+    <rect x="564" y="184" width="200" height="56" rx="4" fill="#fff" stroke="#ececec"/>
+    <text x="664" y="208" text-anchor="middle" font-size="12" font-weight="700" fill="#2a2a2a">LinkedIn URL match?</text>
+    <text x="664" y="226" text-anchor="middle" class="elabel">lowercased exact match</text>
+
+    <path d="M391 240 C 391 280, 700 290, 848 268" stroke="#6b6b6b" stroke-width="1.3" fill="none" marker-end="url(#arr2)"/>
+    <text x="560" y="292" class="elabel em">EITHER MATCHES → merge into that contact</text>
+    <path d="M764 212 C 800 212, 826 232, 850 246" stroke="#6b6b6b" stroke-width="1.3" fill="none" marker-end="url(#arr2)"/>
+    <rect x="852" y="232" width="150" height="52" rx="4" fill="#eff4ff" stroke="#2e90fa"/>
+    <text x="927" y="254" text-anchor="middle" font-size="12" font-weight="700" fill="#175cd3">MERGE or CREATE</text>
+    <text x="927" y="272" text-anchor="middle" class="elabel">fallback only when email-less</text>
+  </svg>
+  <figcaption><b>Why it matters:</b> real prospect lists contain two founders sharing one phone, and four dot-alias emails behind one LinkedIn profile. Distinct emails <b>never</b> merge — that rule was pinned after the 2026-07-02 trial caught six test contacts collapsing into three.</figcaption>
+  </figure>
+
+  <div class="kv">
+    <div class="cell"><div class="k">Identity</div><div class="v"><code>id</code> UUID — referenced by activity, deals, conversations, handoffs, events</div></div>
+    <div class="cell"><div class="k">Birth state</div><div class="v"><code>marketing_stage = 'sourced'</code> · legacy <code>deal_stage = 'lead'</code></div></div>
+    <div class="cell"><div class="k">What's stored</div><div class="v">name, email, phone, company, title, linkedin_url, source, tags[], UTM source/medium/campaign/content, metadata JSON, lead score</div></div>
+    <div class="cell"><div class="k">First activity</div><div class="v">a <code>created</code> / <code>prospect_loaded</code> row lands in the activity feed immediately</div></div>
+    <div class="cell"><div class="k">Attribution</div><div class="v">every CTA link the engines send is UTM-tagged; those UTMs are saved on the contact for source attribution</div></div>
+    <div class="cell"><div class="k">Tenancy</div><div class="v"><code>company_id</code> stamped from the caller's header — rows never leak across tenants</div></div>
+  </div>
+</section>
+
+<!-- ══════════════════════════ 3 · MARKETING PIPELINE ══════════════════════════ -->
+<section id="marketing">
+  <div class="chap"><span class="num">3</span><h2>The Marketing Pipeline</h2></div>
+  <p class="intro">
+    Nine stages that track a contact from <b>raw scrape</b> to <b>marketing-qualified lead</b>.
+    The map below is not decoration — it is the literal state machine stored as JSONB in
+    <code>crm_pipeline_configs</code> (seeded by migration 003, corrected by 006). The server checks
+    <b>every</b> requested move against it and answers <code>409 + the allowed list</code> for anything illegal.
+    An arrow you don't see here is a move that cannot happen.
+  </p>
+
+  <figure>
+  <svg viewBox="0 0 1060 470" xmlns="http://www.w3.org/2000/svg">
+    <defs>
+      <marker id="arr3" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+        <path d="M0,0 L10,5 L0,10 z" fill="#6b6b6b"/></marker>
+      <marker id="arr3g" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+        <path d="M0,0 L10,5 L0,10 z" fill="#b6bcc6"/></marker>
+      <marker id="arr3b" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+        <path d="M0,0 L10,5 L0,10 z" fill="#0ba5ec"/></marker>
+    </defs>
+
+    <!-- skip edge sourced->segmented -->
+    <path d="M 86 88 C 140 26, 320 26, 374 86" stroke="#7a5af8" stroke-width="1.4" fill="none" marker-end="url(#arr3)"/>
+    <text x="231" y="34" text-anchor="middle" class="elabel em">direct path — record arrived pre-enriched (3rd-party verified lists)</text>
+
+    <!-- spine forward edges -->
+    <g stroke="#6b6b6b" stroke-width="1.5" fill="none">
+      <path d="M142 110 H 172" marker-end="url(#arr3)"/>
+      <path d="M288 110 H 318" marker-end="url(#arr3)"/>
+      <path d="M434 110 H 464" marker-end="url(#arr3)"/>
+      <path d="M580 110 H 610" marker-end="url(#arr3)"/>
+      <path d="M726 110 H 756" marker-end="url(#arr3)"/>
+      <path d="M872 110 H 902" marker-end="url(#arr3)"/>
+    </g>
+    <!-- spine nodes -->
+    <g>
+      <rect x="30"  y="90" width="112" height="40" rx="6" fill="#667085"/><text x="86"  y="115" text-anchor="middle" class="nlabel">SOURCED</text>
+      <rect x="176" y="90" width="112" height="40" rx="6" fill="#2e90fa"/><text x="232" y="115" text-anchor="middle" class="nlabel">ENRICHED</text>
+      <rect x="322" y="90" width="112" height="40" rx="6" fill="#7a5af8"/><text x="378" y="115" text-anchor="middle" class="nlabel">SEGMENTED</text>
+      <rect x="468" y="90" width="112" height="40" rx="6" fill="#f79009"/><text x="524" y="115" text-anchor="middle" class="nlabel">QUEUED</text>
+      <rect x="614" y="90" width="112" height="40" rx="6" fill="#6172f3"/><text x="670" y="115" text-anchor="middle" class="nlabel">ENGAGED</text>
+      <rect x="760" y="90" width="112" height="40" rx="6" fill="#15b79e"/><text x="816" y="115" text-anchor="middle" class="nlabel">RESPONDED</text>
+      <rect x="906" y="90" width="112" height="40" rx="6" fill="#12b76a" stroke="#067647" stroke-width="2"/><text x="962" y="115" text-anchor="middle" class="nlabel">MQL ★</text>
+    </g>
+    <text x="1018" y="150" text-anchor="end" class="elabel em">★ triggers the Sales handoff (ch. 5)</text>
+
+    <!-- nurture edges in -->
+    <g stroke="#0ba5ec" stroke-width="1.3" fill="none">
+      <path d="M 378 130 C 378 200, 440 240, 476 258" marker-end="url(#arr3b)"/>
+      <path d="M 524 130 V 254" marker-end="url(#arr3b)"/>
+      <path d="M 670 130 C 670 200, 610 240, 574 258" marker-end="url(#arr3b)"/>
+      <path d="M 816 130 C 816 220, 660 258, 583 268" marker-end="url(#arr3b)"/>
+      <path d="M 962 130 C 962 250, 680 278, 583 280" marker-end="url(#arr3b)"/>
+    </g>
+    <text x="700" y="222" class="elabel" text-anchor="middle">not ready · no response · wrong timing → park in nurture</text>
+
+    <!-- nurture node -->
+    <rect x="468" y="255" width="112" height="40" rx="6" fill="#0ba5ec"/>
+    <text x="524" y="280" text-anchor="middle" class="nlabel">NURTURE</text>
+
+    <!-- nurture return -->
+    <path d="M 468 275 C 330 275, 310 190, 368 134" stroke="#0ba5ec" stroke-width="1.6" fill="none" stroke-dasharray="6 4" marker-end="url(#arr3b)"/>
+    <text x="308" y="228" class="elabel em" text-anchor="middle">the return path: re-segment,</text>
+    <text x="308" y="242" class="elabel em" text-anchor="middle">NEVER re-enrich (migration 006)</text>
+
+    <!-- suppression rail -->
+    <g stroke="#b6bcc6" stroke-width="1" fill="none" stroke-dasharray="3 4">
+      <path d="M 86 130 V 400"/><path d="M 232 130 V 400"/><path d="M 378 130 V 400"/>
+      <path d="M 524 295 V 400"/><path d="M 670 130 V 400"/><path d="M 816 130 V 400"/><path d="M 962 130 V 400"/>
+    </g>
+    <path d="M 60 400 H 894" stroke="#98a2b3" stroke-width="1.5" fill="none" marker-end="url(#arr3g)"/>
+    <text x="470" y="392" text-anchor="middle" class="elabel em">the suppression rail — unsubscribe · hard bounce · DNC · invalid. Reachable from EVERY stage.</text>
+    <rect x="898" y="380" width="120" height="40" rx="6" fill="#98a2b3" stroke="#4a4a4a" stroke-width="1.6" stroke-dasharray="4 3"/>
+    <text x="958" y="405" text-anchor="middle" class="nlabel">SUPPRESSED ⏹</text>
+    <text x="1018" y="440" text-anchor="end" class="elabel">terminal — no way out; the engines' send guards honor it too</text>
+  </svg>
+  <figcaption><b>Reading the map:</b> the gray spine is the happy path; blue is the nurture loop; the dashed gray rail is suppression. Solid = forward, dashed = recovery/terminal. Exactly these edges exist in the config — nothing more.</figcaption>
+  </figure>
+
+  <div class="sechead"><span class="eyebrow">Stage by stage — what each one means and who moves it</span><span class="rule"></span></div>
+  <table>
+    <thead><tr><th style="width:130px">Stage</th><th>What it means, in plain words</th><th style="width:220px">Moved by</th><th style="width:230px">Legal next moves</th></tr></thead>
+    <tbody>
+      <tr><td><span class="stagechip" style="background:var(--c-sourced)">sourced</span></td><td>We scraped or imported this person. Raw material — nothing verified yet.</td><td class="who">bulk-import / engine scraper</td><td><code>enriched</code> · <code>segmented</code> · <code>suppressed</code></td></tr>
+      <tr><td><span class="stagechip" style="background:var(--c-enriched)">enriched</span></td><td>The enrichment pass finished: email/phone/LinkedIn verified, intent researched. The personalization engine writes its research into the activity feed here.</td><td class="who">personalization / outreach engine</td><td><code>segmented</code> · <code>suppressed</code></td></tr>
+      <tr><td><span class="stagechip" style="background:var(--c-segmented)">segmented</span></td><td>A buyer-persona segment and channel tags are assigned. We now know <em>which campaign</em> should talk to them.</td><td class="who">outreach engine</td><td><code>queued</code> · <code>nurture</code> · <code>suppressed</code></td></tr>
+      <tr><td><span class="stagechip" style="background:var(--c-queued)">queued</span></td><td>Enrolled in a campaign, message scheduled to send. (Once the AI Message Hub pre-writes messages, this will also mean "message already generated.")</td><td class="who">outreach / nurturing engine</td><td><code>engaged</code> · <code>nurture</code> · <code>suppressed</code></td></tr>
+      <tr><td><span class="stagechip" style="background:var(--c-engaged)">engaged</span></td><td>The first outbound touch actually went out on any channel — email, LinkedIn, SMS, WhatsApp.</td><td class="who">engine send loop</td><td><code>responded</code> · <code>nurture</code> · <code>suppressed</code></td></tr>
+      <tr><td><span class="stagechip" style="background:var(--c-responded)">responded</span></td><td>They replied — anything, even "not interested." <b>Set automatically</b> when an inbound message is logged (chapter 4).</td><td class="who">automatic, on inbound message</td><td><code>mql</code> · <code>nurture</code> · <code>suppressed</code></td></tr>
+      <tr><td><span class="stagechip" style="background:var(--c-mql)">mql</span></td><td>Positive intent detected — a real lead. The engine enqueues the Sales handoff here.</td><td class="who">inbox classifier / human</td><td><code>nurture</code> · <code>suppressed</code></td></tr>
+      <tr><td><span class="stagechip" style="background:var(--c-nurture)">nurture</span></td><td>Parked for long-term warming — the 52-week drip works these. Contacts recycled from Sales land here too.</td><td class="who">engines / sales off-ramp</td><td><code>segmented</code> · <code>suppressed</code></td></tr>
+      <tr><td><span class="stagechip" style="background:var(--c-suppressed)">suppressed</span></td><td>Unsubscribed, bounced, or do-not-contact. Terminal — no way out, and send guards refuse them.</td><td class="who">webhooks / compliance</td><td>— none (terminal)</td></tr>
+    </tbody>
+  </table>
+
+  <div class="callout warn">
+    <span class="eyebrow">How a move actually happens</span>
+    <code>POST /api/crm/contacts/:id/advance {"pipeline_key":"marketing","stage":"segmented","reason":"…","actor":"outreach-engine"}</code><br>
+    Legal → <code>200 {changed:true, previous:"sourced"}</code>, a <code>stage_change</code> activity row is written, and the legacy
+    <code>deal_stage</code> column mirrors the value (older scripts still read it). Illegal →
+    <code>409 {error, current, requested, allowed:[…]}</code>. Already there → <code>200 {changed:false}</code> (idempotent — safe to retry).
+  </div>
+</section>
+
+<!-- ══════════════════════════ 4 · ENGAGEMENT & INBOX ══════════════════════════ -->
+<section id="inbox">
+  <div class="chap"><span class="num">4</span><h2>Engagement &amp; the Unified AI Inbox</h2></div>
+  <p class="intro">
+    Between stage moves, everything a contact <b>does</b> is logged. Two systems capture it:
+    the <b>activity feed</b> (an append-only diary per contact) and the <b>Unified AI Inbox</b>
+    (real two-way conversations per channel). Both feed the lead score.
+  </p>
+
+  <div class="grid2">
+    <div class="plainbox">
+      <span class="eyebrow">The activity feed — contact_activity</span>
+      Every event an engine reports lands here as <code>POST /contacts/:id/activity</code>:
+      <ul>
+        <li><b>Message sends</b> on every channel, with the channel recorded — the doc requirement that "any activities on any channels are logged in the contact activity feed."</li>
+        <li><b>Engagement events</b> that bump the numeric lead score: email_opened +2 · email_clicked +5 · email_replied +10 · whatsapp_read +3 · whatsapp_replied +10 · sms_replied +8 · linkedin_connection_accepted +5 · linkedin_message_replied +10 · video_watched +15 · video_completed +20 · call_booked +25 · call_completed +30 · form_submitted +15 · registered +15 · cta_clicked +10 · proposal_viewed +15 · payment +50.</li>
+        <li><b>Stage changes</b> (written automatically by every advance, with from/to/reason/actor).</li>
+        <li><b>Personalization context</b> — the research the personalization engine produces per prospect.</li>
+        <li><b>Notes</b> from humans via the dashboard modal or Tantra chat.</li>
+      </ul>
+      Score crosses 80 → label flips to <b>hot</b>; a cold contact crossing 50 → <b>warm</b>. Hot/warm contacts surface in the follow-ups queue when they go quiet.
+    </div>
+    <div class="plainbox">
+      <span class="eyebrow">The inbox — conversations + messages</span>
+      One <b>open conversation per contact per channel</b>, enforced by a unique index. Find-or-create is idempotent:
+      <ul>
+        <li><code>POST /conversations {contact_id, channel}</code> returns the existing open thread if there is one — engines can call it blind.</li>
+        <li>Messages carry <code>direction</code>, <code>channel</code>, <code>body</code>, <code>ai_generated</code>, <code>intent</code>, and <code>provider_message_id</code>.</li>
+        <li><b>Webhook dedupe:</b> the same provider message delivered twice (Resend/Twilio love retries) yields exactly one row — unique on <code>(company, provider_message_id)</code>.</li>
+        <li><b>Escalation:</b> conversations have <code>assignee: ai | human</code>. The ~10% the AI can't handle get <code>PATCH {assignee:"human"}</code> and appear in the dashboard's "Needs Human" queue; a human can hand back to AI.</li>
+      </ul>
+    </div>
+  </div>
+
+  <figure>
+  <svg viewBox="0 0 1060 300" xmlns="http://www.w3.org/2000/svg">
+    <defs><marker id="arr4" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M0,0 L10,5 L0,10 z" fill="#6b6b6b"/></marker></defs>
+    <text x="60" y="34" class="heading">THE INBOUND-REPLY AUTOMATION — what happens when a prospect writes back</text>
+
+    <g font-size="12">
+      <rect x="60" y="60" width="168" height="54" rx="4" fill="#fff" stroke="#ececec"/>
+      <text x="144" y="83" text-anchor="middle" font-weight="700" fill="#2a2a2a">Provider webhook</text>
+      <text x="144" y="100" text-anchor="middle" class="elabel">Resend / Twilio / Unipile reply</text>
+
+      <rect x="286" y="60" width="196" height="54" rx="4" fill="#fff" stroke="#ececec"/>
+      <text x="384" y="83" text-anchor="middle" font-weight="700" fill="#2a2a2a">POST …/:id/messages</text>
+      <text x="384" y="100" text-anchor="middle" class="elabel">direction=inbound + provider_message_id</text>
+
+      <rect x="540" y="40" width="212" height="42" rx="4" fill="#f4f4f4" stroke="#ececec"/>
+      <text x="646" y="66" text-anchor="middle" class="elabel em">1 · dedupe — second delivery = same row</text>
+
+      <rect x="540" y="94" width="212" height="42" rx="4" fill="#f4f4f4" stroke="#ececec"/>
+      <text x="646" y="120" text-anchor="middle" class="elabel em">2 · conversation freshness + intent</text>
+
+      <rect x="540" y="148" width="212" height="42" rx="4" fill="#ecfdf3" stroke="#12b76a"/>
+      <text x="646" y="167" text-anchor="middle" class="elabel em">3 · auto-advance → responded</text>
+      <text x="646" y="182" text-anchor="middle" class="elabel">only if legal from the current stage</text>
+
+      <rect x="540" y="202" width="212" height="42" rx="4" fill="#fffaeb" stroke="#f79009"/>
+      <text x="646" y="221" text-anchor="middle" class="elabel em">4 · reply includes active_campaigns</text>
+      <text x="646" y="236" text-anchor="middle" class="elabel">from the contact's campaign:* tags</text>
+
+      <rect x="810" y="120" width="192" height="70" rx="4" fill="#0a0a0a"/>
+      <text x="906" y="147" text-anchor="middle" font-weight="700" fill="#fff">The engine halts</text>
+      <text x="906" y="164" text-anchor="middle" font-size="11" fill="#d0d0d0">competing outbound for those</text>
+      <text x="906" y="179" text-anchor="middle" font-size="11" fill="#d0d0d0">campaigns — no double-messaging</text>
+    </g>
+    <g stroke="#6b6b6b" stroke-width="1.3" fill="none">
+      <path d="M228 87 H 282" marker-end="url(#arr4)"/>
+      <path d="M482 87 C 505 87, 512 61, 536 61" marker-end="url(#arr4)"/>
+      <path d="M482 92 C 510 92, 512 115, 536 115" marker-end="url(#arr4)"/>
+      <path d="M482 100 C 516 110, 500 169, 536 169" marker-end="url(#arr4)"/>
+      <path d="M482 105 C 522 125, 495 223, 536 223" marker-end="url(#arr4)"/>
+      <path d="M752 223 C 790 223, 780 165, 806 158" marker-end="url(#arr4)"/>
+    </g>
+  </svg>
+  <figcaption><b>One webhook, four side-effects</b> — persisted message, fresher conversation, a legal stage move, and a suppression signal back to the sender. Calling it twice changes nothing (idempotency is the contract).</figcaption>
+  </figure>
+</section>
+
+<!-- ══════════════════════════ 5 · HANDOFF ══════════════════════════ -->
+<section id="handoff">
+  <div class="chap"><span class="num">5</span><h2>The MQL → Sales Handoff</h2></div>
+  <p class="intro">
+    When marketing produces an MQL, ownership must transfer to Sales <b>exactly once</b> — even with
+    several engine workers racing. The <code>prospect_inbox</code> table is that baton: a CRM-owned queue
+    with atomic claiming. It also serves engine→engine handoffs (e.g. outreach → nurturing).
+  </p>
+
+  <figure>
+  <svg viewBox="0 0 1060 360" xmlns="http://www.w3.org/2000/svg">
+    <defs><marker id="arr5" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M0,0 L10,5 L0,10 z" fill="#6b6b6b"/></marker>
+      <marker id="arr5b" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M0,0 L10,5 L0,10 z" fill="#0ba5ec"/></marker></defs>
+
+    <text x="60" y="34" class="heading">A HANDOFF ROW'S LIFE — prospect_inbox.status</text>
+
+    <!-- lifecycle -->
+    <g>
+      <rect x="120" y="60" width="140" height="44" rx="6" fill="#f79009"/><text x="190" y="87" text-anchor="middle" class="nlabel">PENDING</text>
+      <rect x="380" y="60" width="140" height="44" rx="6" fill="#6172f3"/><text x="450" y="87" text-anchor="middle" class="nlabel">CLAIMED</text>
+      <rect x="640" y="60" width="140" height="44" rx="6" fill="#15b79e"/><text x="710" y="87" text-anchor="middle" class="nlabel">ENROLLED</text>
+      <rect x="880" y="60" width="120" height="44" rx="6" fill="#667085"/><text x="940" y="87" text-anchor="middle" class="nlabel">DONE</text>
+    </g>
+    <g stroke="#6b6b6b" stroke-width="1.5" fill="none">
+      <path d="M260 82 H 376" marker-end="url(#arr5)"/>
+      <path d="M520 82 H 636" marker-end="url(#arr5)"/>
+      <path d="M780 82 H 876" marker-end="url(#arr5)"/>
+    </g>
+    <g class="elabel" text-anchor="middle">
+      <text x="318" y="52" class="em">POST /claim — atomic, SKIP LOCKED</text>
+      <text x="578" y="52">enrolled into a campaign (PATCH)</text>
+      <text x="828" y="52">work finished (PATCH)</text>
+    </g>
+
+    <!-- release + reenqueue -->
+    <path d="M 450 104 C 450 150, 260 150, 200 106" stroke="#6b6b6b" stroke-width="1.2" fill="none" stroke-dasharray="5 4" marker-end="url(#arr5)"/>
+    <text x="325" y="146" text-anchor="middle" class="elabel">release: PATCH status=pending clears claimed_by/claimed_at — row returns to the queue</text>
+    <path d="M 940 104 C 940 196, 330 196, 195 108" stroke="#6b6b6b" stroke-width="1.2" fill="none" stroke-dasharray="5 4" marker-end="url(#arr5)"/>
+    <text x="565" y="190" text-anchor="middle" class="elabel">re-enqueue of a done row RESETS it to pending — a reactivated contact can be handed off again; never a duplicate, never a 500</text>
+
+    <!-- semantics band -->
+    <g font-size="12">
+      <rect x="60" y="228" width="300" height="104" rx="4" fill="#fff" stroke="#ececec"/>
+      <text x="76" y="252" font-weight="700" fill="#2a2a2a">Enqueue — idempotent</text>
+      <text x="76" y="272" class="elabel">unique on (contact, target_engine); re-enqueueing a</text>
+      <text x="76" y="287" class="elabel">pending/claimed row only merges metadata — an</text>
+      <text x="76" y="302" class="elabel">in-flight handoff is never yanked. Contact must belong</text>
+      <text x="76" y="317" class="elabel">to the caller's company (else 404).</text>
+
+      <rect x="380" y="228" width="300" height="104" rx="4" fill="#fff" stroke="#ececec"/>
+      <text x="396" y="252" font-weight="700" fill="#2a2a2a">Broadcast — target_engine = NULL</text>
+      <text x="396" y="272" class="elabel">a NULL-target row is claimable by ANY engine;</text>
+      <text x="396" y="287" class="elabel">the first claim consumes it (no fan-out). Ten</text>
+      <text x="396" y="302" class="elabel">workers racing with limit=1 will claim ten distinct</text>
+      <text x="396" y="317" class="elabel">rows — proven by the contract race test.</text>
+
+      <rect x="700" y="228" width="332" height="104" rx="4" fill="#ecfdf3" stroke="#12b76a"/>
+      <text x="716" y="252" font-weight="700" fill="#067647">THE SALES AUTOMATION ★</text>
+      <text x="716" y="272" class="elabel">claiming with target_engine='sales' AUTO-CREATES a</text>
+      <text x="716" y="287" class="elabel">deals row at stage 'accepted' — instantly, in the same</text>
+      <text x="716" y="302" class="elabel">request. Idempotent: skipped if the contact already has</text>
+      <text x="716" y="317" class="elabel">an open sales deal. Title: "MQL Handoff — &lt;reason&gt;".</text>
+    </g>
+  </svg>
+  <figcaption><b>Statuses:</b> pending → claimed → enrolled → done, with two dashed recovery loops. The green box is the bridge between chapters 3 and 6 — it is <em>the</em> moment marketing becomes sales.</figcaption>
+  </figure>
+</section>
+
+<!-- ══════════════════════════ 6 · SALES PIPELINE ══════════════════════════ -->
+<section id="sales">
+  <div class="chap"><span class="num">6</span><h2>The Sales Pipeline</h2></div>
+  <p class="intro">
+    Sales lives on a <b>separate object</b>: the <code>deals</code> row created by the handoff claim.
+    That's deliberate — a contact can sit in marketing <code>nurture</code> <em>and</em> have an open deal
+    at the same time without the two states fighting. Twelve stages, seeded by migration 003 and
+    corrected by 006 + 007. Same enforcement: illegal move → <code>409 + allowed</code>.
+  </p>
+
+  <figure>
+  <svg viewBox="0 0 1060 620" xmlns="http://www.w3.org/2000/svg">
+    <defs>
+      <marker id="arr6" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+        <path d="M0,0 L10,5 L0,10 z" fill="#6b6b6b"/></marker>
+      <marker id="arr6r" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+        <path d="M0,0 L10,5 L0,10 z" fill="#f04438"/></marker>
+      <marker id="arr6b" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+        <path d="M0,0 L10,5 L0,10 z" fill="#0ba5ec"/></marker>
+    </defs>
+
+    <!-- reschedule arc booked->contacted -->
+    <path d="M 330 92 C 306 48, 234 48, 212 90" stroke="#6b6b6b" stroke-width="1.2" fill="none" stroke-dasharray="5 4" marker-end="url(#arr6)"/>
+    <text x="271" y="46" text-anchor="middle" class="elabel">rescheduled — back to contact phase</text>
+
+    <!-- spine -->
+    <g stroke="#6b6b6b" stroke-width="1.5" fill="none">
+      <path d="M130 112 H 152" marker-end="url(#arr6)"/>
+      <path d="M254 112 H 276" marker-end="url(#arr6)"/>
+      <path d="M378 112 H 400" marker-end="url(#arr6)"/>
+      <path d="M502 112 H 524" marker-end="url(#arr6)"/>
+      <path d="M626 112 H 648" marker-end="url(#arr6)"/>
+      <path d="M756 112 H 778" marker-end="url(#arr6)"/>
+      <path d="M886 112 H 908" marker-end="url(#arr6)"/>
+    </g>
+    <text x="530" y="76" text-anchor="middle" class="elabel">the happy path: SDR touch → meeting set → call went well → scope sent → interested → verbal yes → delivered</text>
+
+    <g>
+      <rect x="26"  y="92" width="104" height="40" rx="6" fill="#2e90fa"/><text x="78"  y="117" text-anchor="middle" class="nlabel">ACCEPTED</text>
+      <rect x="156" y="92" width="98"  height="40" rx="6" fill="#6172f3"/><text x="205" y="117" text-anchor="middle" class="nlabel">CONTACTED</text>
+      <rect x="280" y="92" width="98"  height="40" rx="6" fill="#7a5af8"/><text x="329" y="117" text-anchor="middle" class="nlabel">BOOKED</text>
+      <rect x="404" y="92" width="98"  height="40" rx="6" fill="#15b79e"/><text x="453" y="117" text-anchor="middle" class="nlabel">QUALIFIED</text>
+      <rect x="528" y="92" width="98"  height="40" rx="6" fill="#f97316"/><text x="577" y="117" text-anchor="middle" class="nlabel">PROPOSAL</text>
+      <rect x="652" y="92" width="104" height="40" rx="6" fill="#f79009"/><text x="704" y="117" text-anchor="middle" class="nlabel">NEGOTIATION</text>
+      <rect x="782" y="92" width="104" height="40" rx="6" fill="#0ba5ec"/><text x="834" y="117" text-anchor="middle" class="nlabel">ONBOARDING</text>
+      <rect x="912" y="92" width="104" height="40" rx="6" fill="#12b76a" stroke="#067647" stroke-width="2"/><text x="964" y="117" text-anchor="middle" class="nlabel">WON ⏹</text>
+    </g>
+    <text x="1016" y="152" text-anchor="end" class="elabel">terminal · sets closed_at · rolls into won_value</text>
+    <text x="78" y="152" text-anchor="middle" class="elabel">created automatically by the sales claim (ch. 5)</text>
+
+    <!-- no_show -->
+    <rect x="240" y="212" width="104" height="40" rx="6" fill="#f04438"/><text x="292" y="237" text-anchor="middle" class="nlabel">NO_SHOW</text>
+    <path d="M 329 132 C 329 160, 315 190, 300 208" stroke="#6b6b6b" stroke-width="1.3" fill="none" marker-end="url(#arr6)"/>
+    <text x="352" y="176" class="elabel">didn't attend</text>
+    <path d="M 262 212 C 230 180, 216 160, 209 136" stroke="#6b6b6b" stroke-width="1.2" fill="none" stroke-dasharray="5 4" marker-end="url(#arr6)"/>
+    <text x="180" y="180" class="elabel" text-anchor="middle">try again</text>
+    <path d="M 322 208 C 336 180, 340 160, 333 136" stroke="#067647" stroke-width="1.4" fill="none" marker-end="url(#arr6)"/>
+    <text x="404" y="200" class="elabel em" text-anchor="middle">rebook DIRECTLY (migration 007) —</text>
+    <text x="404" y="214" class="elabel" text-anchor="middle">this is how booking-rate stays honest</text>
+
+    <!-- unqualified -->
+    <rect x="470" y="270" width="112" height="40" rx="6" fill="#98a2b3"/><text x="526" y="295" text-anchor="middle" class="nlabel">UNQUALIFIED</text>
+    <path d="M 453 132 C 453 200, 490 240, 512 266" stroke="#6b6b6b" stroke-width="1.3" fill="none" marker-end="url(#arr6)"/>
+    <text x="440" y="252" class="elabel" text-anchor="end">not a fit</text>
+    <path d="M 205 132 C 205 260, 380 288, 466 290" stroke="#6b6b6b" stroke-width="1.2" fill="none" marker-end="url(#arr6)"/>
+    <text x="268" y="278" class="elabel">immediate hard no</text>
+    <path d="M 582 288 C 630 286, 660 274, 682 258" stroke="#0ba5ec" stroke-width="1.4" fill="none" marker-end="url(#arr6b)"/>
+    <text x="636" y="304" class="elabel em">wrong timing, not a dead end</text>
+
+    <!-- nurture -->
+    <rect x="686" y="212" width="104" height="40" rx="6" fill="#0ba5ec"/><text x="738" y="237" text-anchor="middle" class="nlabel">NURTURE</text>
+    <g stroke="#0ba5ec" stroke-width="1.3" fill="none">
+      <path d="M 453 128 C 500 190, 610 220, 682 228" marker-end="url(#arr6b)"/>
+      <path d="M 577 132 C 600 170, 650 196, 688 210" marker-end="url(#arr6b)"/>
+    </g>
+    <text x="560" y="180" class="elabel" text-anchor="middle">revisit in 3–6 months</text>
+    <path d="M 738 212 C 738 60, 340 40, 232 88" stroke="#0ba5ec" stroke-width="1.2" fill="none" stroke-dasharray="5 4" marker-end="url(#arr6b)"/>
+    <text x="560" y="52" class="elabel" text-anchor="middle">timing turned right again → re-contact</text>
+
+    <!-- recycle callout -->
+    <rect x="812" y="196" width="222" height="88" rx="4" fill="#eff8ff" stroke="#0ba5ec"/>
+    <text x="828" y="220" font-size="12" font-weight="700" fill="#175cd3">AUTOMATIC SIDE-EFFECT ★</text>
+    <text x="828" y="238" class="elabel">any deal entering nurture ALSO moves the</text>
+    <text x="828" y="253" class="elabel">contact's marketing_stage → nurture (when</text>
+    <text x="828" y="268" class="elabel">legal) — back into Marketing's 52-week queue.</text>
+    <text x="828" y="281" class="elabel em">Response carries marketing_recycled: true.</text>
+    <path d="M 808 240 C 800 240, 796 236, 792 234" stroke="#0ba5ec" stroke-width="1.2" fill="none" marker-end="url(#arr6b)"/>
+
+    <!-- lost rail -->
+    <g stroke="#f2b8b5" stroke-width="1" fill="none" stroke-dasharray="3 4">
+      <path d="M 78 132 V 540"/><path d="M 205 132 V 540"/><path d="M 453 132 V 540"/><path d="M 577 132 V 540"/>
+      <path d="M 704 132 V 540"/><path d="M 834 132 V 540"/><path d="M 292 252 V 540"/><path d="M 526 310 V 540"/><path d="M 738 252 V 540"/>
+    </g>
+    <path d="M 60 540 H 894" stroke="#f04438" stroke-width="1.5" fill="none" marker-end="url(#arr6r)"/>
+    <text x="470" y="530" text-anchor="middle" class="elabel em">the lost rail — explicit no / dead deal. Reachable from every stage EXCEPT booked (a booked meeting resolves first: qualified, no_show, or rescheduled).</text>
+    <rect x="898" y="520" width="120" height="40" rx="6" fill="#f04438"/><text x="958" y="545" text-anchor="middle" class="nlabel">LOST</text>
+    <path d="M 898 552 C 400 610, 60 480, 72 136" stroke="#f04438" stroke-width="1.2" fill="none" stroke-dasharray="6 4" marker-end="url(#arr6r)"/>
+    <text x="300" y="588" class="elabel">lost → accepted: re-entry is allowed — the engines apply a recycled_from tag + cooldown so a re-entered contact can't instantly re-MQL</text>
+  </svg>
+  <figcaption><b>Three off-ramps, three different meanings:</b> <span style="color:var(--c-lost)">no_show</span> = logistics failed (recoverable) · <span style="color:var(--c-unqualified)">unqualified</span> = wrong fit <em>right now</em> (recycle, don't bury) · <span style="color:var(--c-nurture)">nurture</span> = right prospect, wrong quarter (goes back to Marketing automatically). Only <b>won</b> and a deliberate <b>lost</b> end the story.</figcaption>
+  </figure>
+
+  <div class="sechead"><span class="eyebrow">Stage by stage</span><span class="rule"></span></div>
+  <table>
+    <thead><tr><th style="width:130px">Stage</th><th>What it means</th><th style="width:250px">Legal next moves</th></tr></thead>
+    <tbody>
+      <tr><td><span class="stagechip" style="background:var(--c-accepted)">accepted</span></td><td>MQL handoff received — the deal row just auto-created. Human review happens during outreach, not before entry.</td><td><code>contacted</code> · <code>lost</code></td></tr>
+      <tr><td><span class="stagechip" style="background:var(--c-contacted)">contacted</span></td><td>An SDR sent the first sales touch. Not yet a meeting.</td><td><code>booked</code> · <code>unqualified</code> · <code>nurture</code> · <code>lost</code></td></tr>
+      <tr><td><span class="stagechip" style="background:var(--c-booked)">booked</span></td><td>They agreed to a meeting. This stage exists so <b>call-booking rate</b> is measurable — and so no_show means what it says.</td><td><code>qualified</code> · <code>no_show</code> · <code>contacted</code></td></tr>
+      <tr><td><span class="stagechip" style="background:var(--c-qualified)">qualified</span></td><td>Discovery call done; BANT/need confirmed — a Sales-Qualified Lead.</td><td><code>proposal</code> · <code>unqualified</code> · <code>nurture</code> · <code>lost</code></td></tr>
+      <tr><td><span class="stagechip" style="background:var(--c-proposal)">proposal</span></td><td>Proposal / scope document sent.</td><td><code>negotiation</code> · <code>nurture</code> · <code>lost</code></td></tr>
+      <tr><td><span class="stagechip" style="background:var(--c-negotiation)">negotiation</span></td><td>Price and terms on the table. Kept short on purpose.</td><td><code>onboarding</code> · <code>lost</code></td></tr>
+      <tr><td><span class="stagechip" style="background:var(--c-onboarding)">onboarding</span></td><td>Contract signed, delivery started — a "win in progress" that tracks delivery health.</td><td><code>won</code> · <code>lost</code></td></tr>
+      <tr><td><span class="stagechip" style="background:var(--c-won)">won</span></td><td>Closed and delivered. Terminal; stamps <code>closed_at</code>; value rolls into <code>won_value</code>.</td><td>— none (terminal)</td></tr>
+      <tr><td><span class="stagechip" style="background:var(--c-lost)">lost</span></td><td>Dead deal — explicit no or no viable path. Stamps <code>closed_at</code>.</td><td><code>accepted</code> (guarded re-entry)</td></tr>
+      <tr><td><span class="stagechip" style="background:var(--c-noshow)">no_show</span></td><td>Booked meeting, prospect didn't attend. The no-show recovery sequences work these.</td><td><code>contacted</code> · <code>booked</code> · <code>lost</code></td></tr>
+      <tr><td><span class="stagechip" style="background:var(--c-unqualified)">unqualified</span></td><td>Discovery says "not a fit right now" — recyclable, not garbage.</td><td><code>nurture</code> · <code>lost</code></td></tr>
+      <tr><td><span class="stagechip" style="background:var(--c-nurture)">nurture</span></td><td>Parked deal + contact recycled to Marketing's nurture queue (the ★ side-effect above).</td><td><code>contacted</code> · <code>lost</code></td></tr>
+    </tbody>
+  </table>
+
+  <div class="callout">
+    <span class="eyebrow">Custom pipelines (migration 009)</span>
+    The Pipelines tab can define extra deal pipelines (any key besides <code>marketing</code>/<code>sales</code>). Deals carry an optional
+    <code>pipeline_key</code>; NULL means the built-in sales machine above. Custom-pipeline deals <b>move freely</b> (the operator designed
+    them) and are deliberately excluded from the sales state machine, the sales funnel, the handoff auto-deal check, and the nurture
+    recycle — so bespoke boards can't corrupt the revenue numbers.
+  </div>
+</section>
+
+<!-- ══════════════════════════ 7 · ANALYTICS ══════════════════════════ -->
+<section id="analytics">
+  <div class="chap"><span class="num">7</span><h2>Analytics — Events to Funnels</h2></div>
+  <p class="intro">
+    Engines fire <b>campaign events</b> at the CRM; the CRM double-writes them — a raw forensic log
+    plus a pre-aggregated rollup — so dashboards never scan millions of rows. Nine event types, one
+    per meaningful campaign moment.
+  </p>
+
+  <figure>
+  <svg viewBox="0 0 1060 320" xmlns="http://www.w3.org/2000/svg">
+    <defs><marker id="arr7" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M0,0 L10,5 L0,10 z" fill="#6b6b6b"/></marker></defs>
+
+    <rect x="60" y="50" width="220" height="150" rx="4" fill="#fff" stroke="#ececec"/>
+    <text x="76" y="76" font-size="12" font-weight="700" fill="#2a2a2a">Engines emit, per contact:</text>
+    <g font-size="11.5" fill="#4a4a4a">
+      <text x="76" y="98">send · deliver · open · click</text>
+      <text x="76" y="116">reply · bounce · unsub · suppressed</text>
+      <text x="76" y="134"><tspan font-weight="700" fill="#067647">mql</tspan> — the conversion moment</text>
+      <text x="76" y="160" class="elabel">each with campaign_id, channel,</text>
+      <text x="76" y="175" class="elabel">segment, contact_id, timestamp</text>
+    </g>
+
+    <path d="M280 125 H 336" stroke="#6b6b6b" stroke-width="1.4" fill="none" marker-end="url(#arr7)"/>
+    <text x="308" y="115" text-anchor="middle" class="elabel">single or array</text>
+
+    <rect x="340" y="90" width="190" height="70" rx="4" fill="#0a0a0a"/>
+    <text x="435" y="118" text-anchor="middle" font-size="12" font-weight="700" fill="#fff">POST /campaign-events</text>
+    <text x="435" y="138" text-anchor="middle" font-size="11" fill="#d0d0d0">answers 202 {accepted, total}</text>
+
+    <g stroke="#6b6b6b" stroke-width="1.3" fill="none">
+      <path d="M530 108 C 560 96, 570 82, 596 76" marker-end="url(#arr7)"/>
+      <path d="M530 142 C 560 154, 570 168, 596 174" marker-end="url(#arr7)"/>
+    </g>
+
+    <rect x="600" y="42" width="212" height="64" rx="4" fill="#fff" stroke="#ececec"/>
+    <text x="706" y="66" text-anchor="middle" font-size="12" font-weight="700" fill="#2a2a2a">campaign_events (raw)</text>
+    <text x="706" y="86" text-anchor="middle" class="elabel">append-only forensic ledger, per event</text>
+
+    <rect x="600" y="144" width="212" height="64" rx="4" fill="#fff" stroke="#ececec"/>
+    <text x="706" y="164" text-anchor="middle" font-size="12" font-weight="700" fill="#2a2a2a">campaign_event_rollups</text>
+    <text x="706" y="182" text-anchor="middle" class="elabel">UPSERT +1 on the day-bucket keyed by</text>
+    <text x="706" y="197" text-anchor="middle" class="elabel">(company, campaign, channel, segment, day)</text>
+
+    <path d="M812 176 H 856" stroke="#6b6b6b" stroke-width="1.3" fill="none" marker-end="url(#arr7)"/>
+
+    <rect x="860" y="120" width="172" height="118" rx="4" fill="#f4f4f4" stroke="#ececec"/>
+    <text x="876" y="144" font-size="12" font-weight="700" fill="#2a2a2a">Read endpoints</text>
+    <g font-size="11" fill="#4a4a4a">
+      <text x="876" y="164">/analytics/overview</text>
+      <text x="876" y="181">/analytics/by-channel</text>
+      <text x="876" y="198">/analytics/by-campaign</text>
+      <text x="876" y="215">/analytics/funnel?pipeline_key=…</text>
+      <text x="876" y="232">/stats (dashboard cards)</text>
+    </g>
+
+    <text x="60" y="262" class="heading">WHAT THE NUMBERS MEAN</text>
+    <g font-size="12" fill="#4a4a4a">
+      <text x="60" y="286">open_rate = opens ÷ sends · reply_rate = replies ÷ sends · bounce_rate = bounces ÷ sends · mql_rate = mqls ÷ sends — computed in SQL at read time, per campaign or channel.</text>
+      <text x="60" y="306">The two funnels come straight from live state: marketing counts contacts by marketing_stage; sales counts (built-in) deals by stage, with total value per stage.</text>
+    </g>
+  </svg>
+  <figcaption><b>Double-write on ingest, cheap reads forever.</b> The raw table answers "what exactly happened to this contact"; the rollup answers "how is the campaign doing" in one indexed lookup.</figcaption>
+  </figure>
+</section>
+
+<!-- ══════════════════════════ 8 · DASHBOARD ══════════════════════════ -->
+<section id="ui">
+  <div class="chap"><span class="num">8</span><h2>The Dashboard &amp; the Tantra Assistant</h2></div>
+  <p class="intro">
+    The human window into everything above: a single-page dashboard at
+    <code>staging.usetantra.com/crm/</code> behind one fixed username/password. nginx checks the login,
+    then injects the internal API key server-side — the browser never holds a credential.
+  </p>
+
+  <div class="kv">
+    <div class="cell"><div class="k">Dashboard</div><div class="v">stat cards (contacts, new-this-week, open deals, won value, 30-day sends), marketing pipeline overview, contacts table — every row opens the detail modal</div></div>
+    <div class="cell"><div class="k">Deals board</div><div class="v">drag-and-drop kanban for the sales pipeline, the marketing pipeline, and a companies rollup. Drops call the real advance APIs — an illegal drop bounces back with the allowed-moves toast</div></div>
+    <div class="cell"><div class="k">Contacts</div><div class="v">searchable, filterable list (score, source) with create / edit / delete and bulk actions (tag, delete). Stage is deliberately NOT bulk-editable — the state machine owns it</div></div>
+    <div class="cell"><div class="k">Companies</div><div class="v">account records with contact counts and pipeline value rollups; auto-created when a deal names a new company</div></div>
+    <div class="cell"><div class="k">Pipelines</div><div class="v">edit the built-in stage machines (colors, labels, order) or create custom deal pipelines — stored back into <code>crm_pipeline_configs</code></div></div>
+    <div class="cell"><div class="k">Inbox</div><div class="v">the conversation queue with Open / Needs-Human / All / Closed filters, escalate, hand-back-to-AI, close</div></div>
+    <div class="cell"><div class="k">Analytics</div><div class="v">30-day cards, both funnels in pipeline order, by-channel and by-campaign tables — live from the rollups</div></div>
+    <div class="cell"><div class="k">Contact modal</div><div class="v">every field on the record (identity, stages, score, tags, UTMs, follow-ups, contact id) + the full activity feed + add-note — the human-readable face of the ledger</div></div>
+  </div>
+
+  <div class="callout">
+    <span class="eyebrow">Tantra — the chat assistant</span>
+    A natural-language operator sitting on the Dashboard. Each turn it receives a <b>live snapshot</b> (stats + up to 80 compact
+    contacts) and either answers in prose or emits a strict JSON action block the server executes through the same public routes —
+    so every rule on this page still applies. Actions: <code>find_contacts</code>, <code>create_contact</code>, <code>update_contact</code>,
+    <code>add_note</code>, <code>delete_contact</code>. Guard-rails: no invented data (it must ask for missing details), duplicate emails
+    refused with an offer to update, each write applied at most once per turn, and <b>deletion requires you to literally type
+    DELETE</b> — the server checks your message, not the model's claim. Runs on Cloudflare Workers AI (Llama 3.3 70B).
+  </div>
+</section>
+
+<!-- ══════════════════════════ 9 · DATA MODEL ══════════════════════════ -->
+<section id="data">
+  <div class="chap"><span class="num">9</span><h2>The Data Model — All Ten Tables</h2></div>
+  <p class="intro">
+    Everything the machine knows lives in ten tables inside the isolated <code>denchclaw</code> database.
+    Every table carries <code>company_id</code> — the tenant stamp — and every query filters on it.
+  </p>
+
+  <figure>
+  <svg viewBox="0 0 1060 560" xmlns="http://www.w3.org/2000/svg">
+    <defs><marker id="arr9" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6.5" markerHeight="6.5" orient="auto-start-reverse">
+      <path d="M0,0 L10,5 L0,10 z" fill="#98a2b3"/></marker></defs>
+
+    <!-- center: contacts -->
+    <rect x="410" y="200" width="240" height="150" rx="4" fill="#0a0a0a"/>
+    <text x="530" y="226" text-anchor="middle" font-size="13" font-weight="700" fill="#fff">contacts — the spine</text>
+    <g font-size="10.5" fill="#d0d0d0">
+      <text x="426" y="248">id (UUID) · company_id · name · email</text>
+      <text x="426" y="264">phone · company_name · title · linkedin_url</text>
+      <text x="426" y="280">source · lead_score + lead_score_numeric</text>
+      <text x="426" y="296">marketing_stage · deal_stage (legacy mirror)</text>
+      <text x="426" y="312">tags[] · utm_* ×4 · metadata JSONB</text>
+      <text x="426" y="328">last_contacted · next_follow_up · deleted_at</text>
+    </g>
+
+    <!-- satellites -->
+    <g font-size="10.5">
+      <rect x="60" y="60" width="230" height="96" rx="4" fill="#fff" stroke="#ececec"/>
+      <text x="76" y="82" font-size="12" font-weight="700" fill="#2a2a2a">contact_activity</text>
+      <text x="76" y="100" fill="#4a4a4a">the append-only diary: type, message,</text>
+      <text x="76" y="115" fill="#4a4a4a">agent, channel, data JSONB, created_at</text>
+      <text x="76" y="132" fill="#6b6b6b">stage changes · sends · engagement ·</text>
+      <text x="76" y="147" fill="#6b6b6b">personalization context · notes</text>
+
+      <rect x="60" y="240" width="230" height="80" rx="4" fill="#fff" stroke="#ececec"/>
+      <text x="76" y="262" font-size="12" font-weight="700" fill="#2a2a2a">prospect_inbox</text>
+      <text x="76" y="280" fill="#4a4a4a">handoff queue: source/target engine,</text>
+      <text x="76" y="295" fill="#4a4a4a">status · claimed_by/at · campaign hint</text>
+      <text x="76" y="311" fill="#6b6b6b">unique (contact, target) + broadcast index</text>
+
+      <rect x="60" y="400" width="230" height="90" rx="4" fill="#fff" stroke="#ececec"/>
+      <text x="76" y="422" font-size="12" font-weight="700" fill="#2a2a2a">deals</text>
+      <text x="76" y="440" fill="#4a4a4a">title · value · stage · pipeline_key (009)</text>
+      <text x="76" y="455" fill="#4a4a4a">source · closed_at · metadata (activity log)</text>
+      <text x="76" y="472" fill="#6b6b6b">the sales pipeline lives HERE, not on the contact</text>
+
+      <rect x="770" y="60" width="230" height="90" rx="4" fill="#fff" stroke="#ececec"/>
+      <text x="786" y="82" font-size="12" font-weight="700" fill="#2a2a2a">conversations</text>
+      <text x="786" y="100" fill="#4a4a4a">channel · status · assignee (ai|human)</text>
+      <text x="786" y="115" fill="#4a4a4a">intent · last_message_at</text>
+      <text x="786" y="132" fill="#6b6b6b">unique open thread per (contact, channel)</text>
+
+      <rect x="770" y="190" width="230" height="80" rx="4" fill="#fff" stroke="#ececec"/>
+      <text x="786" y="212" font-size="12" font-weight="700" fill="#2a2a2a">messages</text>
+      <text x="786" y="230" fill="#4a4a4a">direction · channel · body · ai_generated</text>
+      <text x="786" y="245" fill="#4a4a4a">intent · provider_message_id (dedupe)</text>
+      <text x="786" y="261" fill="#6b6b6b">unique (company, provider_message_id)</text>
+
+      <rect x="770" y="310" width="230" height="80" rx="4" fill="#fff" stroke="#ececec"/>
+      <text x="786" y="332" font-size="12" font-weight="700" fill="#2a2a2a">campaign_events</text>
+      <text x="786" y="350" fill="#4a4a4a">campaign_id · channel · segment · type</text>
+      <text x="786" y="366" fill="#6b6b6b">raw ledger — contact link optional</text>
+
+      <rect x="770" y="430" width="230" height="80" rx="4" fill="#fff" stroke="#ececec"/>
+      <text x="786" y="452" font-size="12" font-weight="700" fill="#2a2a2a">campaign_event_rollups</text>
+      <text x="786" y="470" fill="#4a4a4a">sends/delivers/opens/clicks/replies/</text>
+      <text x="786" y="485" fill="#4a4a4a">bounces/unsubs/mql_count per day-bucket</text>
+
+      <rect x="410" y="430" width="150" height="80" rx="4" fill="#fff" stroke="#ececec"/>
+      <text x="426" y="452" font-size="12" font-weight="700" fill="#2a2a2a">companies</text>
+      <text x="426" y="470" fill="#4a4a4a">name · domain · industry</text>
+      <text x="426" y="485" fill="#4a4a4a">size · location · notes</text>
+
+      <rect x="580" y="430" width="170" height="80" rx="4" fill="#fff" stroke="#ececec"/>
+      <text x="596" y="452" font-size="12" font-weight="700" fill="#2a2a2a">crm_pipeline_configs</text>
+      <text x="596" y="470" fill="#4a4a4a">key · stages JSONB (the maps</text>
+      <text x="596" y="485" fill="#4a4a4a">in ch. 3 &amp; 6) · per-company overrides</text>
+    </g>
+
+    <!-- relations -->
+    <g stroke="#98a2b3" stroke-width="1.1" fill="none">
+      <path d="M 290 110 C 360 120, 390 180, 415 205" marker-end="url(#arr9)"/>
+      <path d="M 290 280 H 406" marker-end="url(#arr9)"/>
+      <path d="M 290 440 C 350 430, 380 380, 412 352" marker-end="url(#arr9)"/>
+      <path d="M 766 105 C 700 120, 680 180, 648 202" marker-end="url(#arr9)"/>
+      <path d="M 1000 155 C 1030 175, 1030 175, 1002 192" marker-end="url(#arr9)"/>
+      <path d="M 766 345 C 710 330, 690 310, 654 292" marker-end="url(#arr9)"/>
+      <path d="M 885 390 V 426" marker-end="url(#arr9)"/>
+      <path d="M 485 426 C 480 400, 470 380, 470 354" marker-end="url(#arr9)" stroke-dasharray="4 3"/>
+      <path d="M 665 426 C 660 400, 640 380, 620 354" marker-end="url(#arr9)" stroke-dasharray="4 3"/>
+    </g>
+    <g class="elabel">
+      <text x="330" y="150">1 → many</text>
+      <text x="320" y="268">1 → many</text>
+      <text x="330" y="415">1 → many</text>
+      <text x="700" y="150">many ← 1</text>
+      <text x="1014" y="180" text-anchor="middle">1→*</text>
+      <text x="700" y="318">optional link</text>
+      <text x="900" y="412">aggregates into</text>
+      <text x="452" y="390">matched by company_name</text>
+      <text x="668" y="390">stages read per request (60s cache)</text>
+    </g>
+  </svg>
+  <figcaption><b>The contact is the spine.</b> Solid arrows are foreign keys; dashed are soft links. Migrations in order: base schema → 002 prospect_inbox → 003 two pipelines → 004 inbox → 005 analytics → 006/007 stage corrections → 008 companies → 009 custom pipelines → 010 mql events.</figcaption>
+  </figure>
+</section>
+
+<!-- ══════════════════════════ 10 · SECURITY ══════════════════════════ -->
+<section id="security">
+  <div class="chap"><span class="num">10</span><h2>Security &amp; Multi-Tenancy</h2></div>
+  <p class="intro">
+    Four gates, in order, on every request. Two are about <b>who you are</b>, two are about
+    <b>what you may touch</b>. A different HTTP status marks each failure so callers can tell them apart.
+  </p>
+
+  <figure>
+  <svg viewBox="0 0 1060 210" xmlns="http://www.w3.org/2000/svg">
+    <defs><marker id="arr10" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M0,0 L10,5 L0,10 z" fill="#6b6b6b"/></marker></defs>
+    <g font-size="12">
+      <rect x="40" y="50" width="222" height="86" rx="4" fill="#fff" stroke="#ececec"/>
+      <text x="56" y="76" font-weight="700" fill="#2a2a2a">1 · Key check</text>
+      <text x="56" y="96" class="elabel">X-Internal-Key must be a known key</text>
+      <text x="56" y="112" class="elabel">unknown / missing →</text>
+      <text x="152" y="112" font-weight="700" fill="#b42318">401</text>
+
+      <rect x="298" y="50" width="222" height="86" rx="4" fill="#fff" stroke="#ececec"/>
+      <text x="314" y="76" font-weight="700" fill="#2a2a2a">2 · IP gate</text>
+      <text x="314" y="96" class="elabel">caller must be inside the allowed CIDRs</text>
+      <text x="314" y="112" class="elabel">(loopback by default) — outside →</text>
+      <text x="497" y="112" font-weight="700" fill="#b42318">403</text>
+
+      <rect x="556" y="50" width="222" height="86" rx="4" fill="#fff" stroke="#ececec"/>
+      <text x="572" y="76" font-weight="700" fill="#2a2a2a">3 · Key ↔ company binding</text>
+      <text x="572" y="96" class="elabel">INTERNAL_API_KEYS maps each key to its</text>
+      <text x="572" y="112" class="elabel">companies; out-of-set X-Company-Id →</text>
+      <text x="762" y="112" font-weight="700" fill="#b42318">403</text>
+
+      <rect x="814" y="50" width="222" height="86" rx="4" fill="#fff" stroke="#ececec"/>
+      <text x="830" y="76" font-weight="700" fill="#2a2a2a">4 · Row scoping</text>
+      <text x="830" y="96" class="elabel">every by-id route re-checks the row's</text>
+      <text x="830" y="112" class="elabel">company_id; foreign row →</text>
+      <text x="972" y="112" font-weight="700" fill="#b42318">404</text>
+    </g>
+    <g stroke="#6b6b6b" stroke-width="1.3" fill="none">
+      <path d="M262 93 H 294" marker-end="url(#arr10)"/>
+      <path d="M520 93 H 552" marker-end="url(#arr10)"/>
+      <path d="M778 93 H 810" marker-end="url(#arr10)"/>
+    </g>
+    <text x="548" y="176" text-anchor="middle" class="elabel em">Gate 4 answers 404 — not 403 — on purpose: a stranger must not even learn the row exists.</text>
+  </svg>
+  <figcaption><b>Layered on purpose.</b> Gate 3 stops a hostile keyholder spoofing another tenant's header; gate 4 stops accidental leaks between cooperating callers. Both were proven with negative tests before shipping.</figcaption>
+  </figure>
+</section>
+
+<!-- ══════════════════════════ 11 · OPS ══════════════════════════ -->
+<section id="ops">
+  <div class="chap"><span class="num">11</span><h2>Operations — How It Stays Alive</h2></div>
+  <p class="intro">
+    Boring on purpose. The service is built to survive database pressure, restart cleanly,
+    and never mutate its own schema.
+  </p>
+
+  <div class="kv">
+    <div class="cell"><div class="k">Process</div><div class="v">pm2 app <code>denchclaw-crm</code>, port 3100 loopback. Deploy = <code>git pull</code> + <code>pm2 restart</code> (never <code>reload</code> — it silently fails on fork-mode apps)</div></div>
+    <div class="cell"><div class="k">Startup resilience</div><div class="v">listens first, probes the DB after; <code>/health</code> answers 503 while retrying with exponential backoff + jitter (1s→2s→4s… cap 30s) forever. Only a config error (missing DATABASE_URL) exits</div></div>
+    <div class="cell"><div class="k">Connection budget</div><div class="v">shared box Postgres, max_connections=200; CRM pool capped at <code>DB_POOL_MAX=10</code>; box-wide rule: all pools + workers &lt; 150</div></div>
+    <div class="cell"><div class="k">Schema changes</div><div class="v">numbered files in <code>migrations/</code>, applied by a human operator with a pg_dump backup first — the app never auto-migrates, agents never run DDL on the live DB</div></div>
+    <div class="cell"><div class="k">Tests</div><div class="v"><code>npm test</code> boots a throwaway Docker postgres:16, applies every migration from zero, and runs the 46-case contract harness — never against staging</div></div>
+    <div class="cell"><div class="k">Drift protection</div><div class="v"><code>GET /pipeline/transitions</code> is byte-pinned by automation_core's CI drift test — the engines' mirror and the CRM must agree or CI fails</div></div>
+    <div class="cell"><div class="k">UI hosting</div><div class="v">nginx serves <code>/var/www/crm/</code> at <code>/crm/</code> with Basic auth and injects the API headers; this page lives there too</div></div>
+    <div class="cell"><div class="k">Verified</div><div class="v">2026-07-02: 46/46 contract + 35/35 live-journey trial + full visual browser run; behavioral smoke test on production staging passed post-deploy</div></div>
+  </div>
+
+  <div class="callout win">
+    <span class="eyebrow">If you remember five things</span>
+    1 · Every stage move goes through <code>/advance</code>, and the JSONB config is the only law.&ensp;
+    2 · Email is identity; nothing else merges contacts.&ensp;
+    3 · The handoff claim is atomic and creates the sales deal for you.&ensp;
+    4 · Everything a contact does becomes an activity row — if it isn't in the feed, it didn't happen.&ensp;
+    5 · Suppressed means suppressed. Forever, everywhere.
+  </div>
+</section>
+
+</main>
+
+<footer>
+  <span class="eyebrow">DenchClaw CRM · Tantra RevOps</span>
+  <span>Engine workflow reference · generated from the verified build of 2026-07-02 · source of truth: <code>docs/API_CONTRACT.md</code> + <code>migrations/</code></span>
+</footer>
+
+</body>
+</html>
