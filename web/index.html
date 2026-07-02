@@ -9,21 +9,20 @@
 <link href="https://fonts.googleapis.com/css2?family=Fraunces:ital,opsz,wght@0,9..144,300;0,9..144,400;0,9..144,500;1,9..144,400&family=Inter:wght@400;500;600&display=swap" rel="stylesheet">
 <style>
   :root{
-    /* Tantra brand tokens (from usetantra.com) */
-    --bg:#ffffff; --ink:#0a0a0a; --ink-2:#2a2a2a; --ink-3:#4a4a4a; --ink-4:#6b6b6b; --ink-5:#d0d0d0;
-    --hair:#ececec; --hair-2:#f4f4f4; --radius:2px; --nav-h:64px; --maxw:1120px;
+    --bg:#ffffff;--ink:#0a0a0a;--ink-2:#2a2a2a;--ink-3:#4a4a4a;--ink-4:#6b6b6b;--ink-5:#d0d0d0;
+    --hair:#ececec;--hair-2:#f4f4f4;--radius:2px;--nav-h:64px;--maxw:1120px;
     --sans:"Inter",-apple-system,BlinkMacSystemFont,"Helvetica Neue",Arial,sans-serif;
     --serif:"Fraunces",Georgia,serif;
-    --hot:#b42318; --hot-bg:#fef3f2; --warm:#b54708; --warm-bg:#fffaeb;
-    --neutral:#4a4a4a; --neutral-bg:#f4f4f4; --cold:#175cd3; --cold-bg:#eff4ff; --live:#067647;
+    --hot:#b42318;--hot-bg:#fef3f2;--warm:#b54708;--warm-bg:#fffaeb;
+    --neutral:#4a4a4a;--neutral-bg:#f4f4f4;--cold:#175cd3;--cold-bg:#eff4ff;--live:#067647;
   }
   *{box-sizing:border-box}
   body{margin:0;background:var(--bg);color:var(--ink);font:16px/1.6 var(--sans);-webkit-font-smoothing:antialiased}
   .eyebrow{font-size:11px;letter-spacing:.18em;text-transform:uppercase;color:var(--ink-4);font-weight:500}
 
   header{height:var(--nav-h);display:flex;align-items:center;justify-content:space-between;
-         padding:0 32px;border-bottom:1px solid var(--hair);position:sticky;top:0;background:rgba(255,255,255,.92);
-         backdrop-filter:saturate(180%) blur(8px);z-index:10}
+         padding:0 32px;border-bottom:1px solid var(--hair);position:sticky;top:0;
+         background:rgba(255,255,255,.92);backdrop-filter:saturate(180%) blur(8px);z-index:10}
   .brand{display:flex;align-items:baseline;gap:12px}
   .brand .mark{font-family:var(--serif);font-weight:400;font-style:italic;font-size:22px;letter-spacing:.06em}
   .brand .sub{font-size:11px;letter-spacing:.18em;text-transform:uppercase;color:var(--ink-4)}
@@ -42,41 +41,45 @@
   .err-banner{display:none;border:1px solid var(--hot);background:var(--hot-bg);color:var(--hot);
               padding:12px 16px;border-radius:var(--radius);margin-bottom:22px;font-size:14px}
   .layout{display:grid;grid-template-columns:1fr 372px;gap:28px;align-items:start}
-  @media (max-width:920px){.layout{grid-template-columns:1fr}}
+  @media(max-width:920px){.layout{grid-template-columns:1fr}}
 
   .sechead{display:flex;align-items:center;gap:14px;margin:30px 0 14px}
   .sechead .eyebrow{white-space:nowrap}
   .sechead .rule{flex:1;height:1px;background:var(--hair)}
 
-  .cards{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:0;border:1px solid var(--hair);border-radius:var(--radius);overflow:hidden}
+  /* Dashboard stat cards */
+  .cards{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:0;
+         border:1px solid var(--hair);border-radius:var(--radius);overflow:hidden}
   .card{padding:20px 22px;border-right:1px solid var(--hair)}
   .card:last-child{border-right:none}
   .card .label{font-size:11px;letter-spacing:.14em;text-transform:uppercase;color:var(--ink-4)}
   .card .value{font-family:var(--serif);font-weight:300;font-size:40px;line-height:1.1;margin-top:8px;letter-spacing:-.01em}
   .card .sub{color:var(--ink-4);font-size:12px;margin-top:4px}
-  @media (max-width:620px){.card{border-right:none;border-bottom:1px solid var(--hair)}}
+  @media(max-width:620px){.card{border-right:none;border-bottom:1px solid var(--hair)}}
 
-  .pipeline{display:grid;grid-template-columns:repeat(auto-fit,minmax(155px,1fr));gap:12px}
-  .stage{background:var(--bg);border:1px solid var(--hair);border-radius:var(--radius);padding:14px;min-height:88px}
-  .stage .head{display:flex;justify-content:space-between;align-items:baseline;margin-bottom:10px}
-  .stage .head .name{font-size:11px;letter-spacing:.12em;text-transform:uppercase;color:var(--ink-2);font-weight:600}
-  .stage .head .count{font-family:var(--serif);font-size:18px;color:var(--ink);font-weight:400}
-  .stage .contact{font-size:13px;padding:7px 9px;border-radius:var(--radius);background:var(--hair-2);margin-bottom:6px}
-  .stage .contact .c-name{font-weight:500} .stage .contact .c-co{color:var(--ink-4);font-size:12px}
+  /* Dashboard mini pipeline */
+  .pipeline{display:grid;grid-template-columns:repeat(auto-fit,minmax(140px,1fr));gap:10px}
+  .stage{background:var(--bg);border:1px solid var(--hair);border-radius:var(--radius);padding:14px;min-height:72px}
+  .stage .head{display:flex;justify-content:space-between;align-items:baseline;margin-bottom:8px}
+  .stage .head .name{font-size:10px;letter-spacing:.12em;text-transform:uppercase;color:var(--ink-2);font-weight:600}
+  .stage .head .count{font-family:var(--serif);font-size:18px;color:var(--ink)}
+  .stage .contact{font-size:12px;padding:5px 8px;border-radius:var(--radius);background:var(--hair-2);margin-bottom:5px}
+  .stage .contact .c-name{font-weight:500}
+  .stage .contact .c-co{color:var(--ink-4);font-size:11px}
   .stage .empty{color:var(--ink-5);font-size:12px}
 
   table{width:100%;border-collapse:collapse;border:1px solid var(--hair);border-radius:var(--radius);overflow:hidden}
-  th,td{text-align:left;padding:12px 14px;border-bottom:1px solid var(--hair);font-size:14px}
-  th{font-size:11px;letter-spacing:.12em;text-transform:uppercase;color:var(--ink-4);font-weight:500;background:var(--hair-2)}
+  th,td{text-align:left;padding:11px 13px;border-bottom:1px solid var(--hair);font-size:13px}
+  th{font-size:10px;letter-spacing:.12em;text-transform:uppercase;color:var(--ink-4);font-weight:500;background:var(--hair-2)}
   tr:last-child td{border-bottom:none}
   td .co{color:var(--ink-2)} td .email{color:var(--ink-4)}
-  .score{display:inline-block;padding:2px 9px;border-radius:999px;font-size:11px;font-weight:600;text-transform:capitalize;letter-spacing:.02em}
+  .score{display:inline-block;padding:2px 8px;border-radius:999px;font-size:11px;font-weight:600;text-transform:capitalize;letter-spacing:.02em}
   .score.hot{background:var(--hot-bg);color:var(--hot)} .score.warm{background:var(--warm-bg);color:var(--warm)}
   .score.neutral{background:var(--neutral-bg);color:var(--neutral)} .score.cold{background:var(--cold-bg);color:var(--cold)}
   .src{font-size:11px;color:var(--ink-4);letter-spacing:.06em;text-transform:uppercase}
   .muted{color:var(--ink-4)}
 
-  /* Kanban board — GoHighLevel style */
+  /* Kanban board */
   .board-tabs{display:inline-flex;gap:3px;background:#f1f2f4;border:1px solid var(--hair);border-radius:8px;padding:3px;margin-bottom:14px}
   .board-tabs button{border:none;background:none;font-family:var(--sans);font-size:12px;font-weight:600;letter-spacing:.02em;
         color:var(--ink-4);padding:7px 17px;border-radius:6px;cursor:pointer}
@@ -85,37 +88,65 @@
   .board{background:#f4f5f7;border:1px solid #e4e6ea;border-radius:10px;padding:14px;margin-bottom:10px;
         display:flex;gap:12px;overflow-x:auto;align-items:flex-start}
   .board.grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(220px,1fr));gap:12px}
-  .gcol{flex:0 0 266px;max-width:266px;background:#eceef1;border-radius:10px;display:flex;flex-direction:column;max-height:600px}
-  .gcol .ghead{padding:12px 13px 11px;border-top:3px solid var(--sc,#9ca3af);border-radius:10px 10px 0 0;background:#f7f8fa}
-  .gcol .ghead .gname{font-size:11.5px;font-weight:700;letter-spacing:.05em;text-transform:uppercase;color:var(--ink-2);
+  .gcol{flex:0 0 240px;max-width:240px;background:#eceef1;border-radius:10px;display:flex;flex-direction:column;max-height:640px}
+  .gcol .ghead{padding:11px 12px 10px;border-top:3px solid var(--sc,#9ca3af);border-radius:10px 10px 0 0;background:#f7f8fa}
+  .gcol .ghead .gname{font-size:11px;font-weight:700;letter-spacing:.05em;text-transform:uppercase;color:var(--ink-2);
         display:flex;align-items:center;gap:7px}
   .gcol .ghead .gname .cdot{width:8px;height:8px;border-radius:50%;background:var(--sc,#9ca3af);flex-shrink:0}
-  .gcol .ghead .gsum{font-size:12px;color:var(--ink-4);margin-top:6px}
+  .gcol .ghead .gsum{font-size:11px;color:var(--ink-4);margin-top:5px}
   .gcol .ghead .gsum b{color:var(--ink-2);font-weight:700}
-  .gbody{padding:10px;overflow-y:auto;flex:1;min-height:56px}
+  .gbody{padding:9px;overflow-y:auto;flex:1;min-height:48px}
   .gcol.drop-ok{outline:2px solid var(--live);outline-offset:-2px}
   .gcol.drop-no{outline:2px solid var(--hot);outline-offset:-2px}
 
   .gcard{background:#fff;border:1px solid #e4e6ea;border-left:3px solid var(--cc,#9ca3af);border-radius:8px;
-        padding:11px 12px;margin-bottom:9px;box-shadow:0 1px 2px rgba(16,24,40,.06);cursor:grab}
+        padding:10px 11px;margin-bottom:8px;box-shadow:0 1px 2px rgba(16,24,40,.06);cursor:grab}
   .gcard:last-child{margin-bottom:0}
   .gcard:hover{box-shadow:0 4px 10px rgba(16,24,40,.13)}
-  .gcard:active{cursor:grabbing}
-  .gcard.dragging{opacity:.45}
-  .gcard.static{cursor:default}
-  .gcard .gtitle{font-weight:600;font-size:13.5px;line-height:1.3;color:var(--ink)}
+  .gcard:active{cursor:grabbing} .gcard.dragging{opacity:.4} .gcard.static{cursor:default}
+  .gcard .gtitle{font-weight:600;font-size:13px;line-height:1.3;color:var(--ink)}
   .gcard .gsub{color:var(--ink-4);font-size:12px;margin-top:1px}
-  .gcard .gval{font-size:14px;font-weight:700;color:var(--live);margin-top:5px}
-  .gcard .gmeta{display:flex;align-items:center;gap:7px;margin-top:9px;flex-wrap:wrap}
-  .avatar{width:22px;height:22px;border-radius:50%;background:var(--ink);color:#fff;font-size:10px;font-weight:600;
+  .gcard .gval{font-size:13px;font-weight:700;color:var(--live);margin-top:4px}
+  .gcard .gmeta{display:flex;align-items:center;gap:6px;margin-top:8px;flex-wrap:wrap}
+  .avatar{width:20px;height:20px;border-radius:50%;background:var(--ink);color:#fff;font-size:9px;font-weight:600;
         display:inline-flex;align-items:center;justify-content:center;letter-spacing:.02em;flex-shrink:0}
   .gsrc{font-size:10px;color:var(--ink-4);text-transform:uppercase;letter-spacing:.06em}
-  .gempty{color:var(--ink-5);font-size:12px;text-align:center;padding:14px 0}
+  .gempty{color:var(--ink-5);font-size:12px;text-align:center;padding:12px 0}
 
-  .toast{position:fixed;bottom:22px;left:50%;transform:translateX(-50%);background:var(--ink);color:#fff;padding:11px 18px;
-         border-radius:var(--radius);font-size:13px;z-index:50;opacity:0;transition:opacity .2s;pointer-events:none;max-width:560px;text-align:center}
-  .toast.show{opacity:1}
-  .toast.err{background:var(--hot)}
+  /* Inbox */
+  .filter-tabs{display:flex;gap:0;border:1px solid var(--hair);border-radius:var(--radius);overflow:hidden;margin-bottom:18px;width:fit-content}
+  .filter-tabs button{border:none;background:none;font-family:var(--sans);font-size:12px;font-weight:600;letter-spacing:.04em;
+        color:var(--ink-4);padding:8px 18px;cursor:pointer;border-right:1px solid var(--hair)}
+  .filter-tabs button:last-child{border-right:none}
+  .filter-tabs button.active{background:var(--ink);color:#fff}
+  .filter-tabs button:hover:not(.active){background:var(--hair-2)}
+  .ch-badge{font-size:10px;font-weight:600;letter-spacing:.06em;text-transform:uppercase;
+            padding:2px 7px;border-radius:3px;background:var(--cold-bg);color:var(--cold)}
+  .status-pill{display:inline-block;font-size:10px;font-weight:700;letter-spacing:.06em;text-transform:uppercase;
+               padding:2px 8px;border-radius:999px}
+  .act-btn{border:1px solid var(--hair);background:none;font-family:var(--sans);font-size:11px;font-weight:600;
+           color:var(--ink-3);padding:4px 10px;border-radius:var(--radius);cursor:pointer;margin-right:4px}
+  .act-btn:hover{border-color:var(--ink);color:var(--ink)}
+
+  /* Analytics */
+  .a-section{margin-bottom:36px}
+  .a-section h3{font-size:12px;letter-spacing:.14em;text-transform:uppercase;color:var(--ink-4);margin:0 0 14px;font-weight:600}
+  .funnel{display:flex;flex-direction:column;gap:8px}
+  .funnel-row{display:grid;grid-template-columns:120px 1fr 50px;align-items:center;gap:12px}
+  .funnel-label{font-size:12px;font-weight:600;text-transform:capitalize;color:var(--ink-2);white-space:nowrap;
+                overflow:hidden;text-overflow:ellipsis}
+  .funnel-bar{height:20px;background:var(--hair);border-radius:3px;overflow:hidden}
+  .bar-fill{height:100%;border-radius:3px;transition:width .4s}
+  .funnel-count{font-size:12px;font-weight:700;color:var(--ink-2);text-align:right}
+  .a-grid{display:grid;grid-template-columns:1fr 1fr;gap:28px}
+  @media(max-width:700px){.a-grid{grid-template-columns:1fr}}
+  .rate{font-size:11px;color:var(--ink-4)}
+
+  /* Toast */
+  .toast{position:fixed;bottom:22px;left:50%;transform:translateX(-50%);background:var(--ink);color:#fff;
+         padding:11px 18px;border-radius:var(--radius);font-size:13px;z-index:50;opacity:0;
+         transition:opacity .2s;pointer-events:none;max-width:560px;text-align:center}
+  .toast.show{opacity:1} .toast.err{background:var(--hot)}
 
   /* Chat */
   .chat{position:sticky;top:calc(var(--nav-h) + 30px);display:flex;flex-direction:column;
@@ -124,7 +155,6 @@
   .chat .chead{padding:16px 18px;border-bottom:1px solid var(--hair);display:flex;align-items:center;gap:9px}
   .chat .chead .dot{width:7px;height:7px;border-radius:50%;background:var(--live)}
   .chat .chead b{font-family:var(--serif);font-style:italic;font-weight:400;font-size:16px;letter-spacing:.02em}
-  .chat .chead .model{margin-left:auto;font-size:10px;letter-spacing:.1em;text-transform:uppercase;color:var(--ink-5)}
   .msgs{flex:1;overflow-y:auto;padding:18px;display:flex;flex-direction:column;gap:12px}
   .msg{max-width:88%;padding:11px 13px;border-radius:var(--radius);font-size:14px;line-height:1.55;white-space:pre-wrap;word-wrap:break-word}
   .msg.user{align-self:flex-end;background:var(--ink);color:#fff}
@@ -157,22 +187,25 @@
 <div class="tabbar"><div class="tabbar-inner">
   <button data-tab="dashboard" class="active">Dashboard</button>
   <button data-tab="board">Board</button>
+  <button data-tab="inbox">Inbox</button>
+  <button data-tab="analytics">Analytics</button>
 </div></div>
 
 <main>
   <div id="err" class="err-banner"></div>
 
+  <!-- ── DASHBOARD ─────────────────────────────────────────────────────── -->
   <div id="view-dashboard">
   <div class="layout">
     <div>
       <div class="cards" id="cards"></div>
 
-      <div class="sechead"><span class="eyebrow">Pipeline</span><span class="rule"></span></div>
+      <div class="sechead"><span class="eyebrow">Marketing Pipeline</span><span class="rule"></span></div>
       <div class="pipeline" id="pipeline"></div>
 
       <div class="sechead"><span class="eyebrow">Contacts</span><span class="rule"></span></div>
       <table id="contacts">
-        <thead><tr><th>Name</th><th>Company</th><th>Email</th><th>Stage</th><th>Score</th><th>Source</th><th>Created</th></tr></thead>
+        <thead><tr><th>Name</th><th>Company</th><th>Email</th><th>Mktg Stage</th><th>Score</th><th>Source</th><th>Created</th></tr></thead>
         <tbody><tr><td colspan="7" class="muted">loading…</td></tr></tbody>
       </table>
     </div>
@@ -184,7 +217,7 @@
       </div>
       <div class="suggest" id="suggest">
         <button>How many contacts do I have?</button>
-        <button>Who's in the contacted stage?</button>
+        <button>Who's in the mql stage?</button>
         <button>Summarize my pipeline</button>
       </div>
       <form class="composer" id="composer" autocomplete="off">
@@ -195,16 +228,68 @@
   </div>
   </div><!-- /view-dashboard -->
 
+  <!-- ── BOARD ──────────────────────────────────────────────────────────── -->
   <div id="view-board" style="display:none">
-  <div class="sechead"><span class="eyebrow">Pipeline Board</span><span class="rule"></span>
-    <span class="muted" style="font-size:11px">drag cards between stages</span></div>
+  <div class="sechead">
+    <span class="eyebrow">Pipeline Board</span><span class="rule"></span>
+    <span class="muted" style="font-size:11px">drag cards to advance stages</span>
+  </div>
   <div class="board-tabs" id="board-tabs">
-    <button data-view="deal" class="active">Deals</button>
-    <button data-view="contact">Contacts</button>
+    <button data-view="sales" class="active">Sales Pipeline</button>
+    <button data-view="marketing">Marketing Pipeline</button>
     <button data-view="company">Companies</button>
   </div>
   <div class="board" id="board"></div>
   </div><!-- /view-board -->
+
+  <!-- ── INBOX ──────────────────────────────────────────────────────────── -->
+  <div id="view-inbox" style="display:none">
+  <div class="sechead"><span class="eyebrow">Unified AI Inbox</span><span class="rule"></span></div>
+  <div class="filter-tabs" id="inbox-filters">
+    <button data-f="open" class="active">Open</button>
+    <button data-f="human">Needs Human</button>
+    <button data-f="all">All</button>
+    <button data-f="closed">Closed</button>
+  </div>
+  <table id="inbox-table">
+    <thead><tr><th>Contact</th><th>Channel</th><th>Status</th><th>Assignee</th><th>Intent</th><th>Last activity</th><th>Actions</th></tr></thead>
+    <tbody id="inbox-body"><tr><td colspan="7" class="muted">loading…</td></tr></tbody>
+  </table>
+  </div><!-- /view-inbox -->
+
+  <!-- ── ANALYTICS ─────────────────────────────────────────────────────── -->
+  <div id="view-analytics" style="display:none">
+  <div class="sechead"><span class="eyebrow">Analytics · Last 30 Days</span><span class="rule"></span></div>
+  <div class="cards" id="a-cards" style="margin-bottom:32px"></div>
+
+  <div class="a-grid">
+    <div class="a-section">
+      <h3>Marketing Funnel</h3>
+      <div class="funnel" id="funnel-marketing"><div class="muted">loading…</div></div>
+    </div>
+    <div class="a-section">
+      <h3>Sales Funnel</h3>
+      <div class="funnel" id="funnel-sales"><div class="muted">loading…</div></div>
+    </div>
+  </div>
+
+  <div class="a-grid">
+    <div class="a-section">
+      <h3>By Channel</h3>
+      <table id="a-channel">
+        <thead><tr><th>Channel</th><th>Sends</th><th>Replies</th><th>Reply %</th><th>Bounces</th></tr></thead>
+        <tbody><tr><td colspan="5" class="muted">loading…</td></tr></tbody>
+      </table>
+    </div>
+    <div class="a-section">
+      <h3>By Campaign</h3>
+      <table id="a-campaign">
+        <thead><tr><th>Campaign</th><th>Sends</th><th>Replies</th><th>MQLs</th><th>MQL %</th></tr></thead>
+        <tbody><tr><td colspan="5" class="muted">loading…</td></tr></tbody>
+      </table>
+    </div>
+  </div>
+  </div><!-- /view-analytics -->
 </main>
 
 <div class="toast" id="toast"></div>
@@ -215,217 +300,335 @@
 </footer>
 
 <script>
-// Absolute, mount-anchored base so fetch never mis-resolves (page served at /crm/).
-const API = (location.pathname.replace(/\/+$/,"").replace(/\/[^/]*$/,"") || "/crm") + "/api";
-const $ = s => document.querySelector(s);
-const esc = s => (s==null?"":String(s)).replace(/[&<>"]/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));
-const fmtDate = s => { if(!s) return "—"; try{ return new Date(s).toLocaleDateString(undefined,{month:"short",day:"numeric"});}catch{ return "—";} };
+const API=(location.pathname.replace(/\/+$/,"").replace(/\/[^/]*$/,"")||"/crm")+"/api";
+const $=s=>document.querySelector(s);
+const esc=s=>(s==null?"":String(s)).replace(/[&<>"]/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));
+const fmtDate=s=>{if(!s)return "—";try{return new Date(s).toLocaleDateString(undefined,{month:"short",day:"numeric"});}catch{return "—";}};
+const nice=s=>String(s||"").replace(/_/g," ");
+const initials=s=>{const p=String(s||"").trim().split(/\s+/).filter(Boolean);return(((p[0]||"")[0]||"")+((p[1]||"")[0]||"")).toUpperCase()||"?";};
 
+// ── Pipeline stage constants ─────────────────────────────────────────────────
+const MARKETING_STAGES=["sourced","enriched","segmented","queued","engaged","responded","mql","nurture","suppressed"];
+const SALES_STAGES=["accepted","contacted","booked","qualified","proposal","negotiation","onboarding","won","lost","no_show","unqualified","nurture"];
+
+const STAGE_COLORS={
+  sourced:"#667085",enriched:"#2e90fa",segmented:"#7a5af8",queued:"#f79009",
+  engaged:"#6172f3",responded:"#15b79e",mql:"#12b76a",suppressed:"#98a2b3",
+  accepted:"#2e90fa",contacted:"#6172f3",booked:"#7a5af8",qualified:"#15b79e",
+  proposal:"#f97316",negotiation:"#f79009",onboarding:"#0ba5ec",
+  won:"#12b76a",lost:"#f04438",no_show:"#f04438",unqualified:"#98a2b3",
+  nurture:"#0ba5ec",
+  lead:"#667085",proposal_accepted:"#15b79e"
+};
+const SCORE_COLORS={hot:"#b42318",warm:"#b54708",neutral:"#98a2b3",cold:"#175cd3"};
+
+// ── API helpers ──────────────────────────────────────────────────────────────
 async function get(path){
-  const r = await fetch(`${API}/${path}`, {headers:{"Accept":"application/json"}});
-  if(!r.ok) throw new Error(`${path} → HTTP ${r.status}`);
+  const r=await fetch(`${API}/${path}`,{headers:{"Accept":"application/json"}});
+  if(!r.ok)throw new Error(`${path} → HTTP ${r.status}`);
   return r.json();
 }
-async function patch(path,body){
-  const r = await fetch(`${API}/${path}`, {method:"PATCH",headers:{"Content-Type":"application/json"},body:JSON.stringify(body)});
-  const j = await r.json().catch(()=>({}));
-  if(!r.ok) throw new Error(j.error||`HTTP ${r.status}`);
+async function apiFetch(method,path,body){
+  const r=await fetch(`${API}/${path}`,{method,headers:{"Content-Type":"application/json"},body:JSON.stringify(body)});
+  const j=await r.json().catch(()=>({}));
+  if(!r.ok){const e=new Error(j.error||`HTTP ${r.status}`);e.allowed=j.allowed_transitions;throw e;}
   return j;
 }
-function setStatus(ok,msg){ const el=$("#status"); el.className="status "+(ok?"ok":"err"); $("#statusText").textContent=msg; }
-function showErr(msg){ const e=$("#err"); e.style.display="block"; e.textContent=msg; }
-let toastT;
-function toast(msg,isErr){ const t=$("#toast"); t.textContent=msg; t.className="toast show"+(isErr?" err":"");
-  clearTimeout(toastT); toastT=setTimeout(()=>{t.className="toast";},2800); }
+const post=(p,b)=>apiFetch("POST",p,b);
+const patch=(p,b)=>apiFetch("PATCH",p,b);
 
-// Deal stages + allowed CONTACT transitions (mirrors server STAGE_TRANSITIONS).
-// Deals accept any stage server-side, so they aren't gated here.
-const STAGES=["lead","contacted","qualified","no_show","unqualified","proposal","proposal_accepted","negotiation","onboarding","won","lost"];
-const TX={lead:["contacted","unqualified","lost"],contacted:["qualified","unqualified","lost"],
-  qualified:["proposal","no_show","unqualified","lost"],no_show:["contacted","qualified","lost"],
-  unqualified:["lead","contacted","lost"],proposal:["proposal_accepted","negotiation","lost"],
-  proposal_accepted:["negotiation","onboarding","lost"],negotiation:["won","lost"],
-  onboarding:["won","lost"],won:[],lost:["lead"]};
-const nice=s=>String(s||"").replace(/_/g," ");
+// ── UI helpers ───────────────────────────────────────────────────────────────
+function setStatus(ok,msg){const el=$("#status");el.className="status "+(ok?"ok":"err");$("#statusText").textContent=msg;}
+function showErr(msg){const e=$("#err");e.style.display="block";e.textContent=msg;}
+let _toastT;
+function toast(msg,isErr){const t=$("#toast");t.textContent=msg;t.className="toast show"+(isErr?" err":"");
+  clearTimeout(_toastT);_toastT=setTimeout(()=>{t.className="toast";},2800);}
 
+// ── Dashboard ────────────────────────────────────────────────────────────────
 function renderCards(s){
-  const c=s.contacts||{}, d=s.deals||{};
-  const cards=[
-    {label:"Contacts", value:c.total??0, sub:`${c.hot??0} hot · ${c.warm??0} warm`},
-    {label:"New this week", value:c.new_this_week??0, sub:`${c.new_today??0} today`},
-    {label:"Open deals", value:d.open??0, sub:`${d.total??0} total`},
-    {label:"Pipeline value", value:`$${(d.pipeline_value??0).toLocaleString()}`, sub:`$${(d.won_value??0).toLocaleString()} won`},
+  const c=s.contacts||{},d=s.deals||{},ca=s.campaign_last_30d||{};
+  const rows=[
+    {label:"Contacts",value:c.total??0,sub:`${c.hot??0} hot · ${c.warm??0} warm`},
+    {label:"New this week",value:c.new_this_week??0,sub:`${c.new_today??0} today`},
+    {label:"Open deals",value:d.open??0,sub:`$${(d.pipeline_value??0).toLocaleString()} pipeline`},
+    {label:"Won value",value:`$${(d.won_value??0).toLocaleString()}`,sub:`${d.won??0} deals closed`},
+    {label:"Sends (30d)",value:(ca.total_sends??0).toLocaleString(),sub:`${ca.total_replies??0} replies`},
   ];
-  $("#cards").innerHTML=cards.map(k=>`<div class="card"><div class="label">${esc(k.label)}</div>
+  $("#cards").innerHTML=rows.map(k=>`<div class="card"><div class="label">${esc(k.label)}</div>
     <div class="value">${esc(k.value)}</div><div class="sub">${esc(k.sub)}</div></div>`).join("");
 }
 function renderPipeline(p){
   const stages=p.pipeline||{};
-  const order=["lead","contacted","qualified","proposal","negotiation","onboarding","won"];
-  const keys=Object.keys(stages).sort((a,b)=>{const ia=order.indexOf(a),ib=order.indexOf(b);return (ia<0?99:ia)-(ib<0?99:ib);})
-    .filter(k=>(stages[k].count||0)>0||order.includes(k));
-  $("#pipeline").innerHTML=keys.map(k=>{
-    const st=stages[k];
-    const items=(st.contacts||[]).slice(0,4).map(ct=>`<div class="contact"><div class="c-name">${esc(ct.name||"—")}</div>
-      <div class="c-co">${esc(ct.company||"")}</div></div>`).join("")||`<div class="empty">No contacts</div>`;
-    return `<div class="stage"><div class="head"><span class="name">${esc(k)}</span><span class="count">${st.count||0}</span></div>${items}</div>`;
+  const order=MARKETING_STAGES.filter(k=>(stages[k]?.count||0)>0||["sourced","enriched","segmented","engaged","mql"].includes(k));
+  $("#pipeline").innerHTML=order.map(k=>{
+    const st=stages[k]||{count:0,contacts:[]};
+    const items=(st.contacts||[]).slice(0,3).map(ct=>`<div class="contact">
+      <div class="c-name">${esc(ct.name||"—")}</div>
+      <div class="c-co">${esc(ct.company||ct.company_name||"")}</div></div>`).join("")||`<div class="empty">—</div>`;
+    const color=STAGE_COLORS[k]||"#98a2b3";
+    return `<div class="stage" style="border-top:2px solid ${color}">
+      <div class="head"><span class="name">${esc(k)}</span><span class="count">${st.count||0}</span></div>${items}</div>`;
   }).join("");
 }
 function renderContacts(list){
   const rows=(list||[]).map(c=>`<tr>
-    <td>${esc(c.name||"—")}</td><td class="co">${esc(c.company_name||"")}</td><td class="email">${esc(c.email||"")}</td>
-    <td style="text-transform:capitalize">${esc(c.deal_stage||"")}</td>
+    <td>${esc(c.name||"—")}</td><td class="co">${esc(c.company_name||"")}</td>
+    <td class="email">${esc(c.email||"")}</td>
+    <td style="text-transform:capitalize">${esc(c.marketing_stage||c.deal_stage||"")}</td>
     <td><span class="score ${esc(c.lead_score||"neutral")}">${esc(c.lead_score||"—")}</span></td>
-    <td><span class="src">${esc(c.source||"")}</span></td><td class="muted">${fmtDate(c.created_at)}</td></tr>`).join("");
+    <td><span class="src">${esc(c.source||"")}</span></td>
+    <td class="muted">${fmtDate(c.created_at)}</td></tr>`).join("");
   $("#contacts tbody").innerHTML=rows||`<tr><td colspan="7" class="muted">No contacts yet.</td></tr>`;
 }
 
-/* Kanban board — GoHighLevel style pipeline (stages as columns) */
-function groupBy(items,key){ const m={}; for(const it of items){ const k=it[key]||"lead"; (m[k]=m[k]||[]).push(it); } return m; }
-const STAGE_COLORS={lead:"#667085",contacted:"#2e90fa",qualified:"#7a5af8",no_show:"#f79009",
-  unqualified:"#98a2b3",proposal:"#6172f3",proposal_accepted:"#15b79e",negotiation:"#f97316",
-  onboarding:"#0ba5ec",won:"#12b76a",lost:"#f04438"};
-const SCORE_COLORS={hot:"#b42318",warm:"#b54708",neutral:"#98a2b3",cold:"#175cd3"};
-const initials=s=>{ const p=String(s||"").trim().split(/\s+/).filter(Boolean);
-  return (((p[0]||"")[0]||"")+((p[1]||"")[0]||"")).toUpperCase()||"?"; };
-
-let boardView="deal";
-let BOARD={contacts:[],deals:[]};
+// ── Board ────────────────────────────────────────────────────────────────────
+let boardView="sales";
+let BOARD_DATA={sales:{},marketing:{},contacts:[]};
 
 function gcard(type,it,st){
+  const color=STAGE_COLORS[st]||"#98a2b3";
   if(type==="deal"){
-    const color=STAGE_COLORS[st]||"#98a2b3", nm=it.contact_name||"";
     return `<div class="gcard" draggable="true" data-type="deal" data-id="${esc(it.id)}" data-stage="${st}" style="--cc:${color}">
       <div class="gtitle">${esc(it.title||"—")}</div>
-      <div class="gval">$${(parseFloat(it.value)||0).toLocaleString()}</div>
-      ${nm?`<div class="gmeta"><span class="avatar">${esc(initials(nm))}</span><span class="gsub">${esc(nm)}</span></div>`:""}
+      ${parseFloat(it.value)>0?`<div class="gval">$${parseFloat(it.value).toLocaleString()}</div>`:""}
+      ${it.contact_name?`<div class="gmeta"><span class="avatar">${esc(initials(it.contact_name))}</span><span class="gsub">${esc(it.contact_name)}</span></div>`:""}
     </div>`;
   }
   const sc=SCORE_COLORS[it.lead_score]||"#98a2b3";
   return `<div class="gcard" draggable="true" data-type="contact" data-id="${esc(it.id)}" data-stage="${st}" style="--cc:${sc}">
-    <div class="gmeta" style="margin-top:0"><span class="avatar">${esc(initials(it.name))}</span><span class="gtitle">${esc(it.name||"—")}</span></div>
-    ${it.company_name?`<div class="gsub" style="margin-top:6px">${esc(it.company_name)}</div>`:""}
+    <div class="gmeta" style="margin-top:0"><span class="avatar">${esc(initials(it.name))}</span>
+      <span class="gtitle">${esc(it.name||"—")}</span></div>
+    ${(it.company||it.company_name)?`<div class="gsub" style="margin-top:5px">${esc(it.company||it.company_name)}</div>`:""}
     <div class="gmeta"><span class="score ${esc(it.lead_score||"neutral")}">${esc(it.lead_score||"—")}</span>
       ${it.source?`<span class="gsrc">${esc(it.source)}</span>`:""}</div>
   </div>`;
 }
-function pipelineColumns(items,type,valKey){
-  const g=groupBy(items,type==="deal"?"stage":"deal_stage");
-  return STAGES.map(st=>{
-    const list=g[st]||[];
-    const total=list.reduce((s,it)=>s+(parseFloat(it[valKey])||0),0);
+function buildColumns(stageOrder,pipeline,type){
+  return stageOrder.map(st=>{
+    const bucket=pipeline[st]||{count:0,deals:[],contacts:[]};
+    const items=(type==="deal"?bucket.deals:bucket.contacts)||[];
+    const total=items.reduce((s,it)=>s+(parseFloat(it.value||it.deal_value)||0),0);
     const color=STAGE_COLORS[st]||"#98a2b3";
-    const cards=list.map(it=>gcard(type,it,st)).join("")||`<div class="gempty">—</div>`;
+    const cards=items.map(it=>gcard(type,it,st)).join("")||`<div class="gempty">—</div>`;
     return `<div class="gcol" data-type="${type}" data-stage="${st}" style="--sc:${color}">
       <div class="ghead"><div class="gname"><span class="cdot"></span>${nice(st)}</div>
-        <div class="gsum"><b>${list.length}</b> · $${total.toLocaleString()}</div></div>
-      <div class="gbody">${cards}</div></div>`;
+        <div class="gsum"><b>${bucket.count||items.length}</b>${total>0?` · $${total.toLocaleString()}`:""}
+      </div></div><div class="gbody">${cards}</div></div>`;
   }).join("");
 }
 function companiesView(contacts){
   const comp={};
-  for(const c of contacts){ const name=(c.company_name||"").trim(); if(!name) continue;
-    const e=comp[name]||(comp[name]={n:0,pipe:0}); e.n++; e.pipe+=parseFloat(c.deal_value||0)||0; }
-  const companies=Object.entries(comp).sort((a,b)=>b[1].pipe-a[1].pipe||b[1].n-a[1].n);
-  if(!companies.length) return `<div class="gempty" style="grid-column:1/-1">No companies yet.</div>`;
-  return companies.map(([name,e])=>`<div class="gcard static" style="--cc:#2e90fa">
-    <div class="gmeta" style="margin-top:0"><span class="avatar">${esc(initials(name))}</span><span class="gtitle">${esc(name)}</span></div>
-    <div class="gsub" style="margin-top:6px">${e.n} contact${e.n>1?"s":""}</div>
-    <div class="gval">$${e.pipe.toLocaleString()}</div></div>`).join("");
+  for(const c of contacts){const n=(c.company_name||"").trim();if(!n)continue;
+    const e=comp[n]||(comp[n]={n:0,pipe:0});e.n++;e.pipe+=parseFloat(c.deal_value||0)||0;}
+  const list=Object.entries(comp).sort((a,b)=>b[1].pipe-a[1].pipe||b[1].n-a[1].n);
+  if(!list.length)return`<div class="gempty" style="grid-column:1/-1">No companies yet.</div>`;
+  return list.map(([name,e])=>`<div class="gcard static" style="--cc:#2e90fa">
+    <div class="gmeta" style="margin-top:0"><span class="avatar">${esc(initials(name))}</span>
+      <span class="gtitle">${esc(name)}</span></div>
+    <div class="gsub" style="margin-top:5px">${e.n} contact${e.n>1?"s":""}</div>
+    ${e.pipe>0?`<div class="gval">$${e.pipe.toLocaleString()}</div>`:""}</div>`).join("");
 }
 function drawBoard(){
   const b=$("#board");
   document.querySelectorAll("#board-tabs button").forEach(x=>x.classList.toggle("active",x.dataset.view===boardView));
-  if(boardView==="company"){ b.className="board grid"; b.innerHTML=companiesView(BOARD.contacts); return; }
+  if(boardView==="company"){b.className="board grid";b.innerHTML=companiesView(BOARD_DATA.contacts);return;}
   b.className="board";
-  b.innerHTML = boardView==="deal"
-    ? pipelineColumns(BOARD.deals,"deal","value")
-    : pipelineColumns(BOARD.contacts,"contact","deal_value");
+  if(boardView==="sales") b.innerHTML=buildColumns(SALES_STAGES,BOARD_DATA.sales,"deal");
+  else b.innerHTML=buildColumns(MARKETING_STAGES,BOARD_DATA.marketing,"contact");
 }
-function renderBoard(contacts,deals){ BOARD={contacts,deals}; drawBoard(); }
 
-/* Drag-to-restage between stage columns (delegated on #board) */
+// ── Board DnD ────────────────────────────────────────────────────────────────
 let dragInfo=null;
 function initBoardDnD(){
   const board=$("#board");
   const clearHi=()=>document.querySelectorAll(".gcol.drop-ok,.gcol.drop-no").forEach(l=>l.classList.remove("drop-ok","drop-no"));
   board.addEventListener("dragstart",e=>{
-    const c=e.target.closest('.gcard[draggable="true"]'); if(!c) return;
-    dragInfo={type:c.dataset.type,id:c.dataset.id,from:c.dataset.stage}; c.classList.add("dragging");
-    e.dataTransfer.effectAllowed="move"; try{e.dataTransfer.setData("text/plain",c.dataset.id);}catch(_){}
+    const c=e.target.closest('.gcard[draggable="true"]');if(!c)return;
+    dragInfo={type:c.dataset.type,id:c.dataset.id,from:c.dataset.stage};c.classList.add("dragging");
+    e.dataTransfer.effectAllowed="move";try{e.dataTransfer.setData("text/plain",c.dataset.id);}catch(_){}
   });
-  board.addEventListener("dragend",e=>{ e.target.closest(".gcard")?.classList.remove("dragging"); dragInfo=null; clearHi(); });
+  board.addEventListener("dragend",e=>{e.target.closest(".gcard")?.classList.remove("dragging");dragInfo=null;clearHi();});
   board.addEventListener("dragover",e=>{
-    const col=e.target.closest(".gcol"); if(!col||!dragInfo||col.dataset.type!==dragInfo.type) return;
-    e.preventDefault(); clearHi();
-    const to=col.dataset.stage;
-    const ok = dragInfo.type==="deal" ? true : (to===dragInfo.from || (TX[dragInfo.from]||[]).includes(to));
-    col.classList.toggle("drop-ok",ok); col.classList.toggle("drop-no",!ok);
+    const col=e.target.closest(".gcol");if(!col||!dragInfo||col.dataset.type!==dragInfo.type)return;
+    e.preventDefault();clearHi();col.classList.add("drop-ok");
   });
   board.addEventListener("drop",async e=>{
-    const col=e.target.closest(".gcol"); if(!col||!dragInfo||col.dataset.type!==dragInfo.type) return;
+    const col=e.target.closest(".gcol");if(!col||!dragInfo||col.dataset.type!==dragInfo.type)return;
     e.preventDefault();
-    const to=col.dataset.stage, {type,id,from}=dragInfo; clearHi();
-    if(to===from) return;
-    if(type==="contact" && !(TX[from]||[]).includes(to)){
-      toast(`Can't move ${nice(from)} → ${nice(to)}. Allowed: ${(TX[from]||[]).map(nice).join(", ")||"none"}`,true); return;
-    }
+    const to=col.dataset.stage,{type,id,from}=dragInfo;clearHi();
+    if(to===from)return;
     try{
-      if(type==="contact") await patch(`contacts/${id}`,{deal_stage:to});
-      else await patch(`deals/${id}`,{stage:to});
-      toast(`Moved to ${nice(to)}`); load();
-    }catch(err){ toast(err.message,true); load(); }
+      if(type==="deal") await patch(`deals/${id}`,{stage:to});
+      else await post(`contacts/${id}/advance`,{pipeline_key:"marketing",stage:to});
+      toast(`Moved to ${nice(to)}`);load();
+    }catch(err){
+      const allowed=err.allowed;
+      const msg=allowed
+        ?`Can't move ${nice(from)} → ${nice(to)}. Allowed: ${allowed.map(nice).join(", ")||"none"}`
+        :err.message;
+      toast(msg,true);load();
+    }
   });
 }
+$("#board-tabs").addEventListener("click",e=>{const b=e.target.closest("button");if(!b)return;boardView=b.dataset.view;drawBoard();});
 
-async function load(){
+// ── Inbox ────────────────────────────────────────────────────────────────────
+let inboxFilter="open";
+const STATUS_COLORS={open:"#12b76a",closed:"#98a2b3",snoozed:"#f79009",escalated:"#b42318"};
+
+function renderInbox(convs){
+  const rows=(convs||[]).map(c=>{
+    const sc=STATUS_COLORS[c.status]||"#98a2b3";
+    return `<tr>
+      <td><b>${esc(c.contact_name||"—")}</b><br><span class="muted" style="font-size:11px">${esc(c.contact_email||"")}</span></td>
+      <td><span class="ch-badge">${esc(c.channel||"—")}</span></td>
+      <td><span class="status-pill" style="background:${sc}20;color:${sc}">${esc(c.status||"—")}</span></td>
+      <td>${esc(c.assignee||"—")}</td>
+      <td class="muted">${esc(c.intent||"—")}</td>
+      <td class="muted">${fmtDate(c.last_message_at||c.created_at)}</td>
+      <td>
+        ${c.status!=="closed"?`<button class="act-btn" onclick="convAct('${esc(c.id)}','close')">Close</button>`:""}
+        ${c.assignee!=="human"?`<button class="act-btn" onclick="convAct('${esc(c.id)}','escalate')">Escalate</button>`:""}
+        ${c.assignee==="human"?`<button class="act-btn" onclick="convAct('${esc(c.id)}','ai')">→ AI</button>`:""}
+      </td></tr>`;
+  }).join("")||`<tr><td colspan="7" class="muted">No conversations.</td></tr>`;
+  $("#inbox-body").innerHTML=rows;
+}
+async function loadInbox(){
   try{
-    const [stats,pipeline,contacts,deals]=await Promise.all([get("stats"),get("pipeline"),get("contacts?limit=200"),get("deals")]);
-    const clist=contacts.data||contacts.contacts||[];
-    renderCards(stats); renderPipeline(pipeline); renderContacts(clist.slice(0,50));
-    renderBoard(clist, deals.deals||[]);
-    setStatus(true,"Live"); $("#refreshed").textContent="refreshed "+new Date().toLocaleTimeString();
-  }catch(e){ setStatus(false,"Error"); showErr("Could not reach CRM API: "+e.message);
-    $("#contacts tbody").innerHTML=`<tr><td colspan="7" class="muted">—</td></tr>`; }
+    const q=inboxFilter==="human"?"assignee=human&status=open":inboxFilter==="all"?"":inboxFilter==="closed"?"status=closed":"status=open";
+    const data=await get(`conversations?${q}&limit=100`);
+    renderInbox(data.conversations||[]);
+  }catch(e){$("#inbox-body").innerHTML=`<tr><td colspan="7" class="muted">Error: ${esc(e.message)}</td></tr>`;}
+}
+async function convAct(id,action){
+  try{
+    const body=action==="close"?{status:"closed"}:action==="escalate"?{assignee:"human"}:{assignee:"ai"};
+    await patch(`conversations/${id}`,body);
+    toast(action==="close"?"Closed":"Reassigned");loadInbox();
+  }catch(e){toast(e.message,true);}
+}
+$("#inbox-filters").addEventListener("click",e=>{
+  const b=e.target.closest("button[data-f]");if(!b)return;
+  inboxFilter=b.dataset.f;
+  document.querySelectorAll("#inbox-filters button").forEach(x=>x.classList.toggle("active",x.dataset.f===inboxFilter));
+  loadInbox();
+});
+
+// ── Analytics ────────────────────────────────────────────────────────────────
+function renderFunnel(el,stages){
+  const max=Math.max(...(stages||[]).map(s=>s.count||0),1);
+  el.innerHTML=(stages||[]).map(s=>{
+    const pct=Math.round((s.count||0)/max*100);
+    const color=STAGE_COLORS[s.stage]||"#98a2b3";
+    return `<div class="funnel-row">
+      <div class="funnel-label">${nice(s.stage)}</div>
+      <div class="funnel-bar"><div class="bar-fill" style="width:${pct}%;background:${color}"></div></div>
+      <div class="funnel-count">${s.count||0}</div></div>`;
+  }).join("")||`<div class="muted">No data.</div>`;
+}
+async function loadAnalytics(){
+  try{
+    const [stats,mkt,sales,byC,byCamp]=await Promise.all([
+      get("stats"),
+      get("analytics/funnel?pipeline_key=marketing"),
+      get("analytics/funnel?pipeline_key=sales"),
+      get("analytics/by-channel?days=30"),
+      get("analytics/by-campaign?days=30"),
+    ]);
+    const ca=stats.campaign_last_30d||{};
+    const acards=[
+      {label:"Sends",value:(ca.total_sends||0).toLocaleString(),sub:"last 30 days"},
+      {label:"Opens",value:(ca.total_opens||0).toLocaleString(),sub:`${ca.total_sends>0?Math.round(ca.total_opens/ca.total_sends*100):0}% rate`},
+      {label:"Replies",value:(ca.total_replies||0).toLocaleString(),sub:`${ca.total_sends>0?Math.round(ca.total_replies/ca.total_sends*100):0}% rate`},
+      {label:"MQLs",value:(ca.total_mqls||0).toLocaleString(),sub:"converted"},
+    ];
+    $("#a-cards").innerHTML=acards.map(k=>`<div class="card"><div class="label">${esc(k.label)}</div>
+      <div class="value">${esc(k.value)}</div><div class="sub">${esc(k.sub)}</div></div>`).join("");
+    renderFunnel($("#funnel-marketing"),mkt.stages||[]);
+    renderFunnel($("#funnel-sales"),sales.stages||[]);
+    // by channel
+    const chRows=(byC.channels||[]).map(r=>`<tr>
+      <td><span class="ch-badge">${esc(r.channel||"—")}</span></td>
+      <td>${(r.sends||0).toLocaleString()}</td><td>${(r.replies||0).toLocaleString()}</td>
+      <td class="rate">${r.reply_rate||0}%</td><td>${(r.bounces||0).toLocaleString()}</td></tr>`).join("")||`<tr><td colspan="5" class="muted">No data.</td></tr>`;
+    $("#a-channel tbody").innerHTML=chRows;
+    // by campaign
+    const campRows=(byCamp.campaigns||[]).map(r=>`<tr>
+      <td><code>${esc(r.campaign_id||"—")}</code></td>
+      <td>${(r.sends||0).toLocaleString()}</td><td>${(r.replies||0).toLocaleString()}</td>
+      <td>${(r.mqls||0).toLocaleString()}</td>
+      <td class="rate">${r.mql_rate||0}%</td></tr>`).join("")||`<tr><td colspan="5" class="muted">No data.</td></tr>`;
+    $("#a-campaign tbody").innerHTML=campRows;
+  }catch(e){
+    $("#a-cards").innerHTML=`<div class="muted" style="padding:18px">${esc(e.message)}</div>`;
+  }
 }
 
-/* Chat */
+// ── Chat ─────────────────────────────────────────────────────────────────────
 const convo=[];
 const msgsEl=$("#msgs");
 function addMsg(role,text,cls){
   const d=document.createElement("div");
   d.className="msg "+(role==="user"?"user":"bot")+(cls?(" "+cls):"");
-  d.textContent=text; msgsEl.appendChild(d); msgsEl.scrollTop=msgsEl.scrollHeight; return d;
+  d.textContent=text;msgsEl.appendChild(d);msgsEl.scrollTop=msgsEl.scrollHeight;return d;
 }
 async function sendChat(text){
-  text=(text||"").trim(); if(!text) return;
-  $("#send").disabled=true; $("#input").value="";
-  addMsg("user",text); convo.push({role:"user",content:text});
+  text=(text||"").trim();if(!text)return;
+  $("#send").disabled=true;$("#input").value="";
+  addMsg("user",text);convo.push({role:"user",content:text});
   const typing=addMsg("bot","Tantra is thinking…","typing");
   try{
     const r=await fetch(`${API}/chat`,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({messages:convo})});
     const j=await r.json().catch(()=>({}));
-    if(!r.ok) throw new Error(j.error||`HTTP ${r.status}`);
-    typing.remove();
-    const reply=j.reply||"(no reply)";
-    addMsg("bot",reply); convo.push({role:"assistant",content:reply});
-  }catch(e){ typing.remove(); addMsg("bot","⚠️ "+e.message); }
-  finally{ $("#send").disabled=false; $("#input").focus(); }
+    if(!r.ok)throw new Error(j.error||`HTTP ${r.status}`);
+    typing.remove();const reply=j.reply||"(no reply)";
+    addMsg("bot",reply);convo.push({role:"assistant",content:reply});
+  }catch(e){typing.remove();addMsg("bot","⚠️ "+e.message);}
+  finally{$("#send").disabled=false;$("#input").focus();}
 }
 $("#composer").addEventListener("submit",e=>{e.preventDefault();sendChat($("#input").value);});
-$("#suggest").addEventListener("click",e=>{ if(e.target.tagName==="BUTTON") sendChat(e.target.textContent); });
+$("#suggest").addEventListener("click",e=>{if(e.target.tagName==="BUTTON")sendChat(e.target.textContent);});
 
-$("#board-tabs").addEventListener("click",e=>{ const b=e.target.closest("button"); if(!b) return; boardView=b.dataset.view; drawBoard(); });
+// ── Main load ─────────────────────────────────────────────────────────────────
+async function load(){
+  try{
+    const [stats,mktPipeline,salesPipeline,contacts]=await Promise.all([
+      get("stats"),
+      get("pipeline?pipeline_key=marketing"),
+      get("pipeline?pipeline_key=sales"),
+      get("contacts?limit=200"),
+    ]);
+    const clist=contacts.data||contacts.contacts||[];
+    BOARD_DATA.marketing=mktPipeline.pipeline||{};
+    BOARD_DATA.sales=salesPipeline.pipeline||{};
+    BOARD_DATA.contacts=clist;
+    renderCards(stats);
+    renderPipeline(mktPipeline);
+    renderContacts(clist.slice(0,50));
+    drawBoard();
+    setStatus(true,"Live");
+    $("#refreshed").textContent="refreshed "+new Date().toLocaleTimeString();
+  }catch(e){
+    setStatus(false,"Error");showErr("Could not reach CRM API: "+e.message);
+    $("#contacts tbody").innerHTML=`<tr><td colspan="7" class="muted">—</td></tr>`;
+  }
+}
 
-/* Top-level view tabs: Dashboard ⇄ Board */
+// ── Tab switching ─────────────────────────────────────────────────────────────
+let _inboxLoaded=false,_analyticsLoaded=false;
 function setTab(tab){
   document.querySelectorAll(".tabbar button").forEach(b=>b.classList.toggle("active",b.dataset.tab===tab));
-  $("#view-dashboard").style.display = tab==="board" ? "none" : "";
-  $("#view-board").style.display     = tab==="board" ? "" : "none";
+  ["dashboard","board","inbox","analytics"].forEach(v=>{
+    const el=$(`#view-${v}`);if(el)el.style.display=v===tab?"":"none";
+  });
+  if(tab==="inbox"&&!_inboxLoaded){loadInbox();_inboxLoaded=true;}
+  if(tab==="analytics"&&!_analyticsLoaded){loadAnalytics();_analyticsLoaded=true;}
 }
-$(".tabbar").addEventListener("click",e=>{ const b=e.target.closest("button[data-tab]"); if(!b) return; setTab(b.dataset.tab); });
+$(".tabbar").addEventListener("click",e=>{const b=e.target.closest("button[data-tab]");if(!b)return;setTab(b.dataset.tab);});
 
-initBoardDnD(); load(); setInterval(load,30000);
+// ── Boot ──────────────────────────────────────────────────────────────────────
+initBoardDnD();load();setInterval(load,30000);
 </script>
 </body>
 </html>

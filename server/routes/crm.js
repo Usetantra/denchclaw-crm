@@ -48,7 +48,7 @@ const DEFAULT_STAGE_TRANSITIONS = {
   contacted:         ['booked', 'unqualified', 'nurture', 'lost'],
   booked:            ['qualified', 'no_show', 'contacted'],
   qualified:         ['proposal', 'unqualified', 'nurture', 'lost'],
-  no_show:           ['contacted', 'lost'],
+  no_show:           ['contacted', 'booked', 'lost'],
   unqualified:       ['nurture', 'lost'],
   proposal:          ['negotiation', 'nurture', 'lost'],
   proposal_accepted: ['negotiation', 'onboarding', 'lost'],
