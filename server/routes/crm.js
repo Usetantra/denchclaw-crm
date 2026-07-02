@@ -486,16 +486,13 @@ router.post('/contacts/:id/advance', async (req, res) => {
         [stage, contact.id, companyId]
       );
 
-      await addContactActivity(contact.id, {
+      await addContactActivity(contact.id, companyId, {
         type: 'stage_change',
         message: `Marketing stage: ${currentStage} → ${stage}${reason ? ' (' + reason + ')' : ''}`,
         agent: actor || 'system',
         channel: null,
         data: { pipeline_key, from: currentStage, to: stage, reason: reason || null },
       });
-
-      // Bust pipeline config cache so a fresh read picks up the new stage
-      _pipelineConfigCache.delete(`${companyId}:marketing`);
 
       return res.json({ contact_id: contact.id, pipeline_key, stage, previous: currentStage, changed: true });
     }
@@ -529,7 +526,7 @@ router.post('/contacts/:id/advance', async (req, res) => {
         [stage, JSON.stringify({ ...meta, activity }), deal.id, companyId]
       );
 
-      await addContactActivity(contact.id, {
+      await addContactActivity(contact.id, companyId, {
         type: 'stage_change',
         message: `Sales stage: ${currentStage} → ${stage}${reason ? ' (' + reason + ')' : ''}`,
         agent: actor || 'system',
@@ -1203,7 +1200,7 @@ router.post('/contacts/bulk-import', async (req, res) => {
         metadata: input.metadata,
       });
       if (isNew) {
-        await addContactActivity(contact.id, { type: 'prospect_loaded', message: `Loaded from bulk import (${input.source || 'list'})` });
+        await addContactActivity(contact.id, null, { type: 'prospect_loaded', message: `Loaded from bulk import (${input.source || 'list'})` });
         created++;
       } else {
         updated++;
@@ -1325,14 +1322,14 @@ function calculateEngagementScore(contact) {
   return Math.min(score, 100);
 }
 
-async function addContactActivity(contactId, entry) {
-  const contact = await contactDb.getById(contactId);
+async function addContactActivity(contactId, companyId, entry) {
+  const contact = await contactDb.getById(contactId, companyId);
   if (!contact) return false;
 
   const timestampedEntry = { ...entry, timestamp: new Date().toISOString() };
-  await contactDb.addActivity(contactId, timestampedEntry);
+  await contactDb.addActivity(contactId, timestampedEntry, companyId);
 
-  const updated = await contactDb.getById(contactId);
+  const updated = await contactDb.getById(contactId, companyId);
   const es = calculateEngagementScore(updated || contact);
 
   const updateData = { lead_score_numeric: es };
@@ -1345,7 +1342,7 @@ async function addContactActivity(contactId, entry) {
     updateData.lead_score_numeric = 60;
   }
 
-  await contactDb.update(contactId, updateData);
+  await contactDb.update(contactId, updateData, companyId);
   return true;
 }
 
