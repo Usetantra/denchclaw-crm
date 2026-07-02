@@ -58,7 +58,25 @@ const DEFAULT_STAGE_TRANSITIONS = {
   lost:              ['accepted'],
   nurture:           ['contacted', 'lost'],
 };
-const STAGE_TRANSITIONS = DEFAULT_STAGE_TRANSITIONS;
+
+// ONE transition authority (E3.3): the legacy PATCH {deal_stage} path delegates
+// to the same JSONB-config checker POST /advance uses (getPipelineConfig +
+// getPipelineTransitions on the 'sales' pipeline). DEFAULT_STAGE_TRANSITIONS
+// remains only as (a) the fallback when configs are absent/unreadable and
+// (b) the source for legacy-only stages ('lead', 'proposal_accepted') that
+// predate the two-pipeline model and don't exist in the seeded sales config.
+// Returns undefined for stages unknown to both sources — the PATCH path then
+// skips enforcement, matching the historical behavior (e.g. mirrored
+// marketing-stage values in deal_stage are not gated here; /advance gates them).
+async function resolveDealStageTransitions(companyId, fromStage) {
+  try {
+    const salesPipeline = await getPipelineConfig(companyId, 'sales');
+    if (salesPipeline && salesPipeline.stages.some(s => s.key === fromStage)) {
+      return getPipelineTransitions(salesPipeline, fromStage);
+    }
+  } catch (_e) { /* fall through to defaults */ }
+  return DEFAULT_STAGE_TRANSITIONS[fromStage];
+}
 
 const _pipelineCache = new Map();
 const PIPELINE_TTL_MS = 60 * 1000;
@@ -373,7 +391,8 @@ router.patch('/contacts/:id', async (req, res) => {
       const oldStage = existing.deal_stage || 'lead';
       const newStage = updates.deal_stage;
 
-      const allowedTransitions = STAGE_TRANSITIONS[oldStage];
+      // Config-driven check — same authority as POST /advance (E3.3).
+      const allowedTransitions = await resolveDealStageTransitions(companyId, oldStage);
       if (allowedTransitions && !allowedTransitions.includes(newStage)) {
         return res.status(400).json({
           error: `Invalid stage transition: ${oldStage} → ${newStage}`,
@@ -1175,7 +1194,12 @@ router.post('/deals/:id/activity', validate(), async (req, res) => {
 });
 
 // POST /api/crm/contacts/bulk-import
+// Tenant-scoped: every imported contact is created under (and every dedup
+// lookup runs against) the request's company — company_id is never null.
 router.post('/contacts/bulk-import', async (req, res) => {
+  const companyId = getUserCompanyId(req);
+  if (!companyId) return res.status(401).json({ error: 'Authentication required' });
+
   const { contacts: inputContacts } = req.body;
   if (!Array.isArray(inputContacts) || inputContacts.length === 0) {
     return res.status(400).json({ error: 'contacts array required' });
@@ -1186,6 +1210,7 @@ router.post('/contacts/bulk-import', async (req, res) => {
     try {
       if (!input.email && !input.name) { errors++; continue; }
       const { contact, created: isNew } = await findOrCreateContact(input.email, {
+        company_id: companyId,
         name: input.name,
         phone: input.phone,
         company: input.company,
@@ -1200,7 +1225,7 @@ router.post('/contacts/bulk-import', async (req, res) => {
         metadata: input.metadata,
       });
       if (isNew) {
-        await addContactActivity(contact.id, null, { type: 'prospect_loaded', message: `Loaded from bulk import (${input.source || 'list'})` });
+        await addContactActivity(contact.id, companyId, { type: 'prospect_loaded', message: `Loaded from bulk import (${input.source || 'list'})` });
         created++;
       } else {
         updated++;

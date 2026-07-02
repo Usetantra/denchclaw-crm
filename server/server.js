@@ -51,11 +51,30 @@ app.get('/health', async (req, res) => {
 const PORT = process.env.PORT || 3100;
 
 async function start() {
-  await initDatabase();
+  // Listen first so /health answers (503) while the DB probe retries.
+  // initDatabase() retries transient connection failures forever with
+  // exponential backoff + jitter — it only rejects on CONFIG errors
+  // (err.fatal, e.g. missing DATABASE_URL). Never exit on transient
+  // pool errors: a crash↔restart loop under pm2 holds connection slots
+  // and makes shared-Postgres pressure worse.
   app.listen(PORT, () => console.log(`[DenchClaw CRM] listening on :${PORT}`));
+  await initDatabase();
 }
 
 start().catch(err => {
-  console.error('[DenchClaw CRM] Fatal startup error:', err.message);
-  process.exit(1);
+  if (err && err.fatal) {
+    console.error('[DenchClaw CRM] Fatal startup error (config):', err.message);
+    process.exit(1);
+  }
+  // Defensive: anything non-config is logged but does not kill the process.
+  console.error('[DenchClaw CRM] Startup error (non-fatal, continuing):', err.message);
+});
+
+// Last-resort guards: a stray rejection/exception from a lost DB connection
+// must not take the service down.
+process.on('unhandledRejection', (err) => {
+  console.error('[DenchClaw CRM] Unhandled rejection (non-fatal):', err && err.message ? err.message : err);
+});
+process.on('uncaughtException', (err) => {
+  console.error('[DenchClaw CRM] Uncaught exception (non-fatal):', err && err.message ? err.message : err);
 });
