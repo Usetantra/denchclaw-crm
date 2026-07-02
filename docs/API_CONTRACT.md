@@ -91,6 +91,13 @@ POST /api/crm/contacts/:id/advance
 - `pipeline_key=marketing` updates `contacts.marketing_stage` (+ `deal_stage` mirror).
 - `pipeline_key=sales` updates the contact's most recent open deal
   (no open deal ⇒ **404**); `won|lost` sets `closed_at`.
+- **Sales `nurture` off-ramp recycles to marketing** (migration-006 spec: the
+  nurture return path is *Marketing's nurture queue*): advancing a deal to
+  `nurture` (via `/advance` or `PATCH /deals/:id`) also moves the contact's
+  `marketing_stage` to `nurture` when the marketing config permits it from the
+  contact's current stage (e.g. `mql→nurture`); the `/advance` response then
+  carries `marketing_recycled: true|false`. If the marketing transition is not
+  legal the contact's marketing stage is left untouched.
 - Unknown/unseeded `pipeline_key` ⇒ **404** `Pipeline '<key>' not configured`.
 - Success: `{contact_id, [deal_id,] pipeline_key, stage, previous, changed: true}` +
   a `stage_change` activity row.
@@ -113,7 +120,7 @@ mirrors this for its postgres backend and asserts equality in CI (drift test).
 | Method · Path | Purpose | Notes |
 |---|---|---|
 | GET `/contacts?search=&score=&source=&stage=&tags=&phone=&limit=&offset=` | list/find | `search` matches name/email/company; `tags`=`a,b` or repeated → array-overlap; `phone` → normalized digit match. Omit `limit` ⇒ ALL rows; explicit `limit` capped at 500 |
-| POST `/contacts` | create/upsert | dedup email→linkedin; `company`↔`company_name` mapping; starts `deal_stage=lead`, `marketing_stage=sourced` |
+| POST `/contacts` | create/upsert | **email is the authoritative dedupe key** — linkedin/phone fallback fires only when the record has NO email (distinct emails never merge); `company`↔`company_name` mapping; starts `deal_stage=lead`, `marketing_stage=sourced` |
 | GET `/contacts/:id` | read | scoped (404) |
 | PATCH `/contacts/:id` | update / legacy stage change | scoped; `{deal_stage}` ⇒ 400 + `allowed_transitions` on illegal |
 | **POST `/contacts/:id/advance`** | **canonical stage change (both pipelines)** | 409 + `allowed` on illegal; idempotent |
@@ -167,7 +174,7 @@ CRM-owned queue (`prospect_inbox`, migration 002). `target_engine` NULL = broadc
 
 | Method · Path | Purpose | Notes |
 |---|---|---|
-| POST `/campaign-events` | ingest one event **or an array** | types: `send, deliver, open, click, reply, bounce, unsub, suppressed`; writes raw `campaign_events` + upserts per-`(company, campaign, channel, segment, day)` rollup; ⇒ **202** `{ok, accepted, total}` |
+| POST `/campaign-events` | ingest one event **or an array** | types: `send, deliver, open, click, reply, bounce, unsub, suppressed, mql` (`mql` ⇒ `mql_count`, migration 008); writes raw `campaign_events` + upserts per-`(company, campaign, channel, segment, day)` rollup; ⇒ **202** `{ok, accepted, total}` |
 | GET `/analytics/overview` | 30-day totals + open/reply/bounce rates | |
 | GET `/analytics/by-channel?days=` | per-channel rollups | |
 | GET `/analytics/by-campaign?days=` | per-campaign rollups (incl. `mql_rate`) | |
@@ -210,6 +217,14 @@ complete_handoff`.
 
 ## Changelog
 
+- **2026-07-02 (pm)** — Doc-alignment + trial-run fixes: sales `nurture` off-ramp
+  now recycles the contact to marketing `nurture` (`marketing_recycled` in the
+  `/advance` response); email made the authoritative dedupe key in
+  `POST /contacts` + `bulk-import` (phone/linkedin fallback only when email
+  absent — BUG-1 class); `GET /contacts/export` un-shadowed from the `:id`
+  route; `mql` campaign-event type added (migration **008**) so `mqls`/`mql_rate`
+  report; deal listings fall back to the contact's name for display; dashboard
+  gained a contact-detail modal (fields + activity feed + notes).
 - **2026-07-02** — Rewritten for the two-pipeline model (migrations 003–007):
   documented `POST /contacts/:id/advance` (409 semantics), both pipelines' stage
   maps, conversations/messages (inbound auto-advance + `active_campaigns`),

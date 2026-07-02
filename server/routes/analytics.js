@@ -7,10 +7,11 @@ const { requireAuth, getUserCompanyId } = require('../middleware/auth');
 
 router.use(requireAuth);
 
-const VALID_EVENT_TYPES = ['send', 'deliver', 'open', 'click', 'reply', 'bounce', 'unsub', 'suppressed'];
+const VALID_EVENT_TYPES = ['send', 'deliver', 'open', 'click', 'reply', 'bounce', 'unsub', 'suppressed', 'mql'];
 const TYPE_TO_COL = {
   send: 'sends', deliver: 'delivers', open: 'opens', click: 'clicks',
   reply: 'replies', bounce: 'bounces', unsub: 'unsubs', suppressed: 'unsubs',
+  mql: 'mql_count', // engines report MQL conversions so mqls/mql_rate aren't stuck at 0
 };
 
 // POST /api/crm/campaign-events
