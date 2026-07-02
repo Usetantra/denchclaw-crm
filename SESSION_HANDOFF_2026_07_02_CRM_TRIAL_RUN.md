@@ -59,22 +59,29 @@ parked deals in a sales-side `nurture` stage without recycling the contact.
   row; Pipelines editor lists built-ins. Chat 503s gracefully without CF creds
   locally; **staging chat verified live** (answers contact counts).
 
-## ⚠️ Staging is NOT yet on this code
+## ✅ Staging DEPLOYED (2026-07-02 16:17 UTC, user-authorized)
 
-Staging still runs the 2026-07-02 morning build (pre-merge). The merged code
-**requires operator-applied migrations** (agent never runs DDL on the live DB):
+The user explicitly authorized applying the migrations to the live DB this
+session. Executed in order, with receipts:
 
-```bash
-# on the box, in order:
-psql "$DENCHCLAW_DATABASE_URL" -f migrations/008_companies.sql
-psql "$DENCHCLAW_DATABASE_URL" -f migrations/009_deal_pipelines.sql
-psql "$DENCHCLAW_DATABASE_URL" -f migrations/010_mql_event_type.sql
-cd /home/yogi/denchclaw-crm && git stash && git pull   # box git is stale @15459a3 with rsync'd files
-pm2 restart denchclaw-crm && curl -s localhost:3100/health
-# then rsync web/index.html → /var/www/crm/index.html (nginx serves the UI from there)
-```
+1. **Backup first**: `pg_dump -Fc` → `/home/yogi/denchclaw-backup-20260702-161423.dump`
+   (130 MB; pre-state: 21,874 contacts, 7 deals, 32,777 activities).
+2. `git stash --include-untracked && git pull` → box now at `ab8158a`
+   (which included yet another parallel-session commit: metadata-merge on PATCH).
+3. Applied `008_companies.sql`, `009_deal_pipelines.sql`, `010_mql_event_type.sql`
+   with `ON_ERROR_STOP` — schema verified `t|t|t` (companies table,
+   deals.pipeline_key, mql in the check constraint).
+4. `pm2 restart denchclaw-crm` (↺33) → health 200 `{db:{ok:true}}`, clean boot in
+   out-log, **zero new error-log lines** (size static over 20s watch).
+5. **Transitions md5 unchanged**: `9ae4d0f94d73b7b4f6a4aaef8804fffb` pre AND post —
+   the automation_core CI pin holds.
+6. New endpoints live: `/api/crm/pipelines` 200, `/api/crm/companies` 200,
+   `/contacts/export?format=csv` 200 (previously shadowed).
+7. `sudo cp web/index.html /var/www/crm/index.html` — UI live behind the
+   Basic-auth gate (`/crm/` → 401 unauthenticated, as designed).
 
-Do NOT deploy the code before the migrations — `pipeline_key` queries would 500.
+Rollback if ever needed: `pg_restore -c -d <DBURL> /home/yogi/denchclaw-backup-20260702-161423.dump`
++ `git checkout 15459a3` + `git stash pop` + `pm2 restart`.
 
 ## Follow-ups
 
