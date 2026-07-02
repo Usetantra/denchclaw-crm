@@ -450,6 +450,97 @@ async function main() {
         imp2.status === 200 && imp2.json?.updated === 1 && imp2.json?.created === 0,
         `body=${JSON.stringify(imp2.json)}`);
     }
+
+    // 38 — sales nurture off-ramp via /advance recycles contact to marketing nurture
+    {
+      const c = await req('POST', '/api/crm/contacts', { company: CO_A, body: { name: 'Nur A', email: email('nurA'), source: 'manual' } });
+      const cid = c.json?.id;
+      // marketing stage must legally reach nurture: sourced→segmented (006 direct path)
+      await advance(cid, { pipeline_key: 'marketing', stage: 'segmented' });
+      // hand off to sales → deal at accepted → contacted → nurture
+      await req('POST', '/api/crm/prospect-inbox', { company: CO_A, body: { contact_id: cid, target_engine: 'sales' } });
+      await req('POST', '/api/crm/prospect-inbox/claim', { company: CO_A, body: { target_engine: 'sales', limit: 10, claimed_by: 'sales-engine' } });
+      await advance(cid, { pipeline_key: 'sales', stage: 'contacted' });
+      const r = await advance(cid, { pipeline_key: 'sales', stage: 'nurture' });
+      const contact = (await req('GET', `/api/crm/contacts/${cid}`, { company: CO_A })).json;
+      check('sales /advance → nurture recycles contact to marketing nurture', 'CP5',
+        r.status === 200 && r.json?.marketing_recycled === true && contact?.marketing_stage === 'nurture',
+        `status=${r.status} recycled=${r.json?.marketing_recycled} mkt=${contact?.marketing_stage}`);
+    }
+
+    // 39 — sales nurture off-ramp via PATCH /deals/:id recycles too
+    {
+      const c = await req('POST', '/api/crm/contacts', { company: CO_A, body: { name: 'Nur B', email: email('nurB'), source: 'manual' } });
+      const cid = c.json?.id;
+      await advance(cid, { pipeline_key: 'marketing', stage: 'segmented' });
+      await req('POST', '/api/crm/prospect-inbox', { company: CO_A, body: { contact_id: cid, target_engine: 'sales' } });
+      await req('POST', '/api/crm/prospect-inbox/claim', { company: CO_A, body: { target_engine: 'sales', limit: 10, claimed_by: 'sales-engine' } });
+      const deals = await req('GET', `/api/crm/deals?stage=accepted`, { company: CO_A });
+      const deal = (deals.json?.deals || []).find(d => d.contact_id === cid);
+      await req('PATCH', `/api/crm/deals/${deal?.id}`, { company: CO_A, body: { stage: 'contacted' } });
+      const r = await req('PATCH', `/api/crm/deals/${deal?.id}`, { company: CO_A, body: { stage: 'nurture' } });
+      const contact = (await req('GET', `/api/crm/contacts/${cid}`, { company: CO_A })).json;
+      check('PATCH /deals → nurture recycles contact to marketing nurture', 'CP5',
+        r.status === 200 && r.json?.stage === 'nurture' && contact?.marketing_stage === 'nurture',
+        `status=${r.status} dealStage=${r.json?.stage} mkt=${contact?.marketing_stage}`);
+    }
+
+    // 40 — email is the authoritative dedupe key: distinct emails NEVER merge via
+    // shared phone/linkedin (BUG-1 class); phone fallback fires only when email absent
+    {
+      const ph = `+9188${String(RUN).slice(-8)}`;
+      const li = `https://linkedin.com/in/dedup-${RUN}`;
+      const imp = await req('POST', '/api/crm/contacts/bulk-import', {
+        company: CO_A, body: { contacts: [
+          { name: 'Dedup A', email: email('dedupA'), phone: ph, linkedin: li },
+          { name: 'Dedup B', email: email('dedupB'), phone: ph, linkedin: li },
+        ] },
+      });
+      const a = (await req('GET', `/api/crm/contacts?search=${encodeURIComponent(email('dedupA'))}`, { company: CO_A })).json?.contacts?.[0];
+      const b = (await req('GET', `/api/crm/contacts?search=${encodeURIComponent(email('dedupB'))}`, { company: CO_A })).json?.contacts?.[0];
+      check('distinct emails with shared phone+linkedin create TWO contacts', 'CP5',
+        imp.json?.created === 2 && !!a && !!b && a.id !== b.id,
+        `created=${imp.json?.created} a=${!!a} b=${!!b}`);
+      // no-email record with the shared phone MERGES into the earliest phone match
+      const imp2 = await req('POST', '/api/crm/contacts/bulk-import', {
+        company: CO_A, body: { contacts: [{ name: 'Dedup NoEmail', phone: ph }] },
+      });
+      check('no-email record with shared phone merges (fallback still works)', 'CP5',
+        imp2.json?.updated === 1 && imp2.json?.created === 0, JSON.stringify(imp2.json));
+      // POST /contacts with distinct email + shared linkedin also creates a new contact
+      const c3 = await req('POST', '/api/crm/contacts', { company: CO_A, body: { name: 'Dedup C', email: email('dedupC'), linkedin_url: li } });
+      check('POST /contacts distinct email + shared linkedin → new contact (201)', 'CP5',
+        c3.status === 201 && c3.json?.id && c3.json.id !== a?.id && c3.json.id !== b?.id,
+        `status=${c3.status} id=${c3.json?.id}`);
+    }
+
+    // 41 — CSV export not shadowed by the :id route (route-order regression)
+    {
+      const r = await fetch(BASE + '/api/crm/contacts/export?format=csv',
+        { headers: { 'x-internal-key': KEY, 'x-company-id': CO_A } });
+      const body = await r.text();
+      const lines = body.split('\n');
+      check('GET /contacts/export?format=csv returns CSV (header + rows, not :id 404)', 'CP5',
+        r.status === 200 && (r.headers.get('content-type') || '').includes('text/csv') &&
+        lines[0].startsWith('name,email') && lines.length > 1,
+        `status=${r.status} ct=${r.headers.get('content-type')} lines=${lines.length}`);
+    }
+
+    // 42 — 'mql' campaign-event type increments mql_count → mqls/mql_rate reportable
+    {
+      const camp = 'mqlcamp_' + RUN;
+      const r = await req('POST', '/api/crm/campaign-events', {
+        company: CO_A, body: [
+          { campaign_id: camp, channel: 'email', type: 'send' },
+          { campaign_id: camp, channel: 'email', type: 'mql' },
+        ],
+      });
+      const rep = await req('GET', '/api/crm/analytics/by-campaign?days=7', { company: CO_A });
+      const row = (rep.json?.campaigns || []).find(c => c.campaign_id === camp);
+      check("'mql' event type rolls up into mqls + mql_rate", 'CP5',
+        r.status === 202 && r.json?.accepted === 2 && row?.mqls === 1 && parseFloat(row?.mql_rate) === 100,
+        `accepted=${r.json?.accepted} row=${JSON.stringify(row)}`);
+    }
   }
 
   console.log(results.join('\n'));

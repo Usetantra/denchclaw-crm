@@ -142,6 +142,36 @@
   @media(max-width:700px){.a-grid{grid-template-columns:1fr}}
   .rate{font-size:11px;color:var(--ink-4)}
 
+  /* Contact detail modal */
+  .modal-wrap{position:fixed;inset:0;background:rgba(10,10,10,.44);z-index:40;display:none;
+              align-items:flex-start;justify-content:center;padding:6vh 16px}
+  .modal-wrap.open{display:flex}
+  .modal{background:#fff;border-radius:10px;max-width:760px;width:100%;max-height:84vh;overflow-y:auto;
+         box-shadow:0 24px 60px rgba(16,24,40,.28);padding:26px 28px}
+  .modal .mhead{display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:18px}
+  .modal .mhead h2{font-family:var(--serif);font-weight:400;font-size:26px;margin:0;line-height:1.2}
+  .modal .mhead .msub{color:var(--ink-4);font-size:13px;margin-top:3px}
+  .modal .mclose{border:none;background:none;font-size:22px;color:var(--ink-4);cursor:pointer;padding:2px 8px}
+  .modal .mclose:hover{color:var(--ink)}
+  .fgrid{display:grid;grid-template-columns:repeat(auto-fill,minmax(210px,1fr));gap:12px 20px;margin-bottom:22px}
+  .fgrid .f{border-top:1px solid var(--hair);padding-top:8px}
+  .fgrid .f .fl{font-size:10px;letter-spacing:.12em;text-transform:uppercase;color:var(--ink-4)}
+  .fgrid .f .fv{font-size:13px;color:var(--ink-2);margin-top:3px;word-break:break-word}
+  .feed{border:1px solid var(--hair);border-radius:var(--radius);max-height:300px;overflow-y:auto}
+  .feed .fitem{padding:10px 14px;border-bottom:1px solid var(--hair-2);font-size:13px}
+  .feed .fitem:last-child{border-bottom:none}
+  .feed .fitem .fmeta{color:var(--ink-4);font-size:11px;margin-top:2px}
+  .feed .fitem .ftype{display:inline-block;font-size:10px;font-weight:700;letter-spacing:.06em;text-transform:uppercase;
+        padding:1px 7px;border-radius:999px;background:var(--cold-bg);color:var(--cold);margin-right:7px}
+  .notebar{display:flex;gap:8px;margin-top:12px}
+  .notebar input{flex:1;border:1px solid var(--hair);border-radius:var(--radius);padding:9px 12px;font-size:13px;
+        outline:none;font-family:var(--sans)}
+  .notebar input:focus{border-color:var(--ink)}
+  .notebar button{background:var(--ink);border:none;color:#fff;border-radius:var(--radius);padding:0 16px;
+        font-size:11px;letter-spacing:.1em;text-transform:uppercase;font-weight:600;cursor:pointer;font-family:var(--sans)}
+  #contacts tbody tr{cursor:pointer}
+  #contacts tbody tr:hover{background:var(--hair-2)}
+
   /* Toast */
   .toast{position:fixed;bottom:22px;left:50%;transform:translateX(-50%);background:var(--ink);color:#fff;
          padding:11px 18px;border-radius:var(--radius);font-size:13px;z-index:50;opacity:0;
@@ -294,9 +324,26 @@
 
 <div class="toast" id="toast"></div>
 
+<!-- ── CONTACT DETAIL MODAL ─────────────────────────────────────────────── -->
+<div class="modal-wrap" id="modal-wrap">
+  <div class="modal">
+    <div class="mhead">
+      <div><h2 id="m-name">—</h2><div class="msub" id="m-sub"></div></div>
+      <button class="mclose" id="m-close" title="Close">×</button>
+    </div>
+    <div class="fgrid" id="m-fields"></div>
+    <div class="sechead" style="margin:8px 0 10px"><span class="eyebrow">Activity Feed</span><span class="rule"></span></div>
+    <div class="feed" id="m-feed"><div class="fitem muted">loading…</div></div>
+    <form class="notebar" id="m-noteform" autocomplete="off">
+      <input id="m-note" placeholder="Add a note to this contact…" />
+      <button type="submit">Add note</button>
+    </form>
+  </div>
+</div>
+
 <footer>
   <span class="eyebrow">DenchClaw CRM · Tantra RevOps</span>
-  <span>Read-only · <code>denchclaw-crm</code> on <code>127.0.0.1:3100</code> · <span id="refreshed"></span></span>
+  <span>Live dashboard · <code>denchclaw-crm</code> on <code>127.0.0.1:3100</code> · <span id="refreshed"></span></span>
 </footer>
 
 <script>
@@ -371,7 +418,7 @@ function renderPipeline(p){
   }).join("");
 }
 function renderContacts(list){
-  const rows=(list||[]).map(c=>`<tr>
+  const rows=(list||[]).map(c=>`<tr data-contact="${esc(c.id)}">
     <td>${esc(c.name||"—")}</td><td class="co">${esc(c.company_name||"")}</td>
     <td class="email">${esc(c.email||"")}</td>
     <td style="text-transform:capitalize">${esc(c.marketing_stage||c.deal_stage||"")}</td>
@@ -381,6 +428,58 @@ function renderContacts(list){
   $("#contacts tbody").innerHTML=rows||`<tr><td colspan="7" class="muted">No contacts yet.</td></tr>`;
 }
 
+// ── Contact detail modal ─────────────────────────────────────────────────────
+async function openContact(id){
+  if(!id)return;
+  const wrap=$("#modal-wrap");wrap.classList.add("open");wrap.dataset.contact=id;
+  $("#m-name").textContent="Loading…";$("#m-sub").textContent="";$("#m-fields").innerHTML="";
+  $("#m-feed").innerHTML=`<div class="fitem muted">loading…</div>`;
+  try{
+    const [c,act]=await Promise.all([get(`contacts/${id}`),get(`contacts/${id}/activity?limit=50`)]);
+    $("#m-name").textContent=c.name||c.email||"—";
+    $("#m-sub").textContent=[c.title,c.company_name].filter(Boolean).join(" · ");
+    const fields=[
+      ["Email",c.email],["Phone",c.phone],["Company",c.company_name],["Title",c.title],
+      ["LinkedIn",c.linkedin_url],["Source",c.source],
+      ["Marketing stage",nice(c.marketing_stage)],["Deal stage (legacy)",nice(c.deal_stage)],
+      ["Lead score",`${c.lead_score||"—"} (${c.lead_score_numeric??0})`],
+      ["Deal value",c.deal_value>0?`$${parseFloat(c.deal_value).toLocaleString()}`:"—"],
+      ["Tags",(c.tags||[]).join(", ")],
+      ["UTM source",c.utm_source],["UTM medium",c.utm_medium],["UTM campaign",c.utm_campaign],
+      ["Last contacted",c.last_contacted?fmtDate(c.last_contacted):"—"],
+      ["Next follow-up",c.next_follow_up?fmtDate(c.next_follow_up):"—"],
+      ["Created",fmtDate(c.created_at)],["Contact ID",c.id],
+    ];
+    $("#m-fields").innerHTML=fields.map(([l,v])=>`<div class="f"><div class="fl">${esc(l)}</div>
+      <div class="fv">${esc(v||"—")}</div></div>`).join("");
+    renderFeed(act.activity||[]);
+  }catch(e){$("#m-name").textContent="Error";$("#m-sub").textContent=e.message;}
+}
+function renderFeed(items){
+  $("#m-feed").innerHTML=(items||[]).map(a=>`<div class="fitem">
+    <span class="ftype">${esc(nice(a.type||"event"))}</span>${esc(a.message||"")}
+    <div class="fmeta">${a.channel?esc(a.channel)+" · ":""}${a.agent?esc(a.agent)+" · ":""}${new Date(a.created_at).toLocaleString()}</div>
+  </div>`).join("")||`<div class="fitem muted">No activity yet.</div>`;
+}
+function closeModal(){$("#modal-wrap").classList.remove("open");}
+$("#m-close").addEventListener("click",closeModal);
+$("#modal-wrap").addEventListener("click",e=>{if(e.target.id==="modal-wrap")closeModal();});
+document.addEventListener("keydown",e=>{if(e.key==="Escape")closeModal();});
+$("#m-noteform").addEventListener("submit",async e=>{
+  e.preventDefault();
+  const id=$("#modal-wrap").dataset.contact,msg=$("#m-note").value.trim();
+  if(!id||!msg)return;
+  try{
+    await post(`contacts/${id}/activity`,{type:"note",message:msg,agent:"dashboard"});
+    $("#m-note").value="";
+    const act=await get(`contacts/${id}/activity?limit=50`);
+    renderFeed(act.activity||[]);toast("Note added");
+  }catch(err){toast(err.message,true);}
+});
+$("#contacts").addEventListener("click",e=>{
+  const tr=e.target.closest("tr[data-contact]");if(tr)openContact(tr.dataset.contact);
+});
+
 // ── Board ────────────────────────────────────────────────────────────────────
 let boardView="sales";
 let BOARD_DATA={sales:{},marketing:{},contacts:[]};
@@ -388,14 +487,14 @@ let BOARD_DATA={sales:{},marketing:{},contacts:[]};
 function gcard(type,it,st){
   const color=STAGE_COLORS[st]||"#98a2b3";
   if(type==="deal"){
-    return `<div class="gcard" draggable="true" data-type="deal" data-id="${esc(it.id)}" data-stage="${st}" style="--cc:${color}">
+    return `<div class="gcard" draggable="true" data-type="deal" data-id="${esc(it.id)}" data-contact="${esc(it.contact_id||"")}" data-stage="${st}" style="--cc:${color}">
       <div class="gtitle">${esc(it.title||"—")}</div>
       ${parseFloat(it.value)>0?`<div class="gval">$${parseFloat(it.value).toLocaleString()}</div>`:""}
       ${it.contact_name?`<div class="gmeta"><span class="avatar">${esc(initials(it.contact_name))}</span><span class="gsub">${esc(it.contact_name)}</span></div>`:""}
     </div>`;
   }
   const sc=SCORE_COLORS[it.lead_score]||"#98a2b3";
-  return `<div class="gcard" draggable="true" data-type="contact" data-id="${esc(it.id)}" data-stage="${st}" style="--cc:${sc}">
+  return `<div class="gcard" draggable="true" data-type="contact" data-id="${esc(it.id)}" data-contact="${esc(it.id)}" data-stage="${st}" style="--cc:${sc}">
     <div class="gmeta" style="margin-top:0"><span class="avatar">${esc(initials(it.name))}</span>
       <span class="gtitle">${esc(it.name||"—")}</span></div>
     ${(it.company||it.company_name)?`<div class="gsub" style="margin-top:5px">${esc(it.company||it.company_name)}</div>`:""}
@@ -447,7 +546,13 @@ function initBoardDnD(){
     dragInfo={type:c.dataset.type,id:c.dataset.id,from:c.dataset.stage};c.classList.add("dragging");
     e.dataTransfer.effectAllowed="move";try{e.dataTransfer.setData("text/plain",c.dataset.id);}catch(_){}
   });
-  board.addEventListener("dragend",e=>{e.target.closest(".gcard")?.classList.remove("dragging");dragInfo=null;clearHi();});
+  board.addEventListener("dragend",e=>{e.target.closest(".gcard")?.classList.remove("dragging");
+    setTimeout(()=>{dragInfo=null;},50);clearHi();});
+  board.addEventListener("click",e=>{
+    if(dragInfo)return; // a drag just happened — not a click
+    const card=e.target.closest(".gcard[data-contact]");
+    if(card&&card.dataset.contact)openContact(card.dataset.contact);
+  });
   board.addEventListener("dragover",e=>{
     const col=e.target.closest(".gcol");if(!col||!dragInfo||col.dataset.type!==dragInfo.type)return;
     e.preventDefault();clearHi();col.classList.add("drop-ok");
@@ -516,9 +621,14 @@ $("#inbox-filters").addEventListener("click",e=>{
 });
 
 // ── Analytics ────────────────────────────────────────────────────────────────
-function renderFunnel(el,stages){
-  const max=Math.max(...(stages||[]).map(s=>s.count||0),1);
-  el.innerHTML=(stages||[]).map(s=>{
+function renderFunnel(el,stages,order){
+  // Render in pipeline order (the API GROUP BY returns rows unordered)
+  const sorted=order?[...(stages||[])].sort((a,b)=>{
+    const ia=order.indexOf(a.stage),ib=order.indexOf(b.stage);
+    return (ia===-1?99:ia)-(ib===-1?99:ib);
+  }):(stages||[]);
+  const max=Math.max(...sorted.map(s=>s.count||0),1);
+  el.innerHTML=sorted.map(s=>{
     const pct=Math.round((s.count||0)/max*100);
     const color=STAGE_COLORS[s.stage]||"#98a2b3";
     return `<div class="funnel-row">
@@ -545,8 +655,8 @@ async function loadAnalytics(){
     ];
     $("#a-cards").innerHTML=acards.map(k=>`<div class="card"><div class="label">${esc(k.label)}</div>
       <div class="value">${esc(k.value)}</div><div class="sub">${esc(k.sub)}</div></div>`).join("");
-    renderFunnel($("#funnel-marketing"),mkt.stages||[]);
-    renderFunnel($("#funnel-sales"),sales.stages||[]);
+    renderFunnel($("#funnel-marketing"),mkt.stages||[],MARKETING_STAGES);
+    renderFunnel($("#funnel-sales"),sales.stages||[],SALES_STAGES);
     // by channel
     const chRows=(byC.channels||[]).map(r=>`<tr>
       <td><span class="ch-badge">${esc(r.channel||"—")}</span></td>

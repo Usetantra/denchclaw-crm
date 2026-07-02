@@ -124,7 +124,9 @@ async function loadDeals(companyId, { limit = 500 } = {}) {
   if (!companyId) return [];
   const cap = Math.min(Math.max(parseInt(limit, 10) || 500, 1), 500);
   const { rows } = await query(
-    `SELECT * FROM deals WHERE company_id = $1 ORDER BY created_at DESC LIMIT $2`,
+    `SELECT d.*, c.name AS contact_display_name FROM deals d
+     LEFT JOIN contacts c ON c.id = d.contact_id
+     WHERE d.company_id = $1 ORDER BY d.created_at DESC LIMIT $2`,
     [companyId, cap]
   );
   return rows.map(r => {
@@ -133,7 +135,7 @@ async function loadDeals(companyId, { limit = 500 } = {}) {
       id: r.id,
       title: r.title,
       contact_id: r.contact_id,
-      contact_name: meta.contact_name || '',
+      contact_name: meta.contact_name || r.contact_display_name || '',
       value: parseFloat(r.value) || 0,
       stage: r.stage,
       notes: meta.notes || '',
@@ -153,6 +155,42 @@ function broadcast(req, message) {
 async function triggerStageAutomation(contact, oldStage, newStage) {
   console.log(`[CRM] Stage automation: ${contact.name || contact.email} ${oldStage} → ${newStage}`);
   // Automation hooks (Telegram, task queue, etc.) can be added here later
+}
+
+// Sales `nurture` off-ramp returns the contact to MARKETING's nurture queue
+// (per the pipeline spec: nurture from contacted/qualified/proposal → "Marketing's
+// nurture queue"). Applied whenever a deal enters 'nurture' (via /advance or
+// PATCH /deals/:id). Only fires when the marketing config allows the contact's
+// current stage → nurture (e.g. mql→nurture, segmented→nurture); otherwise the
+// contact's marketing stage is left untouched. Returns true when recycled.
+async function recycleContactToMarketingNurture(contactId, companyId, { dealId = null, actor = 'system' } = {}) {
+  if (!contactId) return false;
+  try {
+    const contact = await contactDb.getById(contactId, companyId);
+    if (!contact) return false;
+    const currentStage = contact.marketing_stage || 'sourced';
+    if (currentStage === 'nurture') return false; // already there
+    const pipeline = await getPipelineConfig(companyId, 'marketing');
+    if (!pipeline) return false;
+    const allowed = getPipelineTransitions(pipeline, currentStage);
+    if (!allowed.includes('nurture')) return false;
+    await query(
+      `UPDATE contacts SET marketing_stage='nurture', deal_stage='nurture', updated_at=now()
+       WHERE id=$1 AND company_id=$2`,
+      [contactId, companyId]
+    );
+    await addContactActivity(contactId, companyId, {
+      type: 'stage_change',
+      message: `Marketing stage: ${currentStage} → nurture (recycled from sales nurture off-ramp)`,
+      agent: actor,
+      channel: null,
+      data: { pipeline_key: 'marketing', from: currentStage, to: 'nurture', deal_id: dealId, reason: 'sales_nurture_offramp' },
+    });
+    return true;
+  } catch (err) {
+    console.error('[CRM] recycleContactToMarketingNurture error:', err.message);
+    return false;
+  }
 }
 
 // ─── CONTACTS ────────────────────────────────────────────────────────────────
@@ -233,7 +271,10 @@ router.post('/contacts', validate(), async (req, res) => {
     if (email) {
       existing = await contactDb.getByEmail(email, companyId);
     }
-    if (!existing && linkedin_url) {
+    // LinkedIn fallback only when the incoming record has NO email — email is
+    // the authoritative dedupe key; distinct emails never merge (see
+    // findOrCreateContact below for the same rule).
+    if (!existing && !email && linkedin_url) {
       const allContacts = await contactDb.list(companyId, { search: linkedin_url });
       existing = allContacts.find(c => c.linkedin_url && c.linkedin_url.toLowerCase() === linkedin_url.toLowerCase()) || null;
     }
@@ -336,6 +377,34 @@ router.get('/contacts/follow-ups', async (req, res) => {
   } catch (err) {
     console.error('[CRM] GET /contacts/follow-ups error:', err.message);
     res.status(500).json({ error: 'failed to load follow-ups' });
+  }
+});
+
+// GET /api/crm/contacts/export — MUST be before :id route (else ':id' captures 'export')
+router.get('/contacts/export', async (req, res) => {
+  try {
+    const companyId = getUserCompanyId(req);
+    if (!companyId) return res.status(401).json({ error: 'Authentication required' });
+    const contacts = await contactDb.list(companyId, {});
+    const { format } = req.query;
+    if (format === 'csv') {
+      const csvSafe = (val) => {
+        const s = String(val || '').replace(/"/g, '""');
+        if (/^[=+\-@\t\r]/.test(s)) return `'${s}`;
+        return s;
+      };
+      const headers = 'name,email,phone,company,source,lead_score,deal_stage,engagementScore,utmSource,tags,created_at';
+      const rows = contacts.map(c =>
+        `"${csvSafe(c.name)}","${csvSafe(c.email)}","${csvSafe(c.phone)}","${csvSafe(c.company_name)}","${csvSafe(c.source)}","${csvSafe(c.lead_score)}","${csvSafe(c.deal_stage)}",${c.lead_score_numeric || 0},"${csvSafe(c.utm_source)}","${csvSafe((c.tags || []).join(';'))}","${csvSafe(c.created_at)}"`
+      );
+      res.setHeader('Content-Type', 'text/csv');
+      res.send([headers, ...rows].join('\n'));
+    } else {
+      res.json({ total: contacts.length, contacts });
+    }
+  } catch (err) {
+    console.error('[CRM] GET /contacts/export error:', err.message);
+    res.status(500).json({ error: 'failed to export contacts' });
   }
 });
 
@@ -553,7 +622,16 @@ router.post('/contacts/:id/advance', async (req, res) => {
         data: { pipeline_key, deal_id: deal.id, from: currentStage, to: stage, reason: reason || null },
       });
 
-      return res.json({ contact_id: contact.id, deal_id: deal.id, pipeline_key, stage, previous: currentStage, changed: true });
+      // Sales nurture off-ramp → recycle the contact to marketing's nurture queue.
+      let marketing_recycled;
+      if (stage === 'nurture') {
+        marketing_recycled = await recycleContactToMarketingNurture(contact.id, companyId, { dealId: deal.id, actor: actor || 'system' });
+      }
+
+      return res.json({
+        contact_id: contact.id, deal_id: deal.id, pipeline_key, stage, previous: currentStage, changed: true,
+        ...(marketing_recycled !== undefined ? { marketing_recycled } : {}),
+      });
     }
 
     return res.status(400).json({ error: `Unknown pipeline_key '${pipeline_key}' — use 'marketing' or 'sales'` });
@@ -716,6 +794,10 @@ router.patch('/deals/:id', async (req, res) => {
           channel: 'crm',
           data: { deal_id: deal.id, old_stage: oldStage, new_stage: newStage, value: deal.value }
         }, companyId);
+        // Sales nurture off-ramp → recycle the contact to marketing's nurture queue.
+        if (newStage === 'nurture') {
+          await recycleContactToMarketingNurture(deal.contact_id, companyId, { dealId: deal.id });
+        }
       }
     }
 
@@ -1236,33 +1318,7 @@ router.post('/contacts/bulk-import', async (req, res) => {
   res.json({ ok: true, created, updated, errors, total: inputContacts.length });
 });
 
-// GET /api/crm/contacts/export
-router.get('/contacts/export', async (req, res) => {
-  try {
-    const companyId = getUserCompanyId(req);
-    if (!companyId) return res.status(401).json({ error: 'Authentication required' });
-    const contacts = await contactDb.list(companyId, {});
-    const { format } = req.query;
-    if (format === 'csv') {
-      const csvSafe = (val) => {
-        const s = String(val || '').replace(/"/g, '""');
-        if (/^[=+\-@\t\r]/.test(s)) return `'${s}`;
-        return s;
-      };
-      const headers = 'name,email,phone,company,source,lead_score,deal_stage,engagementScore,utmSource,tags,created_at';
-      const rows = contacts.map(c =>
-        `"${csvSafe(c.name)}","${csvSafe(c.email)}","${csvSafe(c.phone)}","${csvSafe(c.company_name)}","${csvSafe(c.source)}","${csvSafe(c.lead_score)}","${csvSafe(c.deal_stage)}",${c.lead_score_numeric || 0},"${csvSafe(c.utm_source)}","${csvSafe((c.tags || []).join(';'))}","${csvSafe(c.created_at)}"`
-      );
-      res.setHeader('Content-Type', 'text/csv');
-      res.send([headers, ...rows].join('\n'));
-    } else {
-      res.json({ total: contacts.length, contacts });
-    }
-  } catch (err) {
-    console.error('[CRM] GET /contacts/export error:', err.message);
-    res.status(500).json({ error: 'failed to export contacts' });
-  }
-});
+// (GET /contacts/export moved above the /contacts/:id route — ':id' was capturing 'export')
 
 // ─── Exported helpers ─────────────────────────────────────────────────────────
 
@@ -1276,7 +1332,12 @@ async function findOrCreateContact(email, defaults = {}) {
 
   let contact = email ? await contactDb.getByEmail(email, companyId) : null;
 
-  if (!contact && (defaults.phone || defaults.linkedin_url)) {
+  // Email is the AUTHORITATIVE dedupe key. The phone/linkedin fallback only
+  // fires when the incoming record has NO email — two records with distinct
+  // non-empty emails must never merge, even if they share a phone or LinkedIn
+  // profile (real case: two prospects on one device / one profile scraped for
+  // several dot-alias emails). Mirrors the automation_core BUG-1 fix.
+  if (!contact && !email && (defaults.phone || defaults.linkedin_url)) {
     const allContacts = await contactDb.list(companyId, {});
     if (!contact && defaults.phone) {
       const normalized = defaults.phone.replace(/\D/g, '');
