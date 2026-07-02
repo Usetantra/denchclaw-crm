@@ -624,8 +624,11 @@ router.post('/contacts/:id/advance', async (req, res) => {
     }
 
     if (pipeline_key === 'sales') {
+      // Built-in sales pipeline only — deals parked in a custom pipeline
+      // (migration 009) are not governed by the sales state machine.
       const dealRes = await query(
         `SELECT * FROM deals WHERE contact_id=$1 AND company_id=$2 AND stage NOT IN ('won','lost')
+           AND (pipeline_key IS NULL OR pipeline_key='sales')
          ORDER BY created_at DESC LIMIT 1`,
         [contact.id, companyId]
       );
@@ -881,8 +884,10 @@ router.patch('/deals/:id', async (req, res) => {
           channel: 'crm',
           data: { deal_id: deal.id, old_stage: oldStage, new_stage: newStage, value: deal.value }
         }, companyId);
-        // Sales nurture off-ramp → recycle the contact to marketing's nurture queue.
-        if (newStage === 'nurture') {
+        // Sales nurture off-ramp → recycle the contact to marketing's nurture
+        // queue. Built-in sales pipeline only — a custom pipeline (009) may
+        // name a stage 'nurture' without marketing-recycle semantics.
+        if (newStage === 'nurture' && !deal.pipeline_key) {
           await recycleContactToMarketingNurture(deal.contact_id, companyId, { dealId: deal.id });
         }
       }
@@ -1224,7 +1229,8 @@ router.post('/prospect-inbox/claim', validate(), async (req, res) => {
         try {
           const existing = await query(
             `SELECT id FROM deals WHERE contact_id=$1 AND company_id=$2
-             AND stage NOT IN ('won','lost') LIMIT 1`,
+             AND stage NOT IN ('won','lost')
+             AND (pipeline_key IS NULL OR pipeline_key='sales') LIMIT 1`,
             [row.contact_id, companyId]
           );
           if (existing.rows.length === 0) {

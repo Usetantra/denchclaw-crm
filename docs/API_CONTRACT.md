@@ -174,7 +174,7 @@ CRM-owned queue (`prospect_inbox`, migration 002). `target_engine` NULL = broadc
 
 | Method · Path | Purpose | Notes |
 |---|---|---|
-| POST `/campaign-events` | ingest one event **or an array** | types: `send, deliver, open, click, reply, bounce, unsub, suppressed, mql` (`mql` ⇒ `mql_count`, migration 008); writes raw `campaign_events` + upserts per-`(company, campaign, channel, segment, day)` rollup; ⇒ **202** `{ok, accepted, total}` |
+| POST `/campaign-events` | ingest one event **or an array** | types: `send, deliver, open, click, reply, bounce, unsub, suppressed, mql` (`mql` ⇒ `mql_count`, migration 010); writes raw `campaign_events` + upserts per-`(company, campaign, channel, segment, day)` rollup; ⇒ **202** `{ok, accepted, total}` |
 | GET `/analytics/overview` | 30-day totals + open/reply/bounce rates | |
 | GET `/analytics/by-channel?days=` | per-channel rollups | |
 | GET `/analytics/by-campaign?days=` | per-campaign rollups (incl. `mql_rate`) | |
@@ -222,7 +222,7 @@ complete_handoff`.
   `/advance` response); email made the authoritative dedupe key in
   `POST /contacts` + `bulk-import` (phone/linkedin fallback only when email
   absent — BUG-1 class); `GET /contacts/export` un-shadowed from the `:id`
-  route; `mql` campaign-event type added (migration **008**) so `mqls`/`mql_rate`
+  route; `mql` campaign-event type added (migration **010**) so `mqls`/`mql_rate`
   report; deal listings fall back to the contact's name for display; dashboard
   gained a contact-detail modal (fields + activity feed + notes).
 - **2026-07-02** — Rewritten for the two-pipeline model (migrations 003–007):

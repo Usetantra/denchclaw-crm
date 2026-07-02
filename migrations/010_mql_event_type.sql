@@ -1,4 +1,4 @@
--- DenchClaw CRM — migration 008: 'mql' campaign-event type
+-- DenchClaw CRM — migration 010: 'mql' campaign-event type
 -- The rollup table has carried mql_count since 005 and /analytics reports
 -- mqls + mql_rate, but no event type could increment it — the analytics MQL
 -- metrics were stuck at 0. Engines now report an MQL conversion as a

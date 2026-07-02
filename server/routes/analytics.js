@@ -175,6 +175,7 @@ router.get('/analytics/funnel', async (req, res) => {
       const { rows } = await query(
         `SELECT stage, COUNT(*)::int AS count, SUM(value)::numeric AS total_value
          FROM deals WHERE company_id = $1
+           AND (pipeline_key IS NULL OR pipeline_key = 'sales')
          GROUP BY stage`,
         [companyId]
       );
