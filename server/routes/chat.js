@@ -17,6 +17,7 @@ const express = require('express');
 const router = express.Router();
 const contactDb = require('../db/models/contacts');
 const { requireAuth, getUserCompanyId, INTERNAL_API_KEY } = require('../middleware/auth');
+const { getPipelineConfig } = require('../db/pipeline');
 
 router.use(requireAuth);
 
@@ -28,8 +29,27 @@ const MAX_CONTEXT_CONTACTS = 80;
 // Loopback base for internal self-calls — 127.0.0.1 satisfies the auth CIDR gate.
 const SELF_BASE = `http://127.0.0.1:${process.env.PORT || 3100}/api/crm`;
 
-const DEAL_STAGES = ['lead', 'contacted', 'qualified', 'no_show', 'unqualified', 'proposal', 'proposal_accepted', 'negotiation', 'onboarding', 'won', 'lost'];
+// Fallback only — the live list is derived from crm_pipeline_configs per
+// request (via the shared 60s-TTL loader) so the prompt tracks the seeded
+// configs instead of a hardcoded list. 'lead'/'proposal_accepted' are legacy
+// stages contacts can still sit in.
+const FALLBACK_DEAL_STAGES = ['lead', 'accepted', 'contacted', 'booked', 'qualified', 'no_show', 'unqualified', 'proposal', 'proposal_accepted', 'negotiation', 'onboarding', 'won', 'lost', 'nurture'];
 const LEAD_SCORES = ['hot', 'warm', 'neutral', 'cold'];
+
+// Build the deal-stage vocabulary from the sales pipeline JSONB config (same
+// authority as POST /advance and PATCH {deal_stage}). 'lead' is kept as the
+// legacy default stage new contacts start in. Falls back to the static list
+// when configs are absent/unreadable.
+async function getDealStages(companyId) {
+  try {
+    const pipeline = await getPipelineConfig(companyId, 'sales');
+    if (pipeline && Array.isArray(pipeline.stages) && pipeline.stages.length) {
+      const keys = pipeline.stages.map(s => s.key).filter(Boolean);
+      if (keys.length) return keys.includes('lead') ? keys : ['lead', ...keys];
+    }
+  } catch (_e) { /* fall through */ }
+  return FALLBACK_DEAL_STAGES;
+}
 const WRITE_TOOLS = new Set(['create_contact', 'update_contact', 'add_note', 'delete_contact']);
 
 function compactContact(c) {
@@ -74,7 +94,7 @@ function systemPrompt(ctx) {
     '- add_note        args: {contact_id? | email? | name?, message}',
     '- delete_contact  args: {email? | contact_id? | name?}   (PERMANENT — see DELETING below)',
     '- find_contacts   args: {query?, stage?, limit?}   (use only if the snapshot lacks a specific person)',
-    `  deal_stage must be one of: ${DEAL_STAGES.join(', ')}.`,
+    `  deal_stage must be one of: ${(ctx._dealStages || FALLBACK_DEAL_STAGES).join(', ')}.`,
     `  lead_score must be one of: ${LEAD_SCORES.join(', ')}.`,
     '  next_follow_up must be an ISO date like 2026-07-15.',
     '',
@@ -388,6 +408,7 @@ router.post('/', async (req, res) => {
 
     const ctx = await buildContext(companyId);
     ctx._companyId = companyId;
+    ctx._dealStages = await getDealStages(companyId);
     const { reply, actions } = await runChat(convo, companyId, ctx);
     res.json({ reply, model: CF_MODEL, actions, context: { contactCount: ctx.contactCount } });
   } catch (err) {
