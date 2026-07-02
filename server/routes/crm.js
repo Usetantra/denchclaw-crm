@@ -4,6 +4,7 @@ const router = express.Router();
 const { v4: uuidv4 } = require('uuid');
 const contactDb = require('../db/models/contacts');
 const { query } = require('../db/index');
+const { getPipelineConfig, getPipelineTransitions } = require('../db/pipeline');
 
 const { requireAuth, getUserCompanyId } = require('../middleware/auth');
 
@@ -15,7 +16,7 @@ const validate = () => (req, res, next) => next();
 
 const LEAD_SCORES = { hot: 90, warm: 60, neutral: 30, cold: 10, negative: 0 };
 
-const DEFAULT_DEAL_STAGES = ['lead', 'contacted', 'qualified', 'no_show', 'unqualified', 'proposal', 'proposal_accepted', 'negotiation', 'onboarding', 'won', 'lost'];
+const DEFAULT_DEAL_STAGES = ['lead', 'accepted', 'contacted', 'booked', 'qualified', 'no_show', 'unqualified', 'proposal', 'proposal_accepted', 'negotiation', 'onboarding', 'won', 'lost', 'nurture'];
 const DEAL_STAGES = DEFAULT_DEAL_STAGES;
 const SOURCES = ['expandi', 'instantly', 'linkedin', 'website', 'referral', 'manual', 'webinar', 'whatsapp', 'sms', 'content',
   'cold_email_prospect', 'cold_calendar_prospect', 'linkedin_prospect', 'linkedin_engagement',
@@ -93,36 +94,8 @@ async function getPipelineStages(companyId) {
   return entry;
 }
 
-// Named pipeline config cache — keyed by `companyId:pipelineKey`
-const _pipelineConfigCache = new Map();
-
-// Load a pipeline config by stable key. Prefers company-specific config over global defaults.
-async function getPipelineConfig(companyId, pipelineKey) {
-  const cacheKey = `${companyId}:${pipelineKey}`;
-  const cached = _pipelineConfigCache.get(cacheKey);
-  if (cached && Date.now() - cached.fetchedAt < PIPELINE_TTL_MS) return cached;
-
-  try {
-    const r = await query(
-      `SELECT stages FROM crm_pipeline_configs
-       WHERE key = $1 AND (company_id = $2 OR company_id IS NULL)
-       ORDER BY CASE WHEN company_id = $2 THEN 0 ELSE 1 END, created_at ASC
-       LIMIT 1`,
-      [pipelineKey, companyId]
-    );
-    if (!r.rows[0]) return null;
-    const stages = Array.isArray(r.rows[0].stages) ? r.rows[0].stages : [];
-    const entry = { stages, fetchedAt: Date.now() };
-    _pipelineConfigCache.set(cacheKey, entry);
-    return entry;
-  } catch (_e) { return null; }
-}
-
-// Return allowed next-stage keys from a loaded pipeline config.
-function getPipelineTransitions(pipeline, currentStage) {
-  const s = pipeline.stages.find(s => s.key === currentStage);
-  return s ? (s.transitions || []) : [];
-}
+// getPipelineConfig and getPipelineTransitions live in server/db/pipeline.js
+// (imported above) so conversations.js can share the same cached loader.
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 
@@ -691,6 +664,20 @@ router.patch('/deals/:id', async (req, res) => {
     if (updates.stage && updates.stage !== deal.stage) {
       const oldStage = deal.stage;
       const newStage = updates.stage;
+
+      // Enforce sales pipeline transitions from JSONB (same source as /advance).
+      const salesPipeline = await getPipelineConfig(companyId, 'sales');
+      if (salesPipeline) {
+        const allowed = getPipelineTransitions(salesPipeline, oldStage);
+        if (!allowed.includes(newStage)) {
+          return res.status(409).json({
+            error: `Invalid stage transition: ${oldStage} → ${newStage}`,
+            allowed_transitions: allowed,
+            current_stage: oldStage,
+          });
+        }
+      }
+
       deal.activity.push({
         type: 'stage_change',
         message: `Stage: ${oldStage} → ${newStage}`,
@@ -731,36 +718,86 @@ router.patch('/deals/:id', async (req, res) => {
 });
 
 // GET /api/crm/stats
+// Reads from targeted COUNT queries + rollup table — no full-table scans.
 router.get('/stats', async (req, res) => {
   try {
     const companyId = getUserCompanyId(req);
     if (!companyId) return res.status(401).json({ error: 'Authentication required' });
-    const contacts = await contactDb.list(companyId, {});
-    const deals = await loadDeals(companyId);
 
-    const now = new Date();
-    const dayAgo = new Date(now - 86400000);
-    const weekAgo = new Date(now - 604800000);
+    const [contactSummary, contactBySource, contactByStage,
+           dealSummary, dealByStage, campaignSummary] = await Promise.all([
+      query(
+        `SELECT
+           COUNT(*)::int                                                        AS total,
+           COUNT(*) FILTER (WHERE lead_score = 'hot')::int                     AS hot,
+           COUNT(*) FILTER (WHERE lead_score = 'warm')::int                    AS warm,
+           COUNT(*) FILTER (WHERE created_at > now() - interval '1 day')::int  AS new_today,
+           COUNT(*) FILTER (WHERE created_at > now() - interval '7 days')::int AS new_this_week
+         FROM contacts WHERE company_id = $1 AND deleted_at IS NULL`,
+        [companyId]
+      ),
+      query(
+        `SELECT source, COUNT(*)::int AS count FROM contacts
+         WHERE company_id = $1 AND deleted_at IS NULL GROUP BY source`,
+        [companyId]
+      ),
+      query(
+        `SELECT marketing_stage AS stage, COUNT(*)::int AS count FROM contacts
+         WHERE company_id = $1 AND deleted_at IS NULL GROUP BY marketing_stage`,
+        [companyId]
+      ),
+      query(
+        `SELECT
+           COUNT(*)::int                                                             AS total,
+           COUNT(*) FILTER (WHERE stage NOT IN ('won','lost'))::int                 AS open,
+           COUNT(*) FILTER (WHERE stage = 'won')::int                               AS won,
+           COUNT(*) FILTER (WHERE stage = 'lost')::int                              AS lost,
+           COALESCE(SUM(value) FILTER (WHERE stage NOT IN ('won','lost')), 0)::numeric AS pipeline_value,
+           COALESCE(SUM(value) FILTER (WHERE stage = 'won'), 0)::numeric            AS won_value
+         FROM deals WHERE company_id = $1`,
+        [companyId]
+      ),
+      query(
+        `SELECT stage, COUNT(*)::int AS count FROM deals
+         WHERE company_id = $1 GROUP BY stage`,
+        [companyId]
+      ),
+      query(
+        `SELECT
+           COALESCE(SUM(sends), 0)::int   AS total_sends,
+           COALESCE(SUM(opens), 0)::int   AS total_opens,
+           COALESCE(SUM(replies), 0)::int AS total_replies,
+           COALESCE(SUM(bounces), 0)::int AS total_bounces,
+           COALESCE(SUM(mql_count), 0)::int AS total_mqls
+         FROM campaign_event_rollups
+         WHERE company_id = $1 AND day >= CURRENT_DATE - interval '30 days'`,
+        [companyId]
+      ),
+    ]);
+
+    const cs = contactSummary.rows[0] || {};
+    const ds = dealSummary.rows[0] || {};
 
     res.json({
       contacts: {
-        total: contacts.length,
-        hot: contacts.filter(c => (c.lead_score || c.leadScore) === 'hot').length,
-        warm: contacts.filter(c => (c.lead_score || c.leadScore) === 'warm').length,
-        new_today: contacts.filter(c => new Date(c.created_at) > dayAgo).length,
-        new_this_week: contacts.filter(c => new Date(c.created_at) > weekAgo).length,
-        by_source: contacts.reduce((acc, c) => { acc[c.source] = (acc[c.source] || 0) + 1; return acc; }, {}),
-        by_stage: contacts.reduce((acc, c) => { const stg = c.deal_stage || c.dealStage || 'lead'; acc[stg] = (acc[stg] || 0) + 1; return acc; }, {})
+        total: cs.total || 0,
+        hot: cs.hot || 0,
+        warm: cs.warm || 0,
+        new_today: cs.new_today || 0,
+        new_this_week: cs.new_this_week || 0,
+        by_source: contactBySource.rows.reduce((a, r) => { a[r.source || 'unknown'] = r.count; return a; }, {}),
+        by_stage: contactByStage.rows.reduce((a, r) => { a[r.stage || 'unknown'] = r.count; return a; }, {}),
       },
       deals: {
-        total: deals.length,
-        open: deals.filter(d => !['won', 'lost'].includes(d.stage)).length,
-        won: deals.filter(d => d.stage === 'won').length,
-        lost: deals.filter(d => d.stage === 'lost').length,
-        pipeline_value: deals.filter(d => !['won', 'lost'].includes(d.stage)).reduce((s, d) => s + (d.value || 0), 0),
-        won_value: deals.filter(d => d.stage === 'won').reduce((s, d) => s + (d.value || 0), 0),
-        by_stage: DEAL_STAGES.reduce((acc, s) => { acc[s] = deals.filter(d => d.stage === s).length; return acc; }, {})
-      }
+        total: ds.total || 0,
+        open: ds.open || 0,
+        won: ds.won || 0,
+        lost: ds.lost || 0,
+        pipeline_value: parseFloat(ds.pipeline_value) || 0,
+        won_value: parseFloat(ds.won_value) || 0,
+        by_stage: dealByStage.rows.reduce((a, r) => { a[r.stage] = r.count; return a; }, {}),
+      },
+      campaign_last_30d: campaignSummary.rows[0] || {},
     });
   } catch (err) {
     console.error('[CRM] GET /stats error:', err.message);
@@ -851,7 +888,7 @@ router.get('/pipeline', async (req, res) => {
       const pipelineConfig = await getPipelineConfig(companyId, 'sales');
       const stages = pipelineConfig
         ? pipelineConfig.stages.map(s => s.key)
-        : ['accepted','contacted','qualified','proposal','negotiation','onboarding','won','lost','no_show','unqualified'];
+        : ['accepted','contacted','booked','qualified','proposal','negotiation','onboarding','won','lost','no_show','unqualified','nurture'];
       const deals = await loadDeals(companyId);
       const pipeline = {};
       stages.forEach(stage => {

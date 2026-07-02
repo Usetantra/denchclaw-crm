@@ -6,6 +6,7 @@ const { v4: uuidv4 } = require('uuid');
 const { query } = require('../db/index');
 const { requireAuth, getUserCompanyId } = require('../middleware/auth');
 const contactDb = require('../db/models/contacts');
+const { getPipelineConfig, getPipelineTransitions } = require('../db/pipeline');
 
 router.use(requireAuth);
 
@@ -187,18 +188,39 @@ router.post('/conversations/:id/messages', async (req, res) => {
       convParams
     );
 
-    // For inbound messages: return the contact's active campaign enrollments so the
-    // engine can suppress competing outbound on other channels (over-messaging guard).
+    // For inbound messages: advance marketing stage to 'responded' if valid, then
+    // return active campaign tags so the engine can suppress competing outbound.
     let active_campaigns = [];
     if (direction === 'inbound') {
-      const contactRes = await query(
-        `SELECT tags FROM contacts WHERE id = $1 AND company_id = $2`,
-        [conv.contact_id, companyId]
-      );
-      const tags = contactRes.rows[0]?.tags || [];
-      active_campaigns = tags
-        .filter(t => String(t).startsWith('campaign:'))
-        .map(t => t.replace('campaign:', ''));
+      const contact = await contactDb.getById(conv.contact_id, companyId);
+      if (contact) {
+        // Stage advance: responded is only reachable from engaged per the marketing pipeline.
+        try {
+          const pipeline = await getPipelineConfig(companyId, 'marketing');
+          if (pipeline) {
+            const currentStage = contact.marketing_stage || 'sourced';
+            const allowed = getPipelineTransitions(pipeline, currentStage);
+            if (allowed.includes('responded')) {
+              await query(
+                `UPDATE contacts SET marketing_stage = 'responded', deal_stage = 'responded',
+                  updated_at = now() WHERE id = $1 AND company_id = $2`,
+                [conv.contact_id, companyId]
+              );
+              await contactDb.addActivity(conv.contact_id, {
+                type: 'stage_change',
+                message: `Stage: ${currentStage} → responded (inbound reply)`,
+                channel: channel || null,
+                data: { pipeline_key: 'marketing', from: currentStage, to: 'responded' },
+              }, companyId);
+            }
+          }
+        } catch (_e) { /* non-blocking — message already persisted */ }
+
+        const tags = contact.tags || [];
+        active_campaigns = tags
+          .filter(t => String(t).startsWith('campaign:'))
+          .map(t => t.replace('campaign:', ''));
+      }
     }
 
     return res.status(201).json({ message, active_campaigns });
