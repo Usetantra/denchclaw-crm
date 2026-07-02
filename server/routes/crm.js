@@ -88,9 +88,13 @@ async function getPipelineStages(companyId) {
   let stages = DEFAULT_DEAL_STAGES.slice();
   let transitions = { ...DEFAULT_STAGE_TRANSITIONS };
   try {
+    // Scope to the tenant's SALES config only. This keeps GET /pipeline/transitions
+    // (the automation_core drift contract) canonical: a fresh tenant has no
+    // company 'sales' row → falls back to DEFAULT_* below; custom deal pipelines
+    // (other keys) can never leak into this endpoint.
     const r = await query(
       `SELECT stages FROM crm_pipeline_configs
-        WHERE company_id = $1
+        WHERE company_id = $1 AND key = 'sales'
         ORDER BY is_default DESC, created_at ASC LIMIT 1`,
       [companyId]
     );
@@ -136,6 +140,7 @@ async function loadDeals(companyId, { limit = 500 } = {}) {
       contact_name: meta.contact_name || '',
       value: parseFloat(r.value) || 0,
       stage: r.stage,
+      pipeline_key: r.pipeline_key || null,
       notes: meta.notes || '',
       activity: meta.activity || [],
       companyId: r.company_id,
@@ -349,6 +354,39 @@ router.get('/contacts/:id', async (req, res) => {
   } catch (err) {
     console.error('[CRM] GET /contacts/:id error:', err.message);
     res.status(500).json({ error: 'failed to load contact' });
+  }
+});
+
+// POST /api/crm/contacts/bulk — { action:'delete'|'tag', ids:[], value? }
+// Stage changes are intentionally NOT bulk-editable here: a contact's pipeline
+// position is governed by the marketing/sales advance state machines
+// (POST /contacts/:id/advance, PATCH /deals/:id), not a free-set on the list.
+router.post('/contacts/bulk', async (req, res) => {
+  try {
+    const companyId = getUserCompanyId(req);
+    if (!companyId) return res.status(401).json({ error: 'Authentication required' });
+    const { action, ids, value } = req.body || {};
+    if (!Array.isArray(ids) || !ids.length) return res.status(400).json({ error: 'ids required' });
+
+    let affected = 0;
+    if (action === 'delete') {
+      const r = await query('DELETE FROM contacts WHERE company_id = $1 AND id = ANY($2::uuid[])', [companyId, ids]);
+      affected = r.rowCount;
+    } else if (action === 'tag') {
+      if (!value) return res.status(400).json({ error: 'value (tag) required' });
+      const r = await query(
+        `UPDATE contacts SET tags = (SELECT ARRAY(SELECT DISTINCT unnest(COALESCE(tags,'{}') || $1::text[]))),
+                updated_at = NOW() WHERE company_id = $2 AND id = ANY($3::uuid[])`,
+        [[value], companyId, ids]
+      );
+      affected = r.rowCount;
+    } else {
+      return res.status(400).json({ error: `unknown action: ${action}` });
+    }
+    res.json({ ok: true, affected });
+  } catch (err) {
+    console.error('[CRM] POST /contacts/bulk error:', err.message);
+    res.status(500).json({ error: 'bulk action failed' });
   }
 });
 
@@ -598,8 +636,20 @@ router.get('/deals', async (req, res) => {
 // POST /api/crm/deals
 router.post('/deals', validate(), async (req, res) => {
   try {
+    const companyId = getUserCompanyId(req);
     const { title, contact_id, contact_name, value, stage, notes } = req.body;
     if (!title) return res.status(400).json({ error: 'title required' });
+
+    // Which pipeline does this deal live in? Default (null) = built-in sales.
+    const pipelineKey = req.body.pipeline_key && req.body.pipeline_key !== 'sales' ? req.body.pipeline_key : null;
+    let initialStage;
+    if (pipelineKey) {
+      const cfg = await getPipelineConfig(companyId, pipelineKey);
+      const keys = cfg ? cfg.stages.map(s => s.key) : [];
+      initialStage = (stage && keys.includes(stage)) ? stage : (keys[0] || 'lead');
+    } else {
+      initialStage = DEAL_STAGES.includes(stage) ? stage : 'lead';
+    }
 
     const deal = {
       id: uuidv4(),
@@ -607,22 +657,22 @@ router.post('/deals', validate(), async (req, res) => {
       contact_id: contact_id || null,
       contact_name: contact_name || '',
       value: value || 0,
-      stage: DEAL_STAGES.includes(stage) ? stage : 'lead',
+      stage: initialStage,
+      pipeline_key: pipelineKey,
       notes: notes || '',
       activity: [
         { type: 'created', message: 'Deal created', timestamp: new Date().toISOString() }
       ],
-      companyId: getUserCompanyId(req),
+      companyId,
       created_at: new Date().toISOString(),
       updated_at: new Date().toISOString(),
       closed_at: null
     };
 
     await query(
-      `INSERT INTO deals (id, company_id, contact_id, title, value, stage, source, metadata, created_at, updated_at)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,NOW(),NOW())
-       ON CONFLICT (id) DO UPDATE SET stage=$6, value=$5, updated_at=NOW()`,
-      [deal.id, deal.companyId, deal.contact_id, deal.title, deal.value, deal.stage, 'crm',
+      `INSERT INTO deals (id, company_id, contact_id, title, value, stage, pipeline_key, source, metadata, created_at, updated_at)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,NOW(),NOW())`,
+      [deal.id, deal.companyId, deal.contact_id, deal.title, deal.value, deal.stage, deal.pipeline_key, 'crm',
        JSON.stringify({ contact_name: deal.contact_name, notes: deal.notes, activity: deal.activity })]
     );
 
@@ -667,7 +717,8 @@ router.patch('/deals/:id', async (req, res) => {
     const deal = {
       id: row.id, title: row.title, contact_id: row.contact_id,
       contact_name: meta.contact_name || '', value: parseFloat(row.value) || 0,
-      stage: row.stage, notes: meta.notes || '', activity: meta.activity || [],
+      stage: row.stage, pipeline_key: row.pipeline_key || null,
+      notes: meta.notes || '', activity: meta.activity || [],
       companyId: row.company_id, created_at: row.created_at, updated_at: row.updated_at,
       closed_at: meta.closed_at || null,
     };
@@ -679,21 +730,29 @@ router.patch('/deals/:id', async (req, res) => {
     if (updates.notes) deal.notes = updates.notes;
     if (updates.contact_id) deal.contact_id = updates.contact_id;
     if (updates.contact_name) deal.contact_name = updates.contact_name;
+    // Move a deal to a different pipeline (null / 'sales' => built-in sales).
+    if (updates.pipeline_key !== undefined) {
+      deal.pipeline_key = updates.pipeline_key && updates.pipeline_key !== 'sales' ? updates.pipeline_key : null;
+    }
 
     if (updates.stage && updates.stage !== deal.stage) {
       const oldStage = deal.stage;
       const newStage = updates.stage;
 
-      // Enforce sales pipeline transitions from JSONB (same source as /advance).
-      const salesPipeline = await getPipelineConfig(companyId, 'sales');
-      if (salesPipeline) {
-        const allowed = getPipelineTransitions(salesPipeline, oldStage);
-        if (!allowed.includes(newStage)) {
-          return res.status(409).json({
-            error: `Invalid stage transition: ${oldStage} → ${newStage}`,
-            allowed_transitions: allowed,
-            current_stage: oldStage,
-          });
+      // Only the built-in sales pipeline gates transitions (same source as
+      // /advance, preserving the automation contract). Custom pipelines move
+      // freely — the operator designed them.
+      if (!deal.pipeline_key) {
+        const salesPipeline = await getPipelineConfig(companyId, 'sales');
+        if (salesPipeline) {
+          const allowed = getPipelineTransitions(salesPipeline, oldStage);
+          if (!allowed.includes(newStage)) {
+            return res.status(409).json({
+              error: `Invalid stage transition: ${oldStage} → ${newStage}`,
+              allowed_transitions: allowed,
+              current_stage: oldStage,
+            });
+          }
         }
       }
 
@@ -722,8 +781,8 @@ router.patch('/deals/:id', async (req, res) => {
     deal.updated_at = new Date().toISOString();
 
     await query(
-      `UPDATE deals SET title=$1, value=$2, stage=$3, contact_id=$4, metadata=$5, updated_at=NOW() WHERE id=$6 AND company_id=$7`,
-      [deal.title, deal.value, deal.stage, deal.contact_id,
+      `UPDATE deals SET title=$1, value=$2, stage=$3, contact_id=$4, pipeline_key=$5, metadata=$6, updated_at=NOW() WHERE id=$7 AND company_id=$8`,
+      [deal.title, deal.value, deal.stage, deal.contact_id, deal.pipeline_key,
        JSON.stringify({ contact_name: deal.contact_name, notes: deal.notes, activity: deal.activity, closed_at: deal.closed_at }),
        deal.id, companyId]
     );
@@ -908,7 +967,8 @@ router.get('/pipeline', async (req, res) => {
       const stages = pipelineConfig
         ? pipelineConfig.stages.map(s => s.key)
         : ['accepted','contacted','booked','qualified','proposal','negotiation','onboarding','won','lost','no_show','unqualified','nurture'];
-      const deals = await loadDeals(companyId);
+      // Sales owns deals not assigned to a custom pipeline (pipeline_key null or 'sales').
+      const deals = (await loadDeals(companyId)).filter(d => !d.pipeline_key || d.pipeline_key === 'sales');
       const pipeline = {};
       stages.forEach(stage => {
         const sd = deals.filter(d => d.stage === stage);
@@ -919,6 +979,20 @@ router.get('/pipeline', async (req, res) => {
         };
       });
       return res.json({ pipeline_key: 'sales', pipeline });
+    }
+
+    // Custom deal pipeline (any company-defined key other than marketing/sales).
+    if (pipelineKey) {
+      const cfg = await getPipelineConfig(companyId, pipelineKey);
+      if (!cfg) return res.status(404).json({ error: 'pipeline not found' });
+      const stages = cfg.stages.map(s => s.key);
+      const deals = (await loadDeals(companyId)).filter(d => d.pipeline_key === pipelineKey);
+      const pipeline = {};
+      stages.forEach(stage => {
+        const sd = deals.filter(d => d.stage === stage);
+        pipeline[stage] = { count: sd.length, value: sd.reduce((s, d) => s + (d.value || 0), 0), deals: sd };
+      });
+      return res.json({ pipeline_key: pipelineKey, pipeline });
     }
 
     // Legacy flat view — no pipeline_key (backward-compat for existing consumers)
