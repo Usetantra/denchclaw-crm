@@ -918,10 +918,11 @@ $("#new-deal").onclick=()=>{
   const stageOpts=(def?def.stages:[]).map(s=>({value:s.key,label:s.name}));
   openModal("New opportunity",
     field("Title","title",{placeholder:"Deal name"})+field("Value ($)","value",{type:"number"})+
-    field("Contact name","contact_name")+field("Stage","stage",{type:"select",options:stageOpts}),
+    `<div class="field-row">${field("Contact name","contact_name")}${field("Contact email","contact_email",{type:"email",placeholder:"links / creates a contact"})}</div>`+
+    `<div class="field-row">${field("Company","company")}${field("Stage","stage",{type:"select",options:stageOpts})}</div>`,
     `<button class="btn" onclick="closeModal()">Cancel</button><button class="btn primary" id="save-deal">Create</button>`);
   $("#save-deal").onclick=async()=>{const v=formValues();if(!v.title)return toast("Title required",true);
-    try{await post("deals",{title:v.title,value:parseFloat(v.value)||0,contact_name:v.contact_name,stage:v.stage,pipeline_key:selDealPipe});closeModal();toast("Opportunity created");loadBoard();}
+    try{await post("deals",{title:v.title,value:parseFloat(v.value)||0,contact_name:v.contact_name,contact_email:v.contact_email,company:v.company,stage:v.stage,pipeline_key:selDealPipe});closeModal();toast("Opportunity created");loadBoard();}
     catch(e){toast(e.message,true);}};
 };
 

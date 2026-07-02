@@ -651,11 +651,39 @@ router.post('/deals', validate(), async (req, res) => {
       initialStage = DEAL_STAGES.includes(stage) ? stage : 'lead';
     }
 
+    // Link (or create) a real contact so the opportunity also shows up in
+    // Contacts, Companies, and the dashboard — not just on the deals board.
+    let dealContactId = contact_id || null;
+    let dealContactName = contact_name || '';
+    const cEmail = (req.body.contact_email || '').trim() || null;
+    const cCompany = (req.body.company || '').trim() || null;
+    if (!dealContactId && (cEmail || dealContactName)) {
+      try {
+        const { contact } = await findOrCreateContact(cEmail, {
+          company_id: companyId,
+          name: dealContactName || undefined,
+          company: cCompany,
+          source: 'manual',
+        });
+        if (contact) { dealContactId = contact.id; dealContactName = contact.name || dealContactName; }
+      } catch (e) { console.error('[CRM] deal→contact link failed:', e.message); }
+    }
+    // Ensure a company record exists so it appears on the Companies tab too.
+    if (cCompany) {
+      try {
+        await query(
+          `INSERT INTO companies (company_id, name)
+           SELECT $1, $2 WHERE NOT EXISTS (SELECT 1 FROM companies WHERE company_id = $1 AND lower(name) = lower($2))`,
+          [companyId, cCompany]
+        );
+      } catch (e) { /* companies table optional */ }
+    }
+
     const deal = {
       id: uuidv4(),
       title,
-      contact_id: contact_id || null,
-      contact_name: contact_name || '',
+      contact_id: dealContactId,
+      contact_name: dealContactName,
       value: value || 0,
       stage: initialStage,
       pipeline_key: pipelineKey,
