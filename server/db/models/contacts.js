@@ -6,14 +6,13 @@ const { query } = require('../index');
 // ─── Public API ─────────────────────────────────────────────────────────────
 
 async function list(companyId, filters = {}) {
+  if (!companyId) throw new Error('contacts.list requires companyId');
   const conditions = [];
   const params = [];
   let idx = 1;
 
-  if (companyId) {
-    conditions.push(`company_id = $${idx++}`);
-    params.push(companyId);
-  }
+  conditions.push(`company_id = $${idx++}`);
+  params.push(companyId);
   if (filters.dealStage) {
     conditions.push(`deal_stage = $${idx++}`);
     params.push(filters.dealStage);
@@ -70,13 +69,14 @@ async function list(companyId, filters = {}) {
 }
 
 async function listPaginated(companyId, filters = {}) {
+  if (!companyId) throw new Error('contacts.listPaginated requires companyId');
   const limit = Math.min(parseInt(filters.limit, 10) || 50, 500);
   const offset = Math.max(parseInt(filters.offset, 10) || 0, 0);
 
   const conditions = [];
   const params = [];
   let idx = 1;
-  if (companyId) { conditions.push(`company_id = $${idx++}`); params.push(companyId); }
+  conditions.push(`company_id = $${idx++}`); params.push(companyId);
   if (filters.dealStage) { conditions.push(`deal_stage = $${idx++}`); params.push(filters.dealStage); }
   if (filters.source) { conditions.push(`source = $${idx++}`); params.push(filters.source); }
   if (filters.search) {
@@ -94,20 +94,16 @@ async function listPaginated(companyId, filters = {}) {
   return { data: dataRes.rows, total: countRes.rows[0]?.total || 0, limit, offset };
 }
 
-// Company-scoped read. Pass companyId from a route handler so a caller can only
-// see its own tenant's row (mismatch ⇒ null ⇒ route 404). Internal callers that
-// legitimately need any row use getByIdUnscoped (kept private to this module).
+// Company-scoped read. companyId is mandatory — a caller can only ever see its
+// own tenant's row (mismatch ⇒ null ⇒ route 404). There is no unscoped
+// fallback: a missing companyId is a caller bug, not a valid "give me any
+// tenant's row" request, so it throws instead of silently going cross-tenant.
 async function getById(id, companyId) {
-  if (companyId === undefined || companyId === null) return getByIdUnscoped(id);
+  if (!companyId) throw new Error('contacts.getById requires companyId');
   const result = await query(
     `SELECT * FROM contacts WHERE id = $1 AND company_id = $2 AND deleted_at IS NULL LIMIT 1`,
     [id, companyId]
   );
-  return result.rows[0] || null;
-}
-
-async function getByIdUnscoped(id) {
-  const result = await query(`SELECT * FROM contacts WHERE id = $1 AND deleted_at IS NULL LIMIT 1`, [id]);
   return result.rows[0] || null;
 }
 
@@ -164,9 +160,10 @@ async function create(data) {
   return result.rows[0] || contact;
 }
 
-// Company-scoped update. When companyId is passed, the WHERE clause restricts to
-// that tenant — a cross-tenant id returns no row ⇒ null ⇒ route 404.
+// Company-scoped update. companyId is mandatory — the WHERE clause always
+// restricts to that tenant, so a cross-tenant id returns no row ⇒ null ⇒ route 404.
 async function update(id, data, companyId) {
+  if (!companyId) throw new Error('contacts.update requires companyId');
   const now = new Date().toISOString();
   data.updated_at = now;
 
@@ -192,27 +189,22 @@ async function update(id, data, companyId) {
     }
   }
 
-  params.push(id);
-  let where = `id = $${pIdx}`;
-  if (companyId !== undefined && companyId !== null) {
-    params.push(companyId);
-    where += ` AND company_id = $${pIdx + 1}`;
-  }
+  params.push(id, companyId);
+  const where = `id = $${pIdx} AND company_id = $${pIdx + 1}`;
   const sql = `UPDATE contacts SET ${setClauses.join(', ')} WHERE ${where} RETURNING *`;
   const result = await query(sql, params);
   return result.rows[0] || null;
 }
 
-// When companyId is passed, the activity is only written if the contact belongs
+// companyId is mandatory — the activity is only written if the contact belongs
 // to that tenant (returns false on mismatch — route maps to 404).
 async function addActivity(contactId, entry, companyId) {
+  if (!companyId) throw new Error('contacts.addActivity requires companyId');
   const timestamped = { ...entry, timestamp: entry.timestamp || new Date().toISOString() };
 
   const r = await query(`SELECT company_id FROM contacts WHERE id = $1 AND deleted_at IS NULL`, [contactId]);
   const rowCompany = r.rows[0]?.company_id || null;
-  if (companyId !== undefined && companyId !== null) {
-    if (!rowCompany || rowCompany !== companyId) return false; // cross-tenant or missing
-  }
+  if (!rowCompany || rowCompany !== companyId) return false; // cross-tenant or missing
   const effectiveCompany = timestamped.company_id || rowCompany;
 
   await query(
@@ -228,19 +220,13 @@ async function addActivity(contactId, entry, companyId) {
 }
 
 async function getActivity(contactId, limit = 50, companyId) {
-  if (companyId !== undefined && companyId !== null) {
-    const result = await query(
-      `SELECT ca.* FROM contact_activity ca
-        WHERE ca.contact_id = $1
-          AND EXISTS (SELECT 1 FROM contacts c WHERE c.id = ca.contact_id AND c.company_id = $3)
-        ORDER BY ca.created_at DESC LIMIT $2`,
-      [contactId, limit, companyId]
-    );
-    return result.rows;
-  }
+  if (!companyId) throw new Error('contacts.getActivity requires companyId');
   const result = await query(
-    `SELECT * FROM contact_activity WHERE contact_id = $1 ORDER BY created_at DESC LIMIT $2`,
-    [contactId, limit]
+    `SELECT ca.* FROM contact_activity ca
+      WHERE ca.contact_id = $1
+        AND EXISTS (SELECT 1 FROM contacts c WHERE c.id = ca.contact_id AND c.company_id = $3)
+      ORDER BY ca.created_at DESC LIMIT $2`,
+    [contactId, limit, companyId]
   );
   return result.rows;
 }

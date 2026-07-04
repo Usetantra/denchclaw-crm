@@ -10,7 +10,7 @@ Status keys: ⬜ todo · 🔄 in progress · ✅ done · 🚧 GATED (needs human
 
 ## GOAL A — Multi-tenancy end-to-end
 
-- ⬜ **A1. Close latent leaks + full scoping audit.** Fix `findContactByPhone`
+- ✅ **A1. Close latent leaks + full scoping audit.** Fix `findContactByPhone`
   (crm.js) unscoped `list(null,…)` and the `getById→getByIdUnscoped` null-fallback
   (contacts.js). Sweep every route/model query for a `company_id` filter. Add negative
   contract-test cases. *(local, scratch-testable)*
@@ -76,3 +76,15 @@ Status keys: ⬜ todo · 🔄 in progress · ✅ done · 🚧 GATED (needs human
 
 ## Progress log (loop appends here)
 - 2026-07-05 — roadmap created; recon (B6) pending; foundations A1/B1/B4 are the first unblocked units.
+- 2026-07-05 — **A1 done.** Fixed the two named bugs: `findContactByPhone` (crm.js)
+  now requires+scopes by `companyId` instead of `list(null,…)`; `contacts.getById`
+  no longer falls back to an unscoped read (dead `getByIdUnscoped` deleted). Full
+  sweep (per Codex critic pass) also found and closed the same latent-leak shape in
+  `contacts.list`, `listPaginated`, `update`, `addActivity`, `getActivity` (all now
+  require `companyId`, no silent unscoped path) and two missed call sites in
+  `POST /contacts` (existing-contact update + note-activity write). Added
+  `test/unit-tenancy.mjs` (15 cases) since these functions have no HTTP route for
+  `contract.mjs` to reach; wired into `npm test`/`run-local.sh`. 46 contract +
+  15 unit tests pass on scratch Docker Postgres. Codex critic: pass-with-fixes,
+  all flagged gaps closed in the same iteration. Branch `feat/consolidation`,
+  not pushed/merged/deployed.

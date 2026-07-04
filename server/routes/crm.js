@@ -294,9 +294,9 @@ router.post('/contacts', validate(), async (req, res) => {
         ...(linkedin_url && { linkedin_url }),
         ...(lead_score && { lead_score }),
       };
-      const updated = await contactDb.update(existing.id, updateData);
+      const updated = await contactDb.update(existing.id, updateData, companyId);
       if (notes) {
-        await contactDb.addActivity(existing.id, { type: 'note', message: notes });
+        await contactDb.addActivity(existing.id, { type: 'note', message: notes }, companyId);
       }
       // Re-identify the account if this update carried an employer name.
       if (company) await companyDb.identifyAndLink(companyId, company);
@@ -1518,10 +1518,10 @@ async function findOrCreateContact(email, defaults = {}) {
   return { contact, created: true };
 }
 
-async function findContactByPhone(phone) {
-  if (!phone) return null;
+async function findContactByPhone(phone, companyId) {
+  if (!phone || !companyId) return null;
   const normalized = phone.replace(/\D/g, '');
-  const allContacts = await contactDb.list(null, {});
+  const allContacts = await contactDb.list(companyId, {});
   return allContacts.find(c => c.phone && c.phone.replace(/\D/g, '') === normalized) || null;
 }
 
