@@ -7,7 +7,22 @@ const INTERNAL_API_KEY = process.env.INTERNAL_API_KEY || (() => {
   return k;
 })();
 
-const DEFAULT_COMPANY_ID = process.env.DEFAULT_COMPANY_ID || 'growthclub';
+const DEFAULT_COMPANY_ID = process.env.DEFAULT_COMPANY_ID || 'tantra';
+
+// Single-tenant consolidation (migration 011): legacy tenant ids were folded into
+// the canonical tenant. Any inbound X-Company-Id in this set is canonicalized so
+// a stale caller (an engine, an old bulk-import script) can never re-split the
+// tenant. Tunable via LEGACY_COMPANY_IDS / CANONICAL_COMPANY_ID; test tenants
+// (co_a_*, cp4_co) are deliberately NOT folded so multi-tenant contract tests
+// still exercise real isolation.
+const CANONICAL_COMPANY_ID = process.env.CANONICAL_COMPANY_ID || DEFAULT_COMPANY_ID;
+const LEGACY_COMPANY_IDS = new Set(
+  (process.env.LEGACY_COMPANY_IDS || 'growthclub,dev_company')
+    .split(',').map(s => s.trim()).filter(Boolean)
+);
+function canonicalCompanyId(id) {
+  return LEGACY_COMPANY_IDS.has(id) ? CANONICAL_COMPANY_ID : id;
+}
 
 // ─── Key → allowed-company binding (multi-tenant isolation, layer 1) ──────────
 // INTERNAL_API_KEYS (optional) is a JSON object mapping each API key to the
@@ -73,7 +88,7 @@ function requireAuth(req, res, next) {
     console.warn('[Auth] X-Internal-Key rejected from IP:', callerIp);
     return res.status(403).json({ error: 'Internal API access denied from this address' });
   }
-  const companyId = req.headers['x-company-id'] || DEFAULT_COMPANY_ID;
+  const companyId = canonicalCompanyId(req.headers['x-company-id'] || DEFAULT_COMPANY_ID);
   // Layer-1 isolation: a bound key may only act for companies in its set.
   if (allowed !== '*' && !allowed.has(companyId)) {
     console.warn(`[Auth] key not permitted for company '${companyId}'`);

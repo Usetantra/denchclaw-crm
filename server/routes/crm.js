@@ -3,6 +3,7 @@ const express = require('express');
 const router = express.Router();
 const { v4: uuidv4 } = require('uuid');
 const contactDb = require('../db/models/contacts');
+const companyDb = require('../db/models/companies');
 const { query } = require('../db/index');
 const { getPipelineConfig, getPipelineTransitions } = require('../db/pipeline');
 
@@ -297,6 +298,8 @@ router.post('/contacts', validate(), async (req, res) => {
       if (notes) {
         await contactDb.addActivity(existing.id, { type: 'note', message: notes });
       }
+      // Re-identify the account if this update carried an employer name.
+      if (company) await companyDb.identifyAndLink(companyId, company);
       broadcast(req, { type: 'contact_updated', contact: updated || existing });
       return res.json(updated || existing);
     }
@@ -347,6 +350,8 @@ router.post('/contacts', validate(), async (req, res) => {
     };
 
     const contact = await contactDb.create(contactData);
+    // Auto-identify the employer account and link this contact (+ any siblings).
+    if (company) contact.company_ref_id = await companyDb.identifyAndLink(companyId, company);
     broadcast(req, { type: 'contact_created', contact });
 
     res.status(201).json(contact);
@@ -525,6 +530,10 @@ router.patch('/contacts/:id', async (req, res) => {
     }
 
     const contact = await contactDb.update(req.params.id, updateData, companyId);
+    // Employer name changed → re-identify/link the account.
+    if (updateData.company_name !== undefined) {
+      await companyDb.identifyAndLink(companyId, updateData.company_name);
+    }
     broadcast(req, { type: 'contact_updated', contact: contact || existing });
 
     res.json(contact || existing);
@@ -757,15 +766,11 @@ router.post('/deals', validate(), async (req, res) => {
         if (contact) { dealContactId = contact.id; dealContactName = contact.name || dealContactName; }
       } catch (e) { console.error('[CRM] deal→contact link failed:', e.message); }
     }
-    // Ensure a company record exists so it appears on the Companies tab too.
+    // A deal is proof of a real account → force-create the company row (bypasses
+    // the >=2-contact threshold) and link it to the deal + its contact.
+    let dealCompanyRefId = null;
     if (cCompany) {
-      try {
-        await query(
-          `INSERT INTO companies (company_id, name)
-           SELECT $1, $2 WHERE NOT EXISTS (SELECT 1 FROM companies WHERE company_id = $1 AND lower(name) = lower($2))`,
-          [companyId, cCompany]
-        );
-      } catch (e) { /* companies table optional */ }
+      dealCompanyRefId = await companyDb.identifyAndLink(companyId, cCompany, { force: true });
     }
 
     const deal = {
@@ -776,6 +781,7 @@ router.post('/deals', validate(), async (req, res) => {
       value: value || 0,
       stage: initialStage,
       pipeline_key: pipelineKey,
+      company_ref_id: dealCompanyRefId,
       notes: notes || '',
       activity: [
         { type: 'created', message: 'Deal created', timestamp: new Date().toISOString() }
@@ -787,9 +793,9 @@ router.post('/deals', validate(), async (req, res) => {
     };
 
     await query(
-      `INSERT INTO deals (id, company_id, contact_id, title, value, stage, pipeline_key, source, metadata, created_at, updated_at)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,NOW(),NOW())`,
-      [deal.id, deal.companyId, deal.contact_id, deal.title, deal.value, deal.stage, deal.pipeline_key, 'crm',
+      `INSERT INTO deals (id, company_id, contact_id, company_ref_id, title, value, stage, pipeline_key, source, metadata, created_at, updated_at)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,NOW(),NOW())`,
+      [deal.id, deal.companyId, deal.contact_id, deal.company_ref_id, deal.title, deal.value, deal.stage, deal.pipeline_key, 'crm',
        JSON.stringify({ contact_name: deal.contact_name, notes: deal.notes, activity: deal.activity })]
     );
 
@@ -1505,6 +1511,10 @@ async function findOrCreateContact(email, defaults = {}) {
   };
 
   contact = await contactDb.create(contactData);
+  // Auto-identify the employer account (covers bulk-import, deals, webhooks).
+  if (companyId && defaults.company) {
+    contact.company_ref_id = await companyDb.identifyAndLink(companyId, defaults.company);
+  }
   return { contact, created: true };
 }
 

@@ -956,11 +956,12 @@ function renderCompanyList(){
     $("#empty-nco")&&($("#empty-nco").onclick=()=>companyModal());updateCompanyBulk();return;}
   const rows=coList.map(c=>`<tr>
     <td class="checkcell"><input type="checkbox" class="cosel" data-id="${esc(c.id)}"></td>
-    <td><b>${esc(c.name)}</b></td><td>${esc(c.industry||"")}</td><td>${c.contact_count||0}</td><td>${money(c.pipeline_value)}</td>
+    <td><b><a class="linklike" data-view="${esc(c.id)}">${esc(c.name)}</a></b></td><td>${esc(c.industry||"")}</td><td>${c.contact_count||0}</td><td>${money(c.pipeline_value)}</td>
+    <td>${c.deal_count||0}${c.deal_value?` · ${money(c.deal_value)}`:""}</td>
     <td>${c.website?`<a class="linklike" href="${esc(/^https?:/.test(c.website)?c.website:"https://"+c.website)}" target="_blank" rel="noopener">${esc(c.website)}</a>`:""}</td>
     <td><div class="rowact"><button class="btn sm" data-edit="${esc(c.id)}">Edit</button><button class="btn sm danger" data-del="${esc(c.id)}">Del</button></div></td></tr>`).join("");
   $("#companies-list").innerHTML=`<table><thead><tr><th class="checkcell"><input type="checkbox" id="cosel-all"></th>
-    <th>Company</th><th>Industry</th><th>Contacts</th><th>Pipeline</th><th>Website</th><th></th></tr></thead><tbody>${rows}</tbody></table>`;
+    <th>Company</th><th>Industry</th><th>Contacts</th><th>Pipeline</th><th>Deals</th><th>Website</th><th></th></tr></thead><tbody>${rows}</tbody></table>`;
   updateCompanyBulk();
 }
 function updateCompanyBulk(){$("#company-bulk").classList.toggle("show",coSel.size>0);$("#company-selN").textContent=`${coSel.size} selected`;}
@@ -969,10 +970,33 @@ $("#companies-list").addEventListener("change",e=>{
   else if(e.target.classList.contains("cosel")){e.target.checked?coSel.add(e.target.dataset.id):coSel.delete(e.target.dataset.id);updateCompanyBulk();}
 });
 $("#companies-list").addEventListener("click",e=>{
-  const ed=e.target.closest("[data-edit]"),dl=e.target.closest("[data-del]");
+  const vw=e.target.closest("[data-view]"),ed=e.target.closest("[data-edit]"),dl=e.target.closest("[data-del]");
+  if(vw){e.preventDefault();openCompanyDetail(vw.dataset.view);return;}
   if(ed)companyModal(coList.find(x=>x.id===ed.dataset.edit));
   if(dl){const c=coList.find(x=>x.id===dl.dataset.del);confirmDelete(`Delete company "${c?.name}"?`,async()=>{await del(`companies/${dl.dataset.del}`);toast("Deleted");loadCompanies();});}
 });
+// Account detail drawer: profile + linked contacts + deal pipeline.
+async function openCompanyDetail(id){
+  openModal("Account","<div class='muted'>loading…</div>","<button class=\"btn\" onclick=\"closeModal()\">Close</button>");
+  try{
+    const [c,ct,dl]=await Promise.all([get(`companies/${id}`),get(`companies/${id}/contacts`),get(`companies/${id}/deals`)]);
+    const meta=[c.industry,c.size,c.location].filter(Boolean).join(" · ");
+    const stat=(l,v)=>`<div style="flex:1"><div class="muted" style="font-size:11px;text-transform:uppercase;letter-spacing:.04em">${l}</div><div style="font-size:20px;font-weight:600">${v}</div></div>`;
+    const contactsHtml=(ct.contacts||[]).length?`<table><thead><tr><th>Name</th><th>Title</th><th>Stage</th><th>Value</th></tr></thead><tbody>${
+      ct.contacts.map(p=>`<tr><td><b>${esc(p.name||"—")}</b><div class="muted" style="font-size:11px">${esc(p.email||"")}</div></td><td>${esc(p.title||"")}</td><td>${esc(p.marketing_stage||p.deal_stage||"")}</td><td>${money(p.deal_value)}</td></tr>`).join("")
+    }</tbody></table>`:`<div class="empty">No linked contacts.</div>`;
+    const dealsHtml=(dl.deals||[]).length?`<table><thead><tr><th>Deal</th><th>Contact</th><th>Stage</th><th>Value</th></tr></thead><tbody>${
+      dl.deals.map(d=>`<tr><td><b>${esc(d.title||"—")}</b></td><td>${esc(d.contact_name||"")}</td><td>${esc(d.stage||"")}</td><td>${money(d.value)}</td></tr>`).join("")
+    }</tbody></table>`:`<div class="empty">No deals yet.</div>`;
+    $("#modal-title").textContent=c.name||"Account";
+    $("#modal-body").innerHTML=`
+      <div style="display:flex;gap:8px;margin:2px 0 14px">${stat("Contacts",c.contact_count||0)}${stat("Lead value",money(c.pipeline_value))}${stat("Deals",c.deal_count||0)}${stat("Deal value",money(c.deal_value))}</div>
+      ${meta?`<div class="muted" style="margin-bottom:6px">${esc(meta)}</div>`:""}
+      ${c.website?`<div style="margin-bottom:14px"><a class="linklike" href="${esc(/^https?:/.test(c.website)?c.website:"https://"+c.website)}" target="_blank" rel="noopener">${esc(c.website)}</a></div>`:""}
+      <h3 class="h1" style="font-size:15px;margin:12px 0 6px">Contacts (${(ct.contacts||[]).length})</h3>${contactsHtml}
+      <h3 class="h1" style="font-size:15px;margin:16px 0 6px">Deals (${(dl.deals||[]).length})</h3>${dealsHtml}`;
+  }catch(e){$("#modal-body")&&($("#modal-body").innerHTML=`<div class="empty">${esc(e.message)}</div>`);}
+}
 $("#company-search").addEventListener("input",debounce(loadCompanies,250));
 $("#new-company").onclick=()=>companyModal();
 $("#company-bulk-del").onclick=()=>confirmDelete(`Delete ${coSel.size} compan${coSel.size>1?"ies":"y"}?`,async()=>{await post("companies/bulk",{action:"delete",ids:[...coSel]});toast("Deleted");loadCompanies();});

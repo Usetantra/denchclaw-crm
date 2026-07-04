@@ -12,14 +12,16 @@ router.use(requireAuth);
 
 const EDITABLE = ['name', 'domain', 'industry', 'website', 'size', 'location', 'notes'];
 
-// Contact rollups matched by employer name within the tenant.
+// Exact rollups via the normalized company_ref_id FK (migration 011): linked
+// contacts, their aggregate lead value, and the deal pipeline for the account.
 const ROLLUP = `
   (SELECT COUNT(*)::int FROM contacts ct
-     WHERE ct.company_id = c.company_id AND ct.deleted_at IS NULL
-       AND lower(ct.company_name) = lower(c.name)) AS contact_count,
+     WHERE ct.company_ref_id = c.id AND ct.deleted_at IS NULL) AS contact_count,
   (SELECT COALESCE(SUM(ct.deal_value),0)::numeric FROM contacts ct
-     WHERE ct.company_id = c.company_id AND ct.deleted_at IS NULL
-       AND lower(ct.company_name) = lower(c.name)) AS pipeline_value`;
+     WHERE ct.company_ref_id = c.id AND ct.deleted_at IS NULL) AS pipeline_value,
+  (SELECT COUNT(*)::int FROM deals d WHERE d.company_ref_id = c.id) AS deal_count,
+  (SELECT COALESCE(SUM(d.value),0)::numeric FROM deals d
+     WHERE d.company_ref_id = c.id AND d.stage <> 'lost') AS deal_value`;
 
 function mapRow(r) {
   return {
@@ -27,6 +29,8 @@ function mapRow(r) {
     website: r.website, size: r.size, location: r.location, notes: r.notes,
     contact_count: r.contact_count ?? 0,
     pipeline_value: parseFloat(r.pipeline_value) || 0,
+    deal_count: r.deal_count ?? 0,
+    deal_value: parseFloat(r.deal_value) || 0,
     created_at: r.created_at, updated_at: r.updated_at,
   };
 }
@@ -145,6 +149,50 @@ router.delete('/:id', async (req, res) => {
   } catch (err) {
     console.error('[CRM] DELETE /companies/:id error:', err.message);
     res.status(500).json({ error: 'failed to delete company' });
+  }
+});
+
+// GET /api/crm/companies/:id/contacts — people linked to this account
+router.get('/:id/contacts', async (req, res) => {
+  try {
+    const companyId = getUserCompanyId(req);
+    const own = await query('SELECT id FROM companies WHERE id=$1 AND company_id=$2', [req.params.id, companyId]);
+    if (!own.rows.length) return res.status(404).json({ error: 'company not found' });
+    const { rows } = await query(
+      `SELECT id, name, email, title, phone, linkedin_url, source, lead_score,
+              marketing_stage, deal_stage, deal_value, created_at
+         FROM contacts
+        WHERE company_ref_id = $1 AND deleted_at IS NULL
+        ORDER BY deal_value DESC NULLS LAST, name ASC
+        LIMIT 500`,
+      [req.params.id]
+    );
+    res.json({ total: rows.length, contacts: rows });
+  } catch (err) {
+    console.error('[CRM] GET /companies/:id/contacts error:', err.message);
+    res.status(500).json({ error: 'failed to load company contacts' });
+  }
+});
+
+// GET /api/crm/companies/:id/deals — deals in this account's pipeline
+router.get('/:id/deals', async (req, res) => {
+  try {
+    const companyId = getUserCompanyId(req);
+    const own = await query('SELECT id FROM companies WHERE id=$1 AND company_id=$2', [req.params.id, companyId]);
+    if (!own.rows.length) return res.status(404).json({ error: 'company not found' });
+    const { rows } = await query(
+      `SELECT d.id, d.title, d.value, d.currency, d.stage, d.pipeline_key,
+              d.expected_close, d.created_at, c.name AS contact_name
+         FROM deals d LEFT JOIN contacts c ON c.id = d.contact_id
+        WHERE d.company_ref_id = $1
+        ORDER BY d.created_at DESC
+        LIMIT 500`,
+      [req.params.id]
+    );
+    res.json({ total: rows.length, deals: rows });
+  } catch (err) {
+    console.error('[CRM] GET /companies/:id/deals error:', err.message);
+    res.status(500).json({ error: 'failed to load company deals' });
   }
 });
 
