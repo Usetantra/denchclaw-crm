@@ -796,7 +796,7 @@
     <div class="cell"><div class="k">Dashboard</div><div class="v">stat cards (contacts, new-this-week, open deals, won value, 30-day sends), marketing pipeline overview, contacts table — every row opens the detail modal</div></div>
     <div class="cell"><div class="k">Deals board</div><div class="v">drag-and-drop kanban for the sales pipeline, the marketing pipeline, and a companies rollup. Drops call the real advance APIs — an illegal drop bounces back with the allowed-moves toast</div></div>
     <div class="cell"><div class="k">Contacts</div><div class="v">searchable, filterable list (score, source) with create / edit / delete and bulk actions (tag, delete). Stage is deliberately NOT bulk-editable — the state machine owns it</div></div>
-    <div class="cell"><div class="k">Companies</div><div class="v">account records with contact counts and pipeline value rollups; auto-created when a deal names a new company</div></div>
+    <div class="cell"><div class="k">Companies</div><div class="v">account records with contact + deal rollups (counts and value); auto-identified from any ingest — a company row is created + linked (company_ref_id) once 2+ contacts share an employer name, and a deal force-creates it. Click a row for the account's contacts + deal pipeline</div></div>
     <div class="cell"><div class="k">Pipelines</div><div class="v">edit the built-in stage machines (colors, labels, order) or create custom deal pipelines — stored back into <code>crm_pipeline_configs</code></div></div>
     <div class="cell"><div class="k">Inbox</div><div class="v">the conversation queue with Open / Needs-Human / All / Closed filters, escalate, hand-back-to-AI, close</div></div>
     <div class="cell"><div class="k">Analytics</div><div class="v">30-day cards, both funnels in pipeline order, by-channel and by-campaign tables — live from the rollups</div></div>
@@ -819,7 +819,7 @@
   <div class="chap"><span class="num">9</span><h2>The Data Model — All Ten Tables</h2></div>
   <p class="intro">
     Everything the machine knows lives in ten tables inside the isolated <code>denchclaw</code> database.
-    Every table carries <code>company_id</code> — the tenant stamp — and every query filters on it.
+    Every table carries <code>company_id</code> — the tenant stamp — and every query filters on it. The CRM now runs as a single tenant, <code>tantra</code> (migration 011 folded the legacy <code>growthclub</code>/<code>dev_company</code> ids); the account entity above is the separate <code>companies</code> table, not the tenant.
   </p>
 
   <figure>
@@ -832,7 +832,7 @@
     <text x="530" y="226" text-anchor="middle" font-size="13" font-weight="700" fill="#fff">contacts — the spine</text>
     <g font-size="10.5" fill="#d0d0d0">
       <text x="426" y="248">id (UUID) · company_id · name · email</text>
-      <text x="426" y="264">phone · company_name · title · linkedin_url</text>
+      <text x="426" y="264">phone · company_name · company_ref_id (FK) · title</text>
       <text x="426" y="280">source · lead_score + lead_score_numeric</text>
       <text x="426" y="296">marketing_stage · deal_stage (legacy mirror)</text>
       <text x="426" y="312">tags[] · utm_* ×4 · metadata JSONB</text>
@@ -856,7 +856,7 @@
 
       <rect x="60" y="400" width="230" height="90" rx="4" fill="#fff" stroke="#ececec"/>
       <text x="76" y="422" font-size="12" font-weight="700" fill="#2a2a2a">deals</text>
-      <text x="76" y="440" fill="#4a4a4a">title · value · stage · pipeline_key (009)</text>
+      <text x="76" y="440" fill="#4a4a4a">title · value · stage · pipeline_key (009) · company_ref_id (011)</text>
       <text x="76" y="455" fill="#4a4a4a">source · closed_at · metadata (activity log)</text>
       <text x="76" y="472" fill="#6b6b6b">the sales pipeline lives HERE, not on the contact</text>
 
@@ -902,7 +902,7 @@
       <path d="M 1000 155 C 1030 175, 1030 175, 1002 192" marker-end="url(#arr9)"/>
       <path d="M 766 345 C 710 330, 690 310, 654 292" marker-end="url(#arr9)"/>
       <path d="M 885 390 V 426" marker-end="url(#arr9)"/>
-      <path d="M 485 426 C 480 400, 470 380, 470 354" marker-end="url(#arr9)" stroke-dasharray="4 3"/>
+      <path d="M 485 426 C 480 400, 470 380, 470 354" marker-end="url(#arr9)"/>
       <path d="M 665 426 C 660 400, 640 380, 620 354" marker-end="url(#arr9)" stroke-dasharray="4 3"/>
     </g>
     <g class="elabel">
@@ -913,11 +913,11 @@
       <text x="1014" y="180" text-anchor="middle">1→*</text>
       <text x="700" y="318">optional link</text>
       <text x="900" y="412">aggregates into</text>
-      <text x="452" y="390">matched by company_name</text>
+      <text x="452" y="390">company_ref_id FK (auto-linked)</text>
       <text x="668" y="390">stages read per request (60s cache)</text>
     </g>
   </svg>
-  <figcaption><b>The contact is the spine.</b> Solid arrows are foreign keys; dashed are soft links. Migrations in order: base schema → 002 prospect_inbox → 003 two pipelines → 004 inbox → 005 analytics → 006/007 stage corrections → 008 companies → 009 custom pipelines → 010 mql events.</figcaption>
+  <figcaption><b>The contact is the spine.</b> Solid arrows are foreign keys; dashed are soft links. Migrations in order: base schema → 002 prospect_inbox → 003 two pipelines → 004 inbox → 005 analytics → 006/007 stage corrections → 008 companies → 009 custom pipelines → 010 mql events → 011 company normalization (single-tenant + company_ref_id FK).</figcaption>
   </figure>
 </section>
 
