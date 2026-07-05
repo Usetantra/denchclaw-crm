@@ -82,3 +82,6 @@ node test/contract.mjs
 
 echo "[test] running unit-tenancy tests (model/helper functions with no HTTP route)"
 DATABASE_URL="$DATABASE_URL_TEST" node test/unit-tenancy.mjs
+
+echo "[test] running unit-tenants tests (GOAL A2: tenant entity + resolution)"
+DATABASE_URL="$DATABASE_URL_TEST" node test/unit-tenants.mjs

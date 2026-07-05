@@ -14,7 +14,7 @@ Status keys: ⬜ todo · 🔄 in progress · ✅ done · 🚧 GATED (needs human
   (crm.js) unscoped `list(null,…)` and the `getById→getByIdUnscoped` null-fallback
   (contacts.js). Sweep every route/model query for a `company_id` filter. Add negative
   contract-test cases. *(local, scratch-testable)*
-- ⬜ **A2. Real tenant entity + resolution.** `tenants` table (id/company_id, name,
+- 🔄 **A2. Real tenant entity + resolution.** `tenants` table (id/company_id, name,
   slug/subdomain, status, plan). Replace the hardcoded nginx `x-company-id: tantra` +
   `auth.js` legacy fold with real resolution: API-key→tenant (and/or subdomain→tenant).
   Backfill `tantra` as the first tenant row. Migration 012. *(build local; 🚧 live apply
@@ -109,3 +109,33 @@ Status keys: ⬜ todo · 🔄 in progress · ✅ done · 🚧 GATED (needs human
   data model) is next per the roadmap but its own text says "after A2 so
   tenant FK exists" — A2 isn't done, so B1 is not actually unblocked;
   proceeding to A2's local-buildable portion instead.
+- 2026-07-05 — **A2 local-buildable portion done** (marked 🔄, not ✅ — nginx +
+  subdomain resolution + live apply remain gated). Migration 012: `tenants`
+  table (id, name, slug, status, plan, aliases[]), backfills `tantra` with
+  today's env-default legacy aliases (`growthclub`, `dev_company`) so
+  behavior is unchanged the moment resolution flips from env to DB.
+  `server/db/models/tenants.js`: getById/getBySlug/resolve/list/create.
+  `auth.js`'s `canonicalCompanyId` is now DB-backed (was a static env-parsed
+  Set) with a bounded (max 1000 entries) TTL cache and a fail-open fallback
+  to the old static fold on any DB error (never blocks auth on DB pressure,
+  matching this service's existing "always-on" posture) — ad-hoc test
+  tenants (`co_a_<run>` etc.) still pass through unresolved, unchanged.
+  Two critic passes: first found real gaps (no deterministic exact-id-wins
+  priority + no DB guard against alias collisions, unbounded cache = DoS
+  vector, async middleware with no Express-4-safe error wrapper, migration
+  re-run semantics needing clarification) — fixed with an `ORDER BY`
+  priority + a collision-checking trigger, a bounded LRU-ish cache, a sync
+  wrapper around the async auth handler, and doc clarification. Second
+  critic pass on the fixes themselves found a genuine race (two concurrent
+  transactions each adding the same alias to different tenants could both
+  pass the collision check under READ COMMITTED) — reproduced empirically
+  against real Postgres 16, fixed with `pg_advisory_xact_lock` serializing
+  alias-mutating transactions, then re-reproduced to confirm the fix holds
+  (second transaction now correctly blocks then rejects). Also added a
+  `res.headersSent` guard in the auth error handler for defense in depth.
+  Migration integrity checked directly: idempotent re-run (no duplicate
+  tantra row), trigger rejects both collision directions, legitimate insert
+  still succeeds. 71 tests pass (46 contract + 15 + 10 unit).
+  **Remaining for A2 to be ✅** (gated): subdomain→tenant resolution, nginx
+  config change, live migration apply — needs explicit authorization per
+  the roadmap gates, not attempted here.
