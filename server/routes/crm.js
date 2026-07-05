@@ -4,6 +4,7 @@ const router = express.Router();
 const { v4: uuidv4 } = require('uuid');
 const contactDb = require('../db/models/contacts');
 const companyDb = require('../db/models/companies');
+const tenantDb = require('../db/models/tenants');
 const { query } = require('../db/index');
 const { getPipelineConfig, getPipelineTransitions } = require('../db/pipeline');
 
@@ -14,6 +15,15 @@ router.use(requireAuth);
 
 // No-op validator — engines send well-formed data; validation at API boundary
 const validate = () => (req, res, next) => next();
+
+// Migration 013's tenants FK turns a novel/typo'd X-Company-Id into a Postgres
+// 23503 violation on first write instead of the old (silently permissive)
+// behavior. Distinguish it from other DB errors so routes can respond with a
+// clear, actionable 4xx instead of an opaque 500 or — worse, in a per-row
+// import loop — a silently swallowed error indistinguishable from bad row data.
+function isTenantNotProvisioned(err) {
+  return err?.code === '23503' && /_company$/.test(err.constraint || '');
+}
 
 const LEAD_SCORES = { hot: 90, warm: 60, neutral: 30, cold: 10, negative: 0 };
 
@@ -356,6 +366,11 @@ router.post('/contacts', validate(), async (req, res) => {
 
     res.status(201).json(contact);
   } catch (err) {
+    if (isTenantNotProvisioned(err)) {
+      // companyId is scoped to the try block above, not this catch — re-read
+      // it (cheap, pure: just reads req.auth) rather than hoist the const.
+      return res.status(422).json({ error: `company '${getUserCompanyId(req)}' is not a provisioned tenant` });
+    }
     console.error('[CRM] POST /contacts error:', err.message);
     res.status(500).json({ error: 'failed to create contact' });
   }
@@ -1407,6 +1422,14 @@ router.post('/contacts/bulk-import', async (req, res) => {
   const { contacts: inputContacts } = req.body;
   if (!Array.isArray(inputContacts) || inputContacts.length === 0) {
     return res.status(400).json({ error: 'contacts array required' });
+  }
+
+  // Check once, up front: an unprovisioned companyId fails identically for
+  // EVERY row (migration 013's FK), so without this a bad company id would
+  // silently show up as errors===total with no indication why — worse than
+  // useless for an operator debugging a failed bulk import.
+  if (!(await tenantDb.resolve(companyId))) {
+    return res.status(422).json({ error: `company '${companyId}' is not a provisioned tenant` });
   }
 
   let created = 0, updated = 0, errors = 0;

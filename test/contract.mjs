@@ -49,8 +49,24 @@ function check(name, cp, ok, detail) {
 
 const email = (who) => `ct-${who}-${RUN}@example.com`;
 
+// Migration 013 FK's every company_id-bearing table to tenants(id) — any ad-hoc
+// test tenant this suite writes data under (CO_A, CO_B) must be provisioned as a
+// real tenant row first, or the first insert under it fails at the DB layer.
+// Read-only probes against ids that are never written under (co_bound_only,
+// co_other_<run>, totally-unbound-company-<run>) don't need provisioning — a
+// SELECT doesn't require the FK's parent row to exist.
+async function provisionTenant(id) {
+  const r = await req('POST', '/api/crm/tenants', { body: { id, name: id, slug: id } });
+  if (r.status !== 201 && r.status !== 409) {
+    throw new Error(`FATAL: failed to provision test tenant '${id}': status=${r.status} body=${JSON.stringify(r.json)}`);
+  }
+}
+
 async function main() {
   console.log(`\nDenchClaw CRM contract test — PHASE=${PHASE} RUN=${RUN}\nBASE=${BASE}\n`);
+
+  await provisionTenant(CO_A);
+  await provisionTenant(CO_B);
 
   // 1 — health
   {
@@ -113,6 +129,40 @@ async function main() {
     } else {
       check('binding test', 'CP1', false, 'LIMITED_API_KEY not provided — cannot test 403 binding');
     }
+  }
+
+  // 7b — tenant provisioning is admin-gated (only a '*'-bound key may manage tenants)
+  {
+    if (LIMITED_KEY) {
+      const denied = await req('POST', '/api/crm/tenants', {
+        key: LIMITED_KEY, body: { id: 'should_not_exist_' + RUN, name: 'x', slug: 'x' + RUN },
+      });
+      check('non-wildcard key cannot create a tenant (403)', 'A2', denied.status === 403, `status=${denied.status}`);
+    }
+    const dupeId = CO_A; // already provisioned above — re-provisioning is a 409, not a silent 200
+    const dupe = await req('POST', '/api/crm/tenants', { body: { id: dupeId, name: dupeId, slug: dupeId } });
+    check('re-provisioning an existing tenant is rejected (409)', 'A2', dupe.status === 409, `status=${dupe.status}`);
+    const fetched = await req('GET', `/api/crm/tenants/${CO_A}`);
+    check('GET /tenants/:id returns the provisioned tenant', 'A2', fetched.status === 200 && fetched.json?.id === CO_A, JSON.stringify(fetched.json));
+  }
+
+  // 7c — migration 013's FK on an unprovisioned company: clean 4xx, not a raw
+  // 500 (POST /contacts) or a silently-swallowed error (bulk-import) — a
+  // '*'-bound key passes the key-binding layer for ANY company id, so this
+  // reaches the DB write and exercises the FK-violation handling directly.
+  {
+    const unprovisioned = 'unprovisioned_' + RUN;
+    const create = await req('POST', '/api/crm/contacts', {
+      company: unprovisioned, body: { name: 'Orphan', email: email('orphan'), source: 'manual' },
+    });
+    check('POST /contacts under an unprovisioned tenant returns a clean 422 (not 500)', 'A2',
+      create.status === 422, `status=${create.status} body=${JSON.stringify(create.json)}`);
+
+    const bulk = await req('POST', '/api/crm/contacts/bulk-import', {
+      company: unprovisioned, body: { contacts: [{ name: 'Orphan Bulk', email: email('orphanbulk') }] },
+    });
+    check('bulk-import under an unprovisioned tenant returns a clean 422 up front (not a silent per-row swallow)', 'A2',
+      bulk.status === 422, `status=${bulk.status} body=${JSON.stringify(bulk.json)}`);
   }
 
   // 8 — api-backend default-company path: read co_a contact with the DEFAULT company header

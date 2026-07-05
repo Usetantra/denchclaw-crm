@@ -11,6 +11,7 @@
 import db from '../server/db/index.js';
 import contactDb from '../server/db/models/contacts.js';
 import crmRouterModule from '../server/routes/crm.js';
+import tenantDb from '../server/db/models/tenants.js';
 
 const RUN = process.env.RUN || String(Date.now());
 const CO_A = 'unit_co_a_' + RUN;
@@ -29,6 +30,11 @@ async function throws(fn) {
 
 async function main() {
   await db.initDatabase();
+
+  // Migration 013 FKs contacts.company_id -> tenants(id); provision both
+  // test tenants before creating any contact under them.
+  await tenantDb.create({ id: CO_A, name: CO_A, slug: CO_A });
+  await tenantDb.create({ id: CO_B, name: CO_B, slug: CO_B });
 
   const contactA = await contactDb.create({
     name: 'Unit Test A', email: `unit-a-${RUN}@example.com`,

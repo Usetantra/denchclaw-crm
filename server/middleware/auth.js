@@ -172,4 +172,19 @@ function getUserCompanyId(req) {
   return req.auth?.companyId || null;
 }
 
-module.exports = { requireAuth, getUserCompanyId, INTERNAL_API_KEY };
+// Tenant management (creating/listing tenants) isn't a company-scoped
+// operation — it's the operation that DEFINES companies — so it needs a
+// stronger gate than "bound to this one company": only a key bound to '*'
+// (unrestricted) may manage tenants. Composes with requireAuth rather than
+// duplicating its key/IP checks.
+function requireAdmin(req, res, next) {
+  requireAuth(req, res, () => {
+    const allowed = allowedCompaniesFor(req.headers['x-internal-key']);
+    if (allowed !== '*') {
+      return res.status(403).json({ error: 'tenant management requires a key bound to all companies (*)' });
+    }
+    next();
+  });
+}
+
+module.exports = { requireAuth, requireAdmin, getUserCompanyId, INTERNAL_API_KEY };

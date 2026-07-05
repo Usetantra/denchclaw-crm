@@ -139,3 +139,32 @@ Status keys: ⬜ todo · 🔄 in progress · ✅ done · 🚧 GATED (needs human
   **Remaining for A2 to be ✅** (gated): subdomain→tenant resolution, nginx
   config change, live migration apply — needs explicit authorization per
   the roadmap gates, not attempted here.
+- 2026-07-06 — **A2 FK enforcement done** (still 🔄, same gates as above
+  remain). Asked the user whether B1 should enforce a real tenant FK given
+  it'd conflict with the contract suite's ad-hoc tenant pattern — chose
+  "enforce FK, rewrite test suite." Migration 013 adds a real FK
+  (company_id -> tenants.id, ON DELETE RESTRICT, NOT VALID + VALIDATE
+  pattern for safe live application later) to all 10 company_id-bearing
+  tables; crm_pipeline_configs' nullable company_id (global defaults)
+  correctly satisfies the FK via NULL without needing a tenant row. Added
+  `POST/GET /api/crm/tenants` (admin-gated: only a `*`-bound key may
+  provision tenants) so the test suite has an HTTP way to provision ad-hoc
+  tenants before writing under them; rewired test/contract.mjs +
+  unit-tenancy.mjs + unit-tenants.mjs accordingly, with a direct test
+  proving the FK actually rejects an unprovisioned insert. Critic pass found
+  the real operational risk: `bulk-import`'s per-row catch would have
+  silently swallowed the new FK violation (worse than before — same
+  invisible failure, now for an undiagnosable reason), and `POST /contacts`
+  would have surfaced a raw Postgres 500 instead of a clear error. Fixed
+  both: bulk-import now checks tenant existence once up front (422, not N
+  silent per-row failures), POST /contacts catches the FK violation
+  specifically (422). `prospect-inbox` needed no fix — a contact can't exist
+  under an unprovisioned tenant anymore, so it 404s earlier via the existing
+  contact lookup. **Not fixed, flagged as follow-up**: other insert routes
+  (POST /deals, /conversations, /campaign-events, etc.) have the same latent
+  "raw 500 on unprovisioned tenant" shape — same fix pattern, not applied
+  everywhere in this pass to keep the change reviewable; worth a dedicated
+  sweep. Pre-existing, unrelated: `auth.js`'s `ipAllowed()` CIDR matching is
+  naive string-prefix, not real subnet math (confirmed by two independent
+  critic passes) — flagging separately, out of scope for A2.
+  78 tests pass (51 contract + 15 + 12 unit).
