@@ -85,3 +85,6 @@ DATABASE_URL="$DATABASE_URL_TEST" node test/unit-tenancy.mjs
 
 echo "[test] running unit-tenants tests (GOAL A2: tenant entity + resolution)"
 DATABASE_URL="$DATABASE_URL_TEST" node test/unit-tenants.mjs
+
+echo "[test] running unit-sequences tests (GOAL B1: sequence data model)"
+DATABASE_URL="$DATABASE_URL_TEST" node test/unit-sequences.mjs

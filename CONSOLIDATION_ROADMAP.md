@@ -35,7 +35,7 @@ Status keys: ⬜ todo · 🔄 in progress · ✅ done · 🚧 GATED (needs human
 
 ## GOAL B — Multi-channel sequences per pipeline stage + engine integration
 
-- ⬜ **B1. Sequence data model.** `sequences`, `sequence_steps` (channel, delay_offset,
+- ✅ **B1. Sequence data model.** `sequences`, `sequence_steps` (channel, delay_offset,
   template_ref, entry/exit conditions), `enrollments`, `scheduled_actions` — all
   `company_id`-scoped. Migration (after A2 so tenant FK exists). *(local, scratch-tested)*
 - ⬜ **B2. Stage-triggered enrollment.** Hook the existing stage authority (`/advance`,
@@ -168,3 +168,32 @@ Status keys: ⬜ todo · 🔄 in progress · ✅ done · 🚧 GATED (needs human
   naive string-prefix, not real subnet math (confirmed by two independent
   critic passes) — flagging separately, out of scope for A2.
   78 tests pass (51 contract + 15 + 12 unit).
+- 2026-07-06 — **B1 done.** Migration 014: `sequences` (name, pipeline_key,
+  trigger_stage — the B2 enrollment trigger), `sequence_steps` (channel,
+  delay_seconds, template_ref, entry/exit conditions JSONB), `enrollments`
+  (one ACTIVE enrollment per (sequence, contact) via partial unique index),
+  `scheduled_actions` (the backing store for B4's ChannelJob — a row here
+  becomes a real claim/ack job once B3 wires the dispatcher). All FK'd to
+  `tenants(id)`. Data model only — no HTTP routes, no B2/B3 wiring, by design.
+  Codex critic found a CRITICAL cross-tenant injection: `enroll()` and
+  `scheduleAction()` took companyId alongside foreign ids (sequenceId,
+  contactId, enrollmentId, stepId) without verifying those ids actually
+  belonged to that tenant — a valid companyId + another tenant's sequence/
+  contact id silently succeeded. Fixed: every foreign id is now ownership-
+  checked before any write (or derived server-side instead of trusted from
+  the caller — contact_id/channel/template_ref on scheduled_actions are now
+  always read from the enrollment/step, never caller-supplied). Also fixed a
+  real TOCTOU race in enroll()'s idempotency check (reproduced live: two
+  concurrent enroll() calls both pass the "existing active?" SELECT; the
+  partial unique index correctly rejects the loser with 23505, which
+  enroll() now catches and recovers from instead of crashing). A follow-up
+  critic pass on the fixes found one more real gap — the post-fix "existing
+  active enrollment" SELECT still wasn't filtered by company_id, exploitable
+  only if a poisoned row already existed outside this DAL — closed with an
+  explicit `AND company_id = $N`. sequence_steps also gained its own
+  company_id column (denormalized from sequence_id, matching every other
+  tenant-scoped table's convention) after the critic flagged its absence as
+  inconsistent. Two critic rounds, 38 sequence-specific tests (11 of them
+  direct cross-tenant-injection/race proofs). 116 tests pass total (51
+  contract + 15 + 12 + 38 unit). B2 (stage-triggered enrollment), B3
+  (dispatcher), B7 (sequence builder UI) build on this next.
