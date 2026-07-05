@@ -6,7 +6,8 @@
   "scripts": {
     "start": "node server/server.js",
     "dev": "node --watch server/server.js",
-    "test": "bash test/run-local.sh"
+    "test": "bash test/run-local.sh",
+    "verify:channel-contract": "node test/verify-channel-contract.mjs"
   },
   "dependencies": {
     "dotenv": "^16.4.7",

@@ -44,7 +44,7 @@ Status keys: ⬜ todo · 🔄 in progress · ✅ done · 🚧 GATED (needs human
 - ⬜ **B3. Always-on dispatcher.** Ticks `scheduled_actions`, applies timing/quiet-hours/
   throttle/suppression (from A5) once centrally, emits channel jobs. Must be resilient —
   the CRM is always-on; a channel failure must not stall the pipeline. *(local)*
-- ⬜ **B4. Channel-executor contract.** The API each engine executor implements: pull/ack
+- ✅ **B4. Channel-executor contract.** The API each engine executor implements: pull/ack
   a job, post result back as `contact_activity`/`campaign_event`. Publish as OpenAPI +
   a reference stub executor. *(local — defines the target the engines conform to)*
 - ⬜ **B5. CRM-owned prospect_inbox / campaigns / campaign_events.** Migrate these off the
@@ -88,3 +88,24 @@ Status keys: ⬜ todo · 🔄 in progress · ✅ done · 🚧 GATED (needs human
   15 unit tests pass on scratch Docker Postgres. Codex critic: pass-with-fixes,
   all flagged gaps closed in the same iteration. Branch `feat/consolidation`,
   not pushed/merged/deployed.
+- 2026-07-05 — **B4 done.** Published `docs/contracts/channel-executor.openapi.yaml`
+  (claim/ack contract engines implement) + prose companion
+  `CHANNEL_EXECUTOR_CONTRACT.md`, mirroring the existing `prospect_inbox`
+  claim pattern. Reference stub (`examples/mock-channel-jobs-server.mjs` +
+  `stub-executor.mjs`) self-tests the state machine via
+  `npm run verify:channel-contract` (13 assertions). Codex critic first pass
+  found real gaps — spoofable ack ownership, no way for an executor to learn
+  if a `failed` job would be retried, an overclaimed "proves Postgres
+  concurrency" comment, an unimplemented claim-timeout promise, and a
+  vacuous concurrency assertion — all fixed in the same iteration: ack now
+  requires+checks `claimed_by` (404 on mismatch), ack response carries a
+  `retry{will_retry, next_attempt_at, attempt, max_attempts}` block, the mock
+  comment now explicitly disclaims Postgres-safety equivalence, claim-timeout
+  reclaim is implemented (`CLAIM_TIMEOUT_MS`) and tested, and the concurrency
+  test now asserts exact job-id identity + both executors got a non-empty
+  share. One known gap intentionally left open (documented, not silently
+  shipped): a retryable `failed` ack is not idempotent against a duplicate ack
+  call — needs a per-attempt idempotency key, deferred to B3. B1 (sequence
+  data model) is next per the roadmap but its own text says "after A2 so
+  tenant FK exists" — A2 isn't done, so B1 is not actually unblocked;
+  proceeding to A2's local-buildable portion instead.

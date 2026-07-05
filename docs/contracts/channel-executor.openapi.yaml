@@ -1,0 +1,248 @@
+openapi: 3.0.3
+info:
+  title: DenchClaw CRM — Channel Executor Contract
+  version: 1.0.0
+  description: >
+    Target contract for GOAL B (multi-channel sequences). This is the API each
+    engine (outreach, nurturing, content, personalization) implements against
+    to consume channel jobs the CRM's dispatcher (B3) emits from
+    `scheduled_actions` (B1), and to post results back as `contact_activity` /
+    `campaign_event`.
+
+    STATUS: contract-first design (B4). The routes below are not live yet —
+    they land when B3 (always-on dispatcher) is built on top of the B1 data
+    model. Engines can build against this file now; `examples/stub-executor.mjs`
+    in this repo exercises the full pull→process→ack loop against a mock
+    implementation so the shape is proven before the real routes exist.
+servers:
+  - url: https://staging.usetantra.com/crm/api/crm
+    description: staging (via nginx key→tenant routing)
+  - url: http://127.0.0.1:3100/api/crm
+    description: local dev
+security:
+  - InternalKey: []
+paths:
+  /channel-jobs/claim:
+    post:
+      summary: Atomically claim a batch of pending jobs for one channel
+      description: >
+        Mirrors the existing `/prospect-inbox/claim` pattern (`FOR UPDATE SKIP
+        LOCKED` — no double-claim under concurrency, via a single atomic
+        `UPDATE ... WHERE id IN (SELECT ... FOR UPDATE SKIP LOCKED) RETURNING`
+        transaction; a select-then-update under READ COMMITTED would NOT be
+        safe). Returns only jobs whose `scheduled_for` has passed. A job stuck
+        in `claimed` for longer than `CLAIM_TIMEOUT_SECONDS` (default 300,
+        matching no engine having crash-recovered by then) becomes reclaimable
+        by any executor again — same semantics prospect_inbox does not
+        currently have, called out here as a deliberate improvement, not an
+        inherited guarantee.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [channel, claimed_by]
+              properties:
+                channel:
+                  $ref: '#/components/schemas/Channel'
+                limit:
+                  type: integer
+                  default: 10
+                  maximum: 100
+                claimed_by:
+                  type: string
+                  description: engine instance identifier, echoed back on ack for audit
+      responses:
+        '200':
+          description: zero or more claimed jobs (empty array is normal — not an error)
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  jobs:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/ChannelJob'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+
+  /channel-jobs/{job_id}/ack:
+    post:
+      summary: Report the outcome of a claimed job
+      description: >
+        `claimed_by` in the body must match the identifier that claimed the
+        job — an executor cannot ack a job it never claimed, even if it knows
+        the `job_id` (guards against a crashed/duplicate executor instance
+        interfering with another's in-flight job); mismatch or unclaimed ⇒ 404.
+        Idempotent on `job_id` + terminal `status`: replaying the same ack
+        after a network blip on the CRM's response is a no-op, so an executor
+        may always retry an ack it isn't sure landed. A *different* terminal
+        status than the one already recorded is rejected with 409 — an
+        executor can't flip a job from `sent` to `failed` after the fact.
+      parameters:
+        - name: job_id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/AckRequest'
+      responses:
+        '200':
+          description: ack recorded (or replayed idempotently)
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  ok:
+                    type: boolean
+                  job_id:
+                    type: string
+                    format: uuid
+                  status:
+                    $ref: '#/components/schemas/JobStatus'
+                  retry:
+                    type: object
+                    nullable: true
+                    description: >
+                      present only when `status=failed`; tells the executor
+                      what happens next so it never has to guess. `null`
+                      status means the ack itself wasn't a `failed` report.
+                    properties:
+                      will_retry:
+                        type: boolean
+                      next_attempt_at:
+                        type: string
+                        format: date-time
+                        nullable: true
+                        description: null when will_retry=false (dead-lettered)
+                      attempt:
+                        type: integer
+                        description: the attempt number that just failed
+                      max_attempts:
+                        type: integer
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          description: unknown job_id, or job not claimed by this claimed_by
+        '409':
+          description: job already acked with a conflicting terminal status
+
+components:
+  securitySchemes:
+    InternalKey:
+      type: apiKey
+      in: header
+      name: X-Internal-Key
+      description: paired with X-Company-Id for tenant scoping (see docs/API_CONTRACT.md)
+  responses:
+    BadRequest:
+      description: invalid channel, status, or malformed body
+    Unauthorized:
+      description: missing/unknown X-Internal-Key
+    Forbidden:
+      description: key not bound to X-Company-Id, or caller IP outside allowed CIDRs
+  schemas:
+    Channel:
+      type: string
+      enum: [email, sms, whatsapp, ai_call, linkedin]
+    JobStatus:
+      type: string
+      enum: [sent, failed, skipped]
+    ChannelJob:
+      type: object
+      description: one row from `scheduled_actions` (B1), claimed for execution.
+      properties:
+        job_id:
+          type: string
+          format: uuid
+        company_id:
+          type: string
+        contact_id:
+          type: string
+          format: uuid
+        sequence_id:
+          type: string
+          format: uuid
+        step_id:
+          type: string
+          format: uuid
+        channel:
+          $ref: '#/components/schemas/Channel'
+        template_ref:
+          type: string
+          description: opaque template/content identifier the engine resolves itself
+        payload:
+          type: object
+          description: merge fields / call params the engine needs to execute the step
+          additionalProperties: true
+        scheduled_for:
+          type: string
+          format: date-time
+        claimed_at:
+          type: string
+          format: date-time
+        attempt:
+          type: integer
+          description: 1 on first claim, incremented on each `failed` ack that re-queues
+    AckRequest:
+      type: object
+      required: [status, claimed_by]
+      properties:
+        status:
+          $ref: '#/components/schemas/JobStatus'
+        claimed_by:
+          type: string
+          description: >
+            must match the claimed_by that won this job's /claim call;
+            mismatch (or acking an unclaimed job) ⇒ 404, not 403 — the CRM
+            does not disclose whether the job exists to the wrong caller.
+        provider_message_id:
+          type: string
+          description: dedupe key for the resulting contact_activity / campaign_event
+        error:
+          type: string
+          description: required when status=failed
+        activity:
+          type: object
+          description: >
+            optional contact_activity override; the CRM writes a sensible
+            default (`<channel>_sent` / `<channel>_failed`) when omitted.
+          properties:
+            type:
+              type: string
+            message:
+              type: string
+            data:
+              type: object
+              additionalProperties: true
+        campaign_event:
+          type: object
+          description: >
+            optional — when present, forwarded to the existing
+            POST /campaign-events pipeline (writes campaign_events + the
+            per-(company, campaign, channel, segment, day) rollup).
+          properties:
+            campaign:
+              type: string
+            type:
+              type: string
+              enum: [send, deliver, open, click, reply, bounce, unsub, suppressed, mql]
+            segment:
+              type: string
