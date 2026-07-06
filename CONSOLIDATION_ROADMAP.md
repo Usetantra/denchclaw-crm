@@ -25,7 +25,7 @@ Status keys: ⬜ todo · 🔄 in progress · ✅ done · 🚧 GATED (needs human
 - ⬜ **A4. Per-tenant channel credentials + settings.** Encrypted per-tenant store for
   provider creds (email/WhatsApp/SMS/AI-call/LinkedIn) — NOT global `.env`. Schema +
   management endpoints. 🚧 **GATE: choose encryption/KMS approach (product decision).**
-- ⬜ **A5. Per-tenant limits/quotas/suppression.** Rate limits, sending quotas, quiet
+- ✅ **A5. Per-tenant limits/quotas/suppression.** Rate limits, sending quotas, quiet
   hours, global suppression list — all `company_id`-scoped. *(local)*
 - ⬜ **A6. Tenant lifecycle + isolation proof.** Provisioning/onboarding flow; extend the
   contract suite to run N-tenant isolation across the NEW tables; billing hooks (stub).
@@ -229,3 +229,44 @@ Status keys: ⬜ todo · 🔄 in progress · ✅ done · 🚧 GATED (needs human
   pre-existing note flagged, not fixed (out of scope): `PATCH /deals/:id`
   writes a `contact_activity` row before its own `rowCount` guard, so a
   deal deleted mid-request could still leave an orphaned activity entry.
+- 2026-07-06 — **A5 done.** Built out-of-order, ahead of B3, because B3's own
+  roadmap text depends on it ("applies timing/quiet-hours/throttle/
+  suppression from A5") — same hidden-dependency pattern as B1→A2 earlier.
+  Migration 015: `suppressions` (channel NULL = suppressed on every channel,
+  same NULL-as-broadcast idiom as `prospect_inbox`) + `tenant_channel_limits`
+  (max_per_hour/day, quiet_hours_start/end, timezone — absent row/NULL
+  fields = permissive "no limit configured", not an error).
+  `server/db/models/limits.js`: suppress/unsuppress/isSuppressed,
+  getChannelLimits/setChannelLimits (partial-merge upsert), isQuietHours
+  (midnight-wraparound aware, IANA-timezone via `Intl`), checkRateLimit
+  (counts `scheduled_actions.sent_at`, not `updated_at` — see below).
+  **Two critic rounds.** Round 1 found: rate-limit counting keyed off the
+  wrong timestamp column (any future retry/backfill touching `updated_at`
+  on an already-sent row would corrupt counts) → migration 016 adds a
+  dedicated `sent_at` column; `unsuppress(null)` only cleared the global row,
+  leaving channel-specific rows orphaned → now clears everything for the
+  contact; global and channel-specific suppression rows could coexist with
+  undefined precedence → global suppress now cleans up specifics;
+  `quiet_hours_start === quiet_hours_end` silently meant "never quiet"
+  (likely not what an admin configuring equal values intended) → migration
+  016 adds a CHECK rejecting it; `suppress()`'s idempotency was a
+  SELECT-then-INSERT that could race into a thrown unique-violation → now
+  `INSERT ... ON CONFLICT DO NOTHING`; **and explicitly documented, not
+  fixed** — `checkRateLimit` is read-only advice with no atomicity, B3 MUST
+  wrap "check then mark sent" in a per-(company,channel) advisory-lock
+  transaction or N concurrent dispatcher workers can all see "under cap" and
+  all fire past it. Round 2 (verifying round 1's fixes) found the
+  global-suppress cleanup was two un-transacted statements — a concurrent
+  channel-specific suppress() could land between them and resurrect the
+  coexistence — fixed with a per-contact `pg_advisory_xact_lock` transaction
+  (same pattern as the earlier tenants.js alias-collision fix) **plus** a
+  same-transaction check the first fix alone couldn't catch: a
+  channel-specific suppress() arriving strictly *after* a global one already
+  committed isn't concurrent with anything, so it now checks for an existing
+  global row and short-circuits instead of inserting a redundant one — and
+  migration 016's CHECK constraint was unsafely applied (would abort the
+  whole migration if a pre-existing row ever violated it) → switched to the
+  `NOT VALID` + `VALIDATE CONSTRAINT` pattern already established in
+  migration 013, verified directly against Postgres that it actually catches
+  a violating row rather than silently accepting it. 166 tests pass (51
+  contract + 15 + 12 + 38 + 16 + 34 unit-limits).
