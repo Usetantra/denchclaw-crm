@@ -97,3 +97,9 @@ node test/unit-b2-enrollment.mjs
 
 echo "[test] running unit-limits tests (GOAL A5: quotas/suppression/quiet-hours)"
 DATABASE_URL="$DATABASE_URL_TEST" node test/unit-limits.mjs
+
+echo "[test] running B3 dispatcher verification (real claim/ack routes)"
+CRM_API_BASE="http://127.0.0.1:${TEST_PORT}" \
+INTERNAL_API_KEY="$KEY" \
+DATABASE_URL="$DATABASE_URL_TEST" \
+node test/unit-b3-dispatcher.mjs

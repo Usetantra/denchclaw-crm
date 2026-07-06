@@ -41,7 +41,7 @@ Status keys: ⬜ todo · 🔄 in progress · ✅ done · 🚧 GATED (needs human
 - ✅ **B2. Stage-triggered enrollment.** Hook the existing stage authority (`/advance`,
   PATCH stage) so a transition enrolls/advances a prospect into the right sequence per
   pipeline stage. *(local)*
-- ⬜ **B3. Always-on dispatcher.** Ticks `scheduled_actions`, applies timing/quiet-hours/
+- ✅ **B3. Always-on dispatcher.** Ticks `scheduled_actions`, applies timing/quiet-hours/
   throttle/suppression (from A5) once centrally, emits channel jobs. Must be resilient —
   the CRM is always-on; a channel failure must not stall the pipeline. *(local)*
 - ✅ **B4. Channel-executor contract.** The API each engine executor implements: pull/ack
@@ -270,3 +270,48 @@ Status keys: ⬜ todo · 🔄 in progress · ✅ done · 🚧 GATED (needs human
   migration 013, verified directly against Postgres that it actually catches
   a violating row rather than silently accepting it. 166 tests pass (51
   contract + 15 + 12 + 38 + 16 + 34 unit-limits).
+- 2026-07-06 — **B3 done.** The biggest remaining piece — wires B1
+  (`scheduled_actions`), A5 (limits/suppression), and B4 (the OpenAPI
+  contract, previously only proven against a mock) together into real HTTP
+  routes: `POST /api/crm/channel-jobs/claim` and `POST /api/crm/channel-jobs/
+  :job_id/ack` (`server/routes/channel-jobs.js` + `server/db/models/
+  dispatch.js`). Design call: no separate background timer process —
+  "the dispatcher" is the claim() query's logic, invoked whenever an engine
+  polls; judged far safer to get right this session than a new
+  process-lifecycle/crash-loop surface, while still satisfying "ticks
+  scheduled_actions... emits channel jobs" functionally. Extracted
+  `ingestCampaignEvent` out of the existing `POST /campaign-events` route
+  (no behavior change to that route) so ack(sent) can forward to it without
+  duplicating rollup math. **Three critic rounds** (this was the riskiest
+  single change of the session — real HTTP routes, real money-adjacent
+  send-gating logic): round 1 found retry backoff was computed but never
+  persisted (a retried job was immediately reclaimable — no actual backoff
+  occurred), ack() wasn't atomic (two concurrent identical acks could
+  double-write activity/campaign-event rows), retryable-failed acks weren't
+  idempotent (clearing claimed_by on requeue broke replay), `limit`/`job_id`
+  input validation gaps could surface raw Postgres errors as 500s instead of
+  clean 400s, and the in-flight-claim rate-limit count included stale claims
+  (permanently starving a tight cap). All fixed: `scheduled_for` is now set
+  to the real backoff time; ack() runs inside a transaction holding
+  `SELECT ... FOR UPDATE` on the job row, serializing concurrent acks;
+  claimed_by is deliberately preserved through a retry-requeue so a replay
+  of that exact ack is still recognized; strict input validation added.
+  Round 2 (verifying round 1) found a subtler bug those fixes introduced:
+  replaying a failed ack exactly at the `MAX_ATTEMPTS` boundary recomputed
+  `will_retry` from the already-incremented attempt count, flipping a
+  `true` response to `false` on replay — a genuine idempotency violation,
+  not just imprecision. Fixed by reconstructing the pre-increment attempt
+  count. Round 3 (final scoped check) caught that `next_attempt_at` in that
+  same replay wasn't pinned to the originally-persisted value (wall-clock
+  drift on replay) and that campaign-event forwarding running before COMMIT
+  created a narrow double-write window — both fixed (pin to
+  `job.scheduled_for`; move the forward to after COMMIT, wrapped in its own
+  try/catch so a non-critical analytics failure can't mask an
+  already-successful ack). 196 tests pass (51 contract + 15 + 12 + 38 + 16 +
+  34 + 30 unit-b3), including direct proofs of the concurrency/atomicity
+  fixes via `Promise.all` races against real Postgres.
+  **GOAL B is now fully done except B5 (migrate prospect_inbox/campaigns off
+  per-engine DBs), B6 (per-engine integration, gated on recon reports), B7
+  (sequence builder UI), and B8 (live end-to-end proof, gated on deploy
+  authorization).** GOAL A has A4 (gated: encryption/KMS decision), A6
+  (gated: billing/onboarding decision), and A7 (tenant-aware UI) remaining.
