@@ -6,6 +6,7 @@ const { v4: uuidv4 } = require('uuid');
 const { query } = require('../db/index');
 const { requireAuth, getUserCompanyId } = require('../middleware/auth');
 const contactDb = require('../db/models/contacts');
+const sequenceDb = require('../db/models/sequences');
 const { getPipelineConfig, getPipelineTransitions } = require('../db/pipeline');
 
 router.use(requireAuth);
@@ -212,6 +213,11 @@ router.post('/conversations/:id/messages', async (req, res) => {
                 channel: channel || null,
                 data: { pipeline_key: 'marketing', from: currentStage, to: 'responded' },
               }, companyId);
+              // GOAL B2: this is a real marketing-pipeline transition outside
+              // crm.js's /advance authority — the roadmap names "the existing
+              // stage authority" broadly, and this inbound-reply auto-advance
+              // is one of its paths too. Called after the UPDATE above persists.
+              await sequenceDb.enrollForTriggerStage(companyId, conv.contact_id, 'marketing', 'responded');
             }
           }
         } catch (_e) { /* non-blocking — message already persisted */ }

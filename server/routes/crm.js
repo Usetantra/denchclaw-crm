@@ -5,6 +5,7 @@ const { v4: uuidv4 } = require('uuid');
 const contactDb = require('../db/models/contacts');
 const companyDb = require('../db/models/companies');
 const tenantDb = require('../db/models/tenants');
+const sequenceDb = require('../db/models/sequences');
 const { query } = require('../db/index');
 const { getPipelineConfig, getPipelineTransitions } = require('../db/pipeline');
 
@@ -202,6 +203,10 @@ async function recycleContactToMarketingNurture(contactId, companyId, { dealId =
       channel: null,
       data: { pipeline_key: 'marketing', from: currentStage, to: 'nurture', deal_id: dealId, reason: 'sales_nurture_offramp' },
     });
+    // GOAL B2: this recycle IS a real marketing-pipeline transition (to
+    // 'nurture'), so it must trigger sequences the same as any other advance
+    // — called after the UPDATE above has actually persisted, not before.
+    await sequenceDb.enrollForTriggerStage(companyId, contactId, 'marketing', 'nurture');
     return true;
   } catch (err) {
     console.error('[CRM] recycleContactToMarketingNurture error:', err.message);
@@ -542,6 +547,22 @@ router.patch('/contacts/:id', async (req, res) => {
       }, companyId);
 
       triggerStageAutomation({ ...existing, ...updateData }, oldStage, newStage).catch(() => {});
+
+      // GOAL B2 deliberately does NOT trigger sequence enrollment from this
+      // legacy path. contacts.deal_stage is a hybrid/mirrored field (it holds
+      // BOTH real legacy sales values AND a mirror of marketing_stage written
+      // by /advance's marketing branch), and some stage names (e.g.
+      // 'nurture') are legitimately valid in both the sales and marketing
+      // JSONB configs (migration 006) — there is no reliable way to tell,
+      // from this field alone, whether a given value reflects an actual
+      // sales-domain transition or a marketing mirror. Firing 'sales'
+      // sequences off an ambiguous value risks enrolling a contact based on
+      // a transition that never really happened on that pipeline (verified:
+      // an attacker/caller could PATCH deal_stage:'nurture' with no real
+      // deals-table involvement at all and wrongly trigger a sales sequence).
+      // The reliable trigger points are POST /contacts/:id/advance (operates
+      // on a real deals row for pipeline_key='sales') and PATCH /deals/:id
+      // (same) — both already hooked below/elsewhere in this file.
     }
 
     const contact = await contactDb.update(req.params.id, updateData, companyId);
@@ -652,7 +673,14 @@ router.post('/contacts/:id/advance', async (req, res) => {
         data: { pipeline_key, from: currentStage, to: stage, reason: reason || null },
       });
 
-      return res.json({ contact_id: contact.id, pipeline_key, stage, previous: currentStage, changed: true });
+      // GOAL B2: a real (non-idempotent) stage transition auto-enrolls the
+      // contact into any active sequence configured to trigger on this stage.
+      const sequenceEnrollments = await sequenceDb.enrollForTriggerStage(companyId, contact.id, pipeline_key, stage);
+
+      return res.json({
+        contact_id: contact.id, pipeline_key, stage, previous: currentStage, changed: true,
+        ...(sequenceEnrollments.length ? { sequence_enrollments: sequenceEnrollments } : {}),
+      });
     }
 
     if (pipeline_key === 'sales') {
@@ -701,9 +729,14 @@ router.post('/contacts/:id/advance', async (req, res) => {
         marketing_recycled = await recycleContactToMarketingNurture(contact.id, companyId, { dealId: deal.id, actor: actor || 'system' });
       }
 
+      // GOAL B2: a real (non-idempotent) stage transition auto-enrolls the
+      // contact into any active sequence configured to trigger on this stage.
+      const sequenceEnrollments = await sequenceDb.enrollForTriggerStage(companyId, contact.id, pipeline_key, stage);
+
       return res.json({
         contact_id: contact.id, deal_id: deal.id, pipeline_key, stage, previous: currentStage, changed: true,
         ...(marketing_recycled !== undefined ? { marketing_recycled } : {}),
+        ...(sequenceEnrollments.length ? { sequence_enrollments: sequenceEnrollments } : {}),
       });
     }
 
@@ -873,6 +906,8 @@ router.patch('/deals/:id', async (req, res) => {
       deal.pipeline_key = updates.pipeline_key && updates.pipeline_key !== 'sales' ? updates.pipeline_key : null;
     }
 
+    let stageChangeForEnrollment = null; // set below, fired only after persistence
+    let needsNurtureRecycle = false; // ditto — deferred until the deals UPDATE below persists
     if (updates.stage && updates.stage !== deal.stage) {
       const oldStage = deal.stage;
       const newStage = updates.stage;
@@ -916,20 +951,45 @@ router.patch('/deals/:id', async (req, res) => {
         // Sales nurture off-ramp → recycle the contact to marketing's nurture
         // queue. Built-in sales pipeline only — a custom pipeline (009) may
         // name a stage 'nurture' without marketing-recycle semantics.
-        if (newStage === 'nurture' && !deal.pipeline_key) {
-          await recycleContactToMarketingNurture(deal.contact_id, companyId, { dealId: deal.id });
-        }
+        // Deferred (like stageChangeForEnrollment below) until the deals
+        // UPDATE actually persists — recycleContactToMarketingNurture does
+        // its own contacts UPDATE + sequence enrollment, so running it before
+        // this deal's own row is persisted risks a marketing-side side
+        // effect for a sales stage change that never actually landed.
+        needsNurtureRecycle = newStage === 'nurture' && !deal.pipeline_key;
+
+        // GOAL B2: matches whichever pipeline this deal actually belongs to
+        // (built-in sales, or a custom pipeline — same as /advance's
+        // flexibility). Deferred until after the UPDATE below actually
+        // persists deal.stage — this row's stage is unambiguous (unlike the
+        // legacy contacts.deal_stage field), so it's safe to trigger here.
+        stageChangeForEnrollment = { contactId: deal.contact_id, pipelineKey: deal.pipeline_key || 'sales', stage: newStage };
       }
     }
 
     deal.updated_at = new Date().toISOString();
 
-    await query(
+    const updateResult = await query(
       `UPDATE deals SET title=$1, value=$2, stage=$3, contact_id=$4, pipeline_key=$5, metadata=$6, updated_at=NOW() WHERE id=$7 AND company_id=$8`,
       [deal.title, deal.value, deal.stage, deal.contact_id, deal.pipeline_key,
        JSON.stringify({ contact_name: deal.contact_name, notes: deal.notes, activity: deal.activity, closed_at: deal.closed_at }),
        deal.id, companyId]
     );
+    // The row was deleted (or moved to another tenant) between the SELECT at
+    // the top of this handler and this UPDATE — don't fire any deferred
+    // side effect for a write that didn't actually happen.
+    if (updateResult.rowCount === 0) {
+      return res.status(404).json({ error: 'deal not found' });
+    }
+
+    if (needsNurtureRecycle) {
+      await recycleContactToMarketingNurture(deal.contact_id, companyId, { dealId: deal.id });
+    }
+    if (stageChangeForEnrollment) {
+      await sequenceDb.enrollForTriggerStage(
+        companyId, stageChangeForEnrollment.contactId, stageChangeForEnrollment.pipelineKey, stageChangeForEnrollment.stage
+      );
+    }
 
     broadcast(req, { type: 'deal_updated', deal });
     res.json(deal);

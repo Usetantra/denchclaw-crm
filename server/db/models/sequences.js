@@ -6,8 +6,10 @@
 // contacts.js in A1. Every function that takes a foreign id belonging to
 // another table (sequenceId, contactId, enrollmentId, stepId) verifies that
 // id actually belongs to companyId before writing — passing companyId
-// alongside a foreign id owned by a DIFFERENT tenant must never succeed. No
-// HTTP routes yet (B2/B3/B7 build on this).
+// alongside a foreign id owned by a DIFFERENT tenant must never succeed.
+// enrollForTriggerStage is B2's hook point (called from crm.js's /advance and
+// legacy PATCH stage-change routes); B3 (dispatcher) and B7 (builder UI)
+// still build on top of this file. No HTTP routes of its own.
 const { query } = require('../index');
 const contactDb = require('./contacts');
 
@@ -41,6 +43,45 @@ async function listSequences(companyId, { status, pipelineKey } = {}) {
     params
   );
   return result.rows;
+}
+
+// GOAL B2 — stage-triggered enrollment. Called from the existing stage
+// authority (POST /contacts/:id/advance, legacy PATCH stage) right after a
+// REAL transition (not on an idempotent same-stage no-op) lands. Enrolls the
+// contact into every active sequence configured to trigger on this exact
+// (pipeline_key, stage) pair. Never throws into the caller's request path —
+// a sequence-enrollment failure must not turn an already-persisted stage
+// change into a 500, same posture as companies.js's identifyAndLink.
+async function enrollForTriggerStage(companyId, contactId, pipelineKey, stage) {
+  if (!companyId) throw new Error('sequences.enrollForTriggerStage requires companyId');
+  try {
+    const matches = await query(
+      `SELECT id FROM sequences
+        WHERE company_id = $1 AND status = 'active' AND pipeline_key = $2 AND trigger_stage = $3`,
+      [companyId, pipelineKey, stage]
+    );
+    // Distinct sequences for the same contact never contend with each other
+    // (the partial unique index is keyed on (sequence_id, contact_id)), so
+    // running them concurrently is safe and keeps this out of the way of the
+    // core stage-transition endpoint's latency budget when a tenant has
+    // several sequences sharing one trigger_stage.
+    const results = await Promise.all(
+      matches.rows.map((seq) => enroll(companyId, { sequenceId: seq.id, contactId }))
+    );
+    return results
+      .map((enrollment, i) => (enrollment ? { sequence_id: matches.rows[i].id, enrollment_id: enrollment.id } : null))
+      .filter(Boolean);
+  } catch (err) {
+    // Never throws into the caller's request path — but a tenant with a
+    // systematically broken sequence config (bad SQL state, FK drift) would
+    // otherwise fail silently forever. Tag the log distinctly and include
+    // enough context (company/pipeline/stage) to actually diagnose it,
+    // instead of just the bare error message.
+    console.error(
+      `[CRM][sequence-enrollment-failure] company=${companyId} pipeline=${pipelineKey} stage=${stage}: ${err.message}`
+    );
+    return [];
+  }
 }
 
 async function updateSequenceStatus(id, companyId, status) {
@@ -231,4 +272,5 @@ module.exports = {
   addStep, listSteps,
   enroll, getEnrollment, listEnrollments, updateEnrollment,
   scheduleAction, listScheduledActions,
+  enrollForTriggerStage,
 };

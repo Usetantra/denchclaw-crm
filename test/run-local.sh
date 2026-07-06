@@ -88,3 +88,9 @@ DATABASE_URL="$DATABASE_URL_TEST" node test/unit-tenants.mjs
 
 echo "[test] running unit-sequences tests (GOAL B1: sequence data model)"
 DATABASE_URL="$DATABASE_URL_TEST" node test/unit-sequences.mjs
+
+echo "[test] running B2 stage-triggered enrollment verification"
+CRM_API_BASE="http://127.0.0.1:${TEST_PORT}" \
+INTERNAL_API_KEY="$KEY" \
+DATABASE_URL="$DATABASE_URL_TEST" \
+node test/unit-b2-enrollment.mjs

@@ -38,7 +38,7 @@ Status keys: ⬜ todo · 🔄 in progress · ✅ done · 🚧 GATED (needs human
 - ✅ **B1. Sequence data model.** `sequences`, `sequence_steps` (channel, delay_offset,
   template_ref, entry/exit conditions), `enrollments`, `scheduled_actions` — all
   `company_id`-scoped. Migration (after A2 so tenant FK exists). *(local, scratch-tested)*
-- ⬜ **B2. Stage-triggered enrollment.** Hook the existing stage authority (`/advance`,
+- ✅ **B2. Stage-triggered enrollment.** Hook the existing stage authority (`/advance`,
   PATCH stage) so a transition enrolls/advances a prospect into the right sequence per
   pipeline stage. *(local)*
 - ⬜ **B3. Always-on dispatcher.** Ticks `scheduled_actions`, applies timing/quiet-hours/
@@ -197,3 +197,35 @@ Status keys: ⬜ todo · 🔄 in progress · ✅ done · 🚧 GATED (needs human
   direct cross-tenant-injection/race proofs). 116 tests pass total (51
   contract + 15 + 12 + 38 unit). B2 (stage-triggered enrollment), B3
   (dispatcher), B7 (sequence builder UI) build on this next.
+- 2026-07-06 — **B2 done.** Added `sequences.enrollForTriggerStage(companyId,
+  contactId, pipelineKey, stage)` — enrolls a contact into every active
+  sequence matching that exact (pipeline_key, stage) pair, never throws into
+  the caller's request path. Hooked into every real stage-authority path:
+  `/advance` (marketing + sales branches), the sales `nurture` off-ramp
+  (`recycleContactToMarketingNurture`, both its call sites — `/advance` and
+  `PATCH /deals/:id`), `PATCH /deals/:id {stage}` directly, and inbound-reply
+  auto-advance in `conversations.js` (a fourth path outside crm.js entirely).
+  **Four critic rounds, each finding a real bug**, in order: (1) missing
+  hooks on the nurture off-ramp and the conversations.js path entirely; (2) a
+  stage-domain collision — `nurture` is a legitimate stage name in BOTH the
+  sales and marketing JSONB pipeline configs (migration 006), so a
+  membership-check ("is this a sales stage name") on the legacy
+  `contacts.deal_stage` field cannot reliably tell a real sales transition
+  from a marketing mirror; reproduced live: PATCHing `deal_stage:'nurture'`
+  with no real deal involved wrongly enrolled into a sales sequence. Fixed by
+  removing the enrollment hook from that legacy path ENTIRELY (deal_stage is
+  too ambiguous a signal to trust) rather than trying to out-clever the
+  ambiguity — the two reliable trigger points (`/advance`, `PATCH /deals/:id`)
+  both operate on an unambiguous real `deals` row already; (3) an ordering
+  bug in `PATCH /deals/:id` — enrollment fired before the stage actually
+  persisted; (4) the SAME ordering bug at a second call site inside the same
+  route (`recycleContactToMarketingNurture`'s own internal enrollment call),
+  found only after fixing the first one — plus a missing `rowCount` check
+  that could fire a deferred side effect for a row that silently failed to
+  update. Also parallelized the per-sequence enrollment loop
+  (`Promise.all`, safe since the partial unique index is keyed per-sequence)
+  and improved the non-blocking error log to include company/pipeline/stage
+  context. 132 tests pass (51 contract + 15 + 12 + 38 + 16 unit-b2). One
+  pre-existing note flagged, not fixed (out of scope): `PATCH /deals/:id`
+  writes a `contact_activity` row before its own `rowCount` guard, so a
+  deal deleted mid-request could still leave an orphaned activity entry.
