@@ -1,6 +1,7 @@
 'use strict';
 const { v4: uuidv4 } = require('uuid');
 const tenantDb = require('../db/models/tenants');
+const apiKeysDb = require('../db/models/apiKeys');
 
 const INTERNAL_API_KEY = process.env.INTERNAL_API_KEY || (() => {
   const k = 'denchclaw-dev-' + uuidv4();
@@ -145,18 +146,84 @@ function requireAuth(req, res, next) {
 
 async function requireAuthAsync(req, res, next) {
   const key = req.headers['x-internal-key'];
-  const allowed = key ? allowedCompaniesFor(key) : null;
-  if (!key || !allowed) {
+  if (!key) {
     return res.status(401).json({ error: 'Missing or invalid X-Internal-Key' });
   }
+
+  // GOAL A3: a DB-backed per-tenant key (tenant_api_keys, migration 017)
+  // resolves independently of the legacy env-configured map below — both are
+  // checked before deciding anything, specifically so the collision case
+  // right below can be caught before either path is trusted.
+  let dbCompanyId = null;
+  let dbCheckFailed = false;
+  try {
+    dbCompanyId = await apiKeysDb.resolveKey(key);
+  } catch (err) {
+    // DB not ready / transient error. The collision check right below can
+    // only detect an ambiguous key if BOTH sides were actually queried —
+    // when this side errors, we CANNOT prove this key isn't also a
+    // DB-backed one, so we can't just silently trust the env side as if
+    // nothing were wrong. Handled below: narrowly-scoped env keys still
+    // work (no escalation risk even if an undetected collision existed —
+    // a colliding DB key grants at most the same narrow access), but a
+    // wildcard ('*') env key is refused during this window rather than
+    // risking an undetected collision handing out admin power.
+    console.error('[Auth] DB-backed API key resolution failed:', err.message);
+    dbCheckFailed = true;
+  }
+  const envAllowed = allowedCompaniesFor(key);
+
+  // SECURITY: a literal key string must never be valid in BOTH systems at
+  // once. This can only happen via an operator manually reusing a string
+  // across tenant_api_keys and INTERNAL_API_KEYS (createKey() always
+  // generates its own random value, so the DB side of this can't happen
+  // through normal API use) — but if it ever does, silently preferring
+  // either side is dangerous: preferring the DB side would let a per-tenant
+  // key inherit '*'-admin power should that same string also be an env
+  // wildcard key (requireAdmin re-derives admin-ness from the raw key via
+  // allowedCompaniesFor, independent of how requireAuth resolved it); and
+  // preferring the env side would silently bind the request to whatever
+  // tenant the env config says instead of the DB-issued key's actual tenant.
+  // Fail loud (401) instead of silently picking a side.
+  if (dbCompanyId && envAllowed) {
+    console.error('[Auth] SECURITY: a key resolved via BOTH tenant_api_keys and INTERNAL_API_KEYS — refusing (ambiguous binding); rotate one of them');
+    return res.status(401).json({ error: 'Missing or invalid X-Internal-Key' });
+  }
+  if (dbCheckFailed && envAllowed) {
+    // NOT narrowed to wildcard-only: a narrowly-bound env key is not "safe"
+    // here either. The narrow env key's granted tenant comes from the
+    // CALLER-SUPPLIED X-Company-Id header, not from anything the colliding
+    // DB key was actually issued for — if key K is DB-bound to tenant A but
+    // also present (operator error) in INTERNAL_API_KEYS narrowly bound to
+    // {B, C}, an attacker sends X-Company-Id: C and authenticates as C, not
+    // A and not "the same or a narrower" tenant. That's cross-tenant
+    // confusion, not a privilege reduction — refusing wildcard keys alone
+    // does not close it. Any env binding, wide or narrow, is refused when
+    // the collision check itself can't run.
+    console.error('[Auth] SECURITY: DB key-collision check unavailable (DB error) for an env-bound key — refusing rather than risk an undetected collision');
+    return res.status(401).json({ error: 'Missing or invalid X-Internal-Key' });
+  }
+  if (!dbCompanyId && !envAllowed) {
+    return res.status(401).json({ error: 'Missing or invalid X-Internal-Key' });
+  }
+
   const callerIp = req.ip || req.socket?.remoteAddress || '';
   if (!ipAllowed(callerIp)) {
     console.warn('[Auth] X-Internal-Key rejected from IP:', callerIp);
     return res.status(403).json({ error: 'Internal API access denied from this address' });
   }
+
+  if (dbCompanyId) {
+    // X-Company-Id is irrelevant for a DB-backed key — it belongs to exactly
+    // one tenant, unlike the legacy env-based keys below which are bound to
+    // a SET of companies and still need the header to pick one.
+    req.auth = { userId: 'internal-agent', companyId: dbCompanyId, role: 'agent' };
+    return next();
+  }
+
   const companyId = await canonicalCompanyId(req.headers['x-company-id'] || DEFAULT_COMPANY_ID);
   // Layer-1 isolation: a bound key may only act for companies in its set.
-  if (allowed !== '*' && !allowed.has(companyId)) {
+  if (envAllowed !== '*' && !envAllowed.has(companyId)) {
     console.warn(`[Auth] key not permitted for company '${companyId}'`);
     return res.status(403).json({ error: 'company not permitted for this key' });
   }

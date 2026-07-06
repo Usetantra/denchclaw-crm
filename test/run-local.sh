@@ -103,3 +103,12 @@ CRM_API_BASE="http://127.0.0.1:${TEST_PORT}" \
 INTERNAL_API_KEY="$KEY" \
 DATABASE_URL="$DATABASE_URL_TEST" \
 node test/unit-b3-dispatcher.mjs
+
+echo "[test] running unit-api-keys tests (GOAL A3: per-tenant API keys)"
+DATABASE_URL="$DATABASE_URL_TEST" node test/unit-api-keys.mjs
+
+echo "[test] running A3 API key auth-flow verification (real HTTP, DB-backed key)"
+CRM_API_BASE="http://127.0.0.1:${TEST_PORT}" \
+INTERNAL_API_KEY="$KEY" \
+DATABASE_URL="$DATABASE_URL_TEST" \
+node test/unit-a3-api-key-auth.mjs

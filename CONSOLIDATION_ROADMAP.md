@@ -19,7 +19,7 @@ Status keys: ⬜ todo · 🔄 in progress · ✅ done · 🚧 GATED (needs human
   `auth.js` legacy fold with real resolution: API-key→tenant (and/or subdomain→tenant).
   Backfill `tantra` as the first tenant row. Migration 012. *(build local; 🚧 live apply
   + nginx change need auth)*
-- ⬜ **A3. Per-tenant API keys.** Move key→company binding out of the `INTERNAL_API_KEYS`
+- ✅ **A3. Per-tenant API keys.** Move key→company binding out of the `INTERNAL_API_KEYS`
   env blob into a DB table (`tenant_api_keys`, hashed). Issue/rotate endpoints. Keep env
   back-compat during cutover. *(build local; 🚧 secret handling review)*
 - ⬜ **A4. Per-tenant channel credentials + settings.** Encrypted per-tenant store for
@@ -357,5 +357,39 @@ Status keys: ⬜ todo · 🔄 in progress · ✅ done · 🚧 GATED (needs human
   Real tenant-switching needs either an nginx change or exposing an internal
   key to the browser (a security-model change). Flagged to the user rather
   than building it unilaterally; marked 🚧 pending that decision.
+- 2026-07-06 — **A3 done.** A second unblocked item found mid-session (roadmap
+  said "build local", only the live secret-handling rollout is gated).
+  Migration 017: `tenant_api_keys` (company_id FK->tenants, key_hash SHA-256,
+  key_prefix for display, label, revoked_at). `server/db/models/apiKeys.js`:
+  createKey (returns the plaintext exactly once, never persisted again),
+  resolveKey (the hot-path lookup every request goes through), listKeys/
+  revokeKey (never expose the hash). `server/routes/api-keys.js`: admin-gated
+  issue/list/revoke endpoints. **This is the highest-stakes change of the
+  session — it touches `requireAuth`, which every single API request passes
+  through — and got five critic rounds, each finding something real**, in
+  order: (1) the new DB-backed key check ran after the IP-allowlist check,
+  leaking "this IP isn't allowed" (403) instead of 401 for a garbage key —
+  an observable regression for existing callers; (2)+(3) — the load-bearing
+  findings — a literal key string existing in BOTH `tenant_api_keys` and the
+  env-configured `INTERNAL_API_KEYS` (only possible via a manual/raw DB
+  operator mistake, since `createKey()` always generates its own random
+  value) would silently resolve via whichever path ran first, risking either
+  a per-tenant key inheriting `'*'`-admin power or a silent cross-tenant
+  bind — fixed by detecting the ambiguity explicitly and refusing outright
+  (401, loud log) rather than picking a side, which also structurally closes
+  the admin-escalation angle since `requireAdmin` only ever sees a request
+  that authenticated via exactly one path, never an ambiguous one. Round 4
+  found the collision *detection itself* silently couldn't run when
+  `resolveKey()` threw (a DB blip), reopening the same risk during that
+  narrow window — first fix scoped the refusal to wildcard-bound keys only;
+  round 5 found even that was wrong (a narrowly-bound env key's granted
+  tenant comes from the attacker-controlled `X-Company-Id` header, not from
+  what the colliding DB key was actually issued for — refusing wildcard keys
+  alone doesn't stop the cross-tenant confusion). Final fix: refuse ANY
+  env-bound key (wildcard or narrow) whenever the collision check can't run.
+  Round 5 (this round) found no further gap. 243 tests pass (66 contract +
+  15 + 12 + 38 + 16 + 34 + 30 + 16 + 16 unit), including a direct simulation
+  of the collision scenario and a direct fault-injection test forcing the
+  DB-error fail-closed path.
   **Only gated items remain: A4, A6, A7 (product/security decisions), B5/B6
   (engine recon + migration), B8 (live deploy proof).**
