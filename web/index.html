@@ -275,6 +275,7 @@
   <button data-tab="contacts">Contacts</button>
   <button data-tab="companies">Companies</button>
   <button data-tab="pipelines">Pipelines</button>
+  <button data-tab="sequences">Sequences</button>
   <button data-tab="inbox">Inbox</button>
   <button data-tab="analytics">Analytics</button>
 </div></div>
@@ -375,6 +376,20 @@
       <div class="pipe-editor" id="pipe-editor"><div class="muted">Select a pipeline to edit its stages.</div></div>
     </div>
   </div><!-- /view-pipelines -->
+
+  <!-- ── SEQUENCES ──────────────────────────────────────────────────────── -->
+  <div id="view-sequences" style="display:none">
+    <div class="toolbar">
+      <h2 class="h1" style="margin-right:12px">Sequences</h2>
+      <span class="spacer"></span>
+      <button class="btn primary" id="new-sequence">+ New sequence</button>
+    </div>
+    <p class="muted" style="font-size:12px;margin:-4px 0 16px">A sequence auto-enrolls a contact when it reaches a chosen pipeline stage (set below), then walks it through ordered multi-channel steps. Pause a sequence to stop new enrollments without deleting it.</p>
+    <div class="pipe-layout">
+      <div class="pipe-list" id="seq-list"></div>
+      <div class="pipe-editor" id="seq-editor"><div class="muted">Select a sequence to view its steps.</div></div>
+    </div>
+  </div><!-- /view-sequences -->
 
   <!-- ── INBOX ──────────────────────────────────────────────────────────── -->
   <div id="view-inbox" style="display:none">
@@ -837,7 +852,7 @@ async function load(){
 let _inboxLoaded=false,_analyticsLoaded=false;
 function setTab(tab){
   document.querySelectorAll(".tabbar button").forEach(b=>b.classList.toggle("active",b.dataset.tab===tab));
-  ["dashboard","board","contacts","companies","pipelines","inbox","analytics"].forEach(v=>{
+  ["dashboard","board","contacts","companies","pipelines","sequences","inbox","analytics"].forEach(v=>{
     const el=$(`#view-${v}`);if(el)el.style.display=v===tab?"":"none";
   });
   if(tab==="inbox"&&!_inboxLoaded){loadInbox();_inboxLoaded=true;}
@@ -846,6 +861,7 @@ function setTab(tab){
   if(tab==="companies")loadCompanies();
   if(tab==="board")loadBoard();
   if(tab==="pipelines")loadPipelinesTab();
+  if(tab==="sequences")loadSequencesTab();
 }
 $(".tabbar").addEventListener("click",e=>{const b=e.target.closest("button[data-tab]");if(!b)return;setTab(b.dataset.tab);});
 
@@ -1123,6 +1139,78 @@ $("#new-pipeline").onclick=async()=>{
   $("#save-np").onclick=async()=>{const v=formValues();if(!v.name)return toast("Name required",true);
     const body={name:v.name};if(v.template)body.template=v.template;else body.stages=[{name:"New",color:"#667085"},{name:"Won",color:"#12b76a"},{name:"Lost",color:"#f04438"}];
     try{const p=await post("pipelines",body);closeModal();editPipeKey=p.key;DEAL_PIPES=[];toast("Pipeline created");loadPipelinesTab();}
+    catch(e){toast(e.message,true);}};
+};
+
+// ── Sequences management ──────────────────────────────────────────────────────
+const SEQ_CHANNELS=["email","sms","whatsapp","ai_call","linkedin"];
+let SEQUENCES=[],editSeqId=null;
+async function loadSequencesTab(){
+  try{const r=await get("sequences");SEQUENCES=r.sequences||[];
+    if(!editSeqId||!SEQUENCES.find(s=>s.id===editSeqId))editSeqId=(SEQUENCES[0]||{}).id||null;
+    renderSeqList();await renderSeqEditor();}
+  catch(e){$("#seq-list").innerHTML=`<div class="pl-item muted">${esc(e.message)}</div>`;}
+}
+function renderSeqList(){
+  $("#seq-list").innerHTML=SEQUENCES.map(s=>`<div class="pl-item ${s.id===editSeqId?"active":""}" data-id="${esc(s.id)}">
+    <span>${esc(s.name)}</span><span class="tag">${(s.steps||[]).length} step${(s.steps||[]).length===1?"":"s"}</span></div>`).join("")||`<div class="pl-item muted">None yet</div>`;
+}
+$("#seq-list").addEventListener("click",e=>{const it=e.target.closest(".pl-item[data-id]");if(!it)return;editSeqId=it.dataset.id;renderSeqList();renderSeqEditor();});
+async function renderSeqEditor(){
+  if(!editSeqId){$("#seq-editor").innerHTML=`<div class="muted">Select a sequence, or create one.</div>`;return;}
+  let s;try{s=await get(`sequences/${editSeqId}`);}catch(e){$("#seq-editor").innerHTML=`<div class="muted">${esc(e.message)}</div>`;return;}
+  const trigger=s.pipeline_key&&s.trigger_stage?`${esc(nice(s.pipeline_key))} → <b>${esc(nice(s.trigger_stage))}</b>`:"manual enrollment only";
+  const statusColor={active:"#12b76a",paused:"#f79009",archived:"#98a2b3"}[s.status]||"#98a2b3";
+  $("#seq-editor").innerHTML=`
+    <div class="toolbar" style="margin-bottom:14px">
+      <div><div class="h1" style="font-size:16px">${esc(s.name)}</div>
+        <div class="muted" style="font-size:12px;margin-top:2px">Triggers on ${trigger}</div></div>
+      <span class="spacer"></span>
+      <span class="tag" style="background:${statusColor}22;color:${statusColor};border-color:${statusColor}55">${esc(s.status)}</span>
+    </div>
+    <div style="display:flex;gap:8px;margin-bottom:18px">
+      ${["active","paused","archived"].filter(x=>x!==s.status).map(x=>`<button class="btn sm" data-seq-status="${x}">${x==="active"?"Activate":x==="paused"?"Pause":"Archive"}</button>`).join("")}
+      <span class="spacer"></span>
+      <span class="muted" style="font-size:12px;align-self:center">${s.enrollment_count||0} enrolled${s.enrollments_by_status?.active?` (${s.enrollments_by_status.active} active)`:""}</span>
+    </div>
+    <div class="eyebrow" style="margin-bottom:10px">Steps — fire in order after enrollment</div>
+    <div id="seq-step-rows"></div>
+    <button class="btn sm" id="add-seq-step" style="margin-top:6px">+ Add step</button>`;
+  $("#seq-step-rows").innerHTML=(s.steps||[]).length
+    ?s.steps.map(st=>`<div class="stage-row" style="cursor:default">
+        <span class="tag">#${st.step_order}</span>
+        <span style="flex:1">${esc(st.channel)}${st.template_ref?` · <code>${esc(st.template_ref)}</code>`:""}</span>
+        <span class="muted" style="font-size:12px">${st.delay_seconds?`+${Math.round(st.delay_seconds/3600)}h`:"immediately"}</span>
+      </div>`).join("")
+    :`<div class="muted" style="font-size:13px">No steps yet — add the first one.</div>`;
+  $("#seq-editor").querySelectorAll("[data-seq-status]").forEach(b=>b.onclick=async()=>{
+    try{await patch(`sequences/${s.id}`,{status:b.dataset.seqStatus});toast("Sequence updated");loadSequencesTab();}
+    catch(e){toast(e.message,true);}});
+  $("#add-seq-step").onclick=()=>openAddStepModal(s);
+}
+function openAddStepModal(s){
+  const nextOrder=Math.max(0,...(s.steps||[]).map(st=>st.step_order))+1;
+  openModal(`Add step to "${s.name}"`,
+    field("Order","step_order",{value:nextOrder})+
+    field("Channel","channel",{type:"select",options:SEQ_CHANNELS.map(c=>({value:c,label:nice(c)}))})+
+    field("Delay after previous step (hours)","delay_hours",{value:0})+
+    field("Template ref","template_ref",{placeholder:"e.g. welcome_email_v1"}),
+    `<button class="btn" onclick="closeModal()">Cancel</button><button class="btn primary" id="save-seq-step">Add step</button>`);
+  $("#save-seq-step").onclick=async()=>{const v=formValues();
+    const body={step_order:parseInt(v.step_order,10)||nextOrder,channel:v.channel,delay_seconds:Math.round((parseFloat(v.delay_hours)||0)*3600),template_ref:v.template_ref||null};
+    try{await post(`sequences/${s.id}/steps`,body);closeModal();toast("Step added");loadSequencesTab();}
+    catch(e){toast(e.message,true);}};
+}
+$("#new-sequence").onclick=()=>{
+  openModal("New sequence",
+    field("Name","name",{placeholder:"e.g. Segmented Welcome"})+
+    field("Auto-enroll on pipeline","pipeline_key",{type:"select",options:[{value:"",label:"Manual only (no auto-enroll)"},{value:"marketing",label:"Marketing"},{value:"sales",label:"Sales"}]})+
+    field("...reaching stage","trigger_stage",{placeholder:"e.g. segmented, contacted"}),
+    `<button class="btn" onclick="closeModal()">Cancel</button><button class="btn primary" id="save-seq">Create</button>`);
+  $("#save-seq").onclick=async()=>{const v=formValues();if(!v.name)return toast("Name required",true);
+    const body={name:v.name};
+    if(v.pipeline_key){body.pipeline_key=v.pipeline_key;if(v.trigger_stage)body.trigger_stage=v.trigger_stage;}
+    try{const s=await post("sequences",body);closeModal();editSeqId=s.id;toast("Sequence created");loadSequencesTab();}
     catch(e){toast(e.message,true);}};
 };
 </script>

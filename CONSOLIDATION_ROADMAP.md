@@ -30,8 +30,14 @@ Status keys: ⬜ todo · 🔄 in progress · ✅ done · 🚧 GATED (needs human
 - ⬜ **A6. Tenant lifecycle + isolation proof.** Provisioning/onboarding flow; extend the
   contract suite to run N-tenant isolation across the NEW tables; billing hooks (stub).
   🚧 **GATE: billing model + onboarding UX (product decision).**
-- ⬜ **A7. Tenant-aware UI.** Tenant switcher / scoping in the dashboard; per-tenant
-  settings screens. *(local)*
+- 🚧 **A7. Tenant-aware UI.** Tenant switcher / scoping in the dashboard; per-tenant
+  settings screens. ~~*(local)*~~ **GATE: discovered NOT local — `web/index.html`
+  sends no auth headers at all today; nginx transparently injects
+  `X-Internal-Key`/`X-Company-Id` for the single hardcoded tenant. A real
+  tenant switcher needs either an nginx change (routing/header-injection
+  logic per selected tenant) or the browser sending its own internal key
+  (a security-model change exposing that key to client-side JS) — needs a
+  product/security decision, not safe to build unilaterally.
 
 ## GOAL B — Multi-channel sequences per pipeline stage + engine integration
 
@@ -55,7 +61,7 @@ Status keys: ⬜ todo · 🔄 in progress · ✅ done · 🚧 GATED (needs human
   (called service for asset generation), **personalization** (enrichment/personalization
   service). **GATE: needs `CONSOLIDATION_RECON_<engine>.md` for each + access to that
   engine's repo.**
-- ⬜ **B7. Sequence builder UI.** Configure multi-channel sequences per pipeline stage in
+- ✅ **B7. Sequence builder UI.** Configure multi-channel sequences per pipeline stage in
   the dashboard. *(local)*
 - ⬜ **B8. End-to-end proof.** One channel (email) proven CRM-orchestrated → executor →
   result-back, live, per-tenant. Then roll out remaining channels. 🚧 **GATE: live
@@ -315,3 +321,41 @@ Status keys: ⬜ todo · 🔄 in progress · ✅ done · 🚧 GATED (needs human
   (sequence builder UI), and B8 (live end-to-end proof, gated on deploy
   authorization).** GOAL A has A4 (gated: encryption/KMS decision), A6
   (gated: billing/onboarding decision), and A7 (tenant-aware UI) remaining.
+- 2026-07-06 — **B7 done.** First HTTP CRUD surface for B1's sequences:
+  `server/routes/sequences.js` (create/list/detail/PATCH-status/add-step/
+  list-enrollments), thin wrappers over the already-hardened model layer —
+  no new ownership logic needed here, B1/B2/B3's guarantees carry through.
+  Added a "Sequences" tab to `web/index.html` (list + detail/editor pane,
+  mirroring the existing Pipelines tab): create a sequence with an optional
+  auto-enroll trigger (pipeline + stage), add ordered multi-channel steps,
+  Activate/Pause/Archive. **Manually verified in a real browser** (not just
+  the automated suite) — booted the server against scratch Postgres with a
+  temporary local-only shim simulating nginx's header-injection/path-rewrite
+  (reverted before commit; production serves the dashboard via nginx, which
+  is why this session discovered A7 below), created a sequence, added a
+  step, toggled pause/activate, screenshotted each state, zero console
+  errors. Critic review found **a real stored-XSS**: the trigger-stage
+  display string interpolated `pipeline_key`/`trigger_stage` into
+  `innerHTML` without escaping, and the create route had no server-side
+  allowlist on `pipeline_key` — fixed with `esc()` at render time AND a
+  `marketing`/`sales` allowlist at write time (defense in depth, not
+  either/or). Also fixed: a vacuous test assertion (the "paused sequence
+  doesn't auto-enroll" check never verified the underlying stage-advance
+  actually succeeded, so it could pass for the wrong reason — added an
+  explicit success assertion plus an independent `GET .../enrollments`
+  verification); an N+1 query in `GET /sequences` (now one bulk query via a
+  new `listStepsForSequences` instead of one per sequence); a duplicate-
+  step_order 409 check that only looked at the Postgres error code, not
+  which constraint fired (now checks the constraint name too); missing
+  input validation on `delay_seconds`/`entry_conditions`/`exit_conditions`
+  (added, which then surfaced a client-side float-precision gap in the
+  hours→seconds conversion — fixed with `Math.round`). 211 tests pass (66
+  contract + 15 + 12 + 38 + 16 + 34 + 30 unit).
+  **Discovered mid-session: A7 (tenant-aware UI) is NOT actually local as
+  labeled** — `web/index.html` sends no `X-Internal-Key`/`X-Company-Id` at
+  all; nginx injects both transparently for the single hardcoded tenant.
+  Real tenant-switching needs either an nginx change or exposing an internal
+  key to the browser (a security-model change). Flagged to the user rather
+  than building it unilaterally; marked 🚧 pending that decision.
+  **Only gated items remain: A4, A6, A7 (product/security decisions), B5/B6
+  (engine recon + migration), B8 (live deploy proof).**

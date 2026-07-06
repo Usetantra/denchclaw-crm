@@ -121,6 +121,22 @@ async function listSteps(sequenceId, companyId) {
   return result.rows;
 }
 
+// Bulk variant for list views (e.g. GET /sequences attaching step counts to
+// every row) — one query instead of one-per-sequence, avoiding pool pressure
+// when a tenant has many sequences (DB_POOL_MAX is a shared, modest budget).
+async function listStepsForSequences(sequenceIds, companyId) {
+  if (!companyId) throw new Error('sequences.listStepsForSequences requires companyId');
+  if (!sequenceIds.length) return {};
+  const result = await query(
+    'SELECT * FROM sequence_steps WHERE sequence_id = ANY($1) AND company_id = $2 ORDER BY sequence_id, step_order ASC',
+    [sequenceIds, companyId]
+  );
+  return result.rows.reduce((acc, step) => {
+    (acc[step.sequence_id] = acc[step.sequence_id] || []).push(step);
+    return acc;
+  }, {});
+}
+
 // ─── enrollments ───────────────────────────────────────────────────────────
 
 async function enroll(companyId, { sequenceId, contactId }) {
@@ -269,7 +285,7 @@ async function listScheduledActions(companyId, { enrollmentId, status, channel }
 
 module.exports = {
   createSequence, getSequenceById, listSequences, updateSequenceStatus,
-  addStep, listSteps,
+  addStep, listSteps, listStepsForSequences,
   enroll, getEnrollment, listEnrollments, updateEnrollment,
   scheduleAction, listScheduledActions,
   enrollForTriggerStage,

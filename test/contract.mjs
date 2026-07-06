@@ -591,6 +591,74 @@ async function main() {
         r.status === 202 && r.json?.accepted === 2 && row?.mqls === 1 && parseFloat(row?.mql_rate) === 100,
         `accepted=${r.json?.accepted} row=${JSON.stringify(row)}`);
     }
+
+    // 43 — GOAL B7: sequence builder HTTP routes (create/list/detail/steps/enrollments)
+    {
+      const create = await req('POST', '/api/crm/sequences', {
+        company: CO_A, body: { name: 'B7 Welcome ' + RUN, pipeline_key: 'marketing', trigger_stage: 'segmented' },
+      });
+      check('POST /sequences creates a sequence (201, active by default)', 'CP5',
+        create.status === 201 && create.json?.status === 'active', JSON.stringify(create.json));
+      const seqId = create.json?.id;
+
+      const list = await req('GET', '/api/crm/sequences', { company: CO_A });
+      check('GET /sequences lists it with an empty steps array', 'CP5',
+        list.status === 200 && list.json?.sequences?.some(s => s.id === seqId && Array.isArray(s.steps) && s.steps.length === 0),
+        JSON.stringify(list.json));
+
+      const crossTenant = await req('GET', `/api/crm/sequences/${seqId}`, { company: CO_B });
+      check('GET /sequences/:id cross-tenant is 404 (no leak)', 'CP5', crossTenant.status === 404, `status=${crossTenant.status}`);
+
+      const step1 = await req('POST', `/api/crm/sequences/${seqId}/steps`, {
+        company: CO_A, body: { step_order: 1, channel: 'email', template_ref: 'welcome_email' },
+      });
+      check('POST /sequences/:id/steps adds a step (201)', 'CP5', step1.status === 201 && step1.json?.channel === 'email', JSON.stringify(step1.json));
+
+      const dupeStep = await req('POST', `/api/crm/sequences/${seqId}/steps`, {
+        company: CO_A, body: { step_order: 1, channel: 'sms' },
+      });
+      check('POST /sequences/:id/steps with a duplicate step_order is 409, not a raw 500', 'CP5', dupeStep.status === 409, JSON.stringify(dupeStep.json));
+
+      const badChannel = await req('POST', `/api/crm/sequences/${seqId}/steps`, {
+        company: CO_A, body: { step_order: 2, channel: 'carrier_pigeon' },
+      });
+      check('POST /sequences/:id/steps with an invalid channel is 400', 'CP5', badChannel.status === 400, JSON.stringify(badChannel.json));
+
+      const detail = await req('GET', `/api/crm/sequences/${seqId}`, { company: CO_A });
+      check('GET /sequences/:id detail includes the step and enrollment_count', 'CP5',
+        detail.status === 200 && detail.json?.steps?.length === 1 && detail.json?.enrollment_count === 0, JSON.stringify(detail.json));
+
+      const paused = await req('PATCH', `/api/crm/sequences/${seqId}`, { company: CO_A, body: { status: 'paused' } });
+      check('PATCH /sequences/:id updates status', 'CP5', paused.status === 200 && paused.json?.status === 'paused', JSON.stringify(paused.json));
+      const badStatus = await req('PATCH', `/api/crm/sequences/${seqId}`, { company: CO_A, body: { status: 'not_a_real_status' } });
+      check('PATCH /sequences/:id with an invalid status is 400', 'CP5', badStatus.status === 400, JSON.stringify(badStatus.json));
+
+      // Advancing into the (now-paused) sequence's trigger stage must NOT
+      // enroll — enrollForTriggerStage (B2) only matches status='active'.
+      const c = await req('POST', '/api/crm/contacts', { company: CO_A, body: { name: 'B7 Test', email: email('b7'), source: 'manual' } });
+      await req('POST', `/api/crm/contacts/${c.json.id}/advance`, { company: CO_A, body: { pipeline_key: 'marketing', stage: 'enriched' } });
+      const advance = await req('POST', `/api/crm/contacts/${c.json.id}/advance`, { company: CO_A, body: { pipeline_key: 'marketing', stage: 'segmented' } });
+      check('setup: the stage advance itself succeeded (so the next check isn\'t vacuous)',
+        advance.status === 200 && advance.json?.changed === true, JSON.stringify(advance.json));
+      check('a paused sequence does not auto-enroll on its trigger stage', 'CP5',
+        !advance.json?.sequence_enrollments?.length, JSON.stringify(advance.json));
+      const noEnrollments = await req('GET', `/api/crm/sequences/${seqId}/enrollments`, { company: CO_A });
+      check('...confirmed independently via GET /sequences/:id/enrollments (zero rows for this contact)', 'CP5',
+        noEnrollments.status === 200 && !noEnrollments.json?.enrollments?.some(e => e.contact_id === c.json.id), JSON.stringify(noEnrollments.json));
+
+      await req('PATCH', `/api/crm/sequences/${seqId}`, { company: CO_A, body: { status: 'active' } });
+      const c2 = await req('POST', '/api/crm/contacts', { company: CO_A, body: { name: 'B7 Test 2', email: email('b7-2'), source: 'manual' } });
+      await req('POST', `/api/crm/contacts/${c2.json.id}/advance`, { company: CO_A, body: { pipeline_key: 'marketing', stage: 'enriched' } });
+      const advance2 = await req('POST', `/api/crm/contacts/${c2.json.id}/advance`, { company: CO_A, body: { pipeline_key: 'marketing', stage: 'segmented' } });
+      check('re-activating the sequence lets it auto-enroll again', 'CP5',
+        advance2.json?.sequence_enrollments?.some(e => e.sequence_id === seqId), JSON.stringify(advance2.json));
+
+      const enrollments = await req('GET', `/api/crm/sequences/${seqId}/enrollments`, { company: CO_A });
+      check('GET /sequences/:id/enrollments returns the enrollment', 'CP5',
+        enrollments.status === 200 && enrollments.json?.enrollments?.some(e => e.contact_id === c2.json.id), JSON.stringify(enrollments.json));
+      const enrollmentsCrossTenant = await req('GET', `/api/crm/sequences/${seqId}/enrollments`, { company: CO_B });
+      check('GET /sequences/:id/enrollments cross-tenant is 404 (no leak)', 'CP5', enrollmentsCrossTenant.status === 404, `status=${enrollmentsCrossTenant.status}`);
+    }
   }
 
   console.log(results.join('\n'));
