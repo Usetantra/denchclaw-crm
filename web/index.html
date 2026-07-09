@@ -146,7 +146,8 @@
   .modal-wrap{position:fixed;inset:0;background:rgba(10,10,10,.44);z-index:40;display:none;
               align-items:flex-start;justify-content:center;padding:6vh 16px}
   .modal-wrap.open{display:flex}
-  .modal{background:#fff;border-radius:10px;max-width:760px;width:100%;max-height:84vh;overflow-y:auto;
+  .modal-open{overflow:hidden}
+  .modal{background:#fff;border-radius:10px;max-width:760px;width:100%;max-height:84vh;overflow-y:auto;overscroll-behavior:contain;
          box-shadow:0 24px 60px rgba(16,24,40,.28);padding:26px 28px}
   .modal .mhead{display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:18px}
   .modal .mhead h2{font-family:var(--serif);font-weight:400;font-size:26px;margin:0;line-height:1.2}
@@ -157,12 +158,21 @@
   .fgrid .f{border-top:1px solid var(--hair);padding-top:8px}
   .fgrid .f .fl{font-size:10px;letter-spacing:.12em;text-transform:uppercase;color:var(--ink-4)}
   .fgrid .f .fv{font-size:13px;color:var(--ink-2);margin-top:3px;word-break:break-word}
-  .feed{border:1px solid var(--hair);border-radius:var(--radius);max-height:300px;overflow-y:auto}
-  .feed .fitem{padding:10px 14px;border-bottom:1px solid var(--hair-2);font-size:13px}
+  .feed{border:1px solid var(--hair);border-radius:var(--radius);max-height:min(50vh,480px);min-height:190px;overflow-y:auto;overscroll-behavior:contain;background:var(--bg)}
+  .feed .fitem{padding:12px 16px;border-bottom:1px solid var(--hair-2);font-size:13.5px;line-height:1.55;color:var(--ink)}
+  .feed .fitem:nth-child(even){background:var(--hair-2)}
   .feed .fitem:last-child{border-bottom:none}
-  .feed .fitem .fmeta{color:var(--ink-4);font-size:11px;margin-top:2px}
+  .feed .fitem .fmeta{color:var(--ink-4);font-size:11.5px;margin-top:5px}
   .feed .fitem .ftype{display:inline-block;font-size:10px;font-weight:700;letter-spacing:.06em;text-transform:uppercase;
-        padding:1px 7px;border-radius:999px;background:var(--cold-bg);color:var(--cold);margin-right:7px}
+        padding:2px 8px;border-radius:999px;background:var(--cold-bg);color:var(--cold);margin-right:8px}
+  .feed .fitem .ftype[data-cat="stage"]{background:var(--warm-bg);color:var(--warm)}
+  .feed .fitem .ftype[data-cat="engage"]{background:#ecfdf3;color:var(--live)}
+  .feed .fitem .ftype[data-cat="note"]{background:var(--neutral-bg);color:var(--neutral)}
+  /* Contact drawer: wide panel; the whole drawer scrolls (so nothing is ever
+     clipped/unreachable) and the feed is a large box inside it. Scoped to
+     #modal-wrap so the small form modals stay compact. */
+  #modal-wrap .modal{max-width:940px;max-height:90vh;overflow-y:auto}
+  #modal-wrap .feed{max-height:min(55vh,520px);min-height:220px}
   .notebar{display:flex;gap:8px;margin-top:12px}
   .notebar input{flex:1;border:1px solid var(--hair);border-radius:var(--radius);padding:9px 12px;font-size:13px;
         outline:none;font-family:var(--sans)}
@@ -336,6 +346,7 @@
       <select id="filter-score"><option value="">All scores</option><option>hot</option><option>warm</option><option>neutral</option><option>cold</option></select>
       <select id="filter-source"><option value="">All sources</option></select>
       <span class="spacer"></span>
+      <button class="btn" id="import-contacts">Import CSV</button>
       <button class="btn primary" id="new-contact">+ New contact</button>
     </div>
     <div class="bulkbar" id="contact-bulk">
@@ -481,7 +492,9 @@ const SCORE_COLORS={hot:"#b42318",warm:"#b54708",neutral:"#98a2b3",cold:"#175cd3
 
 // ── API helpers ──────────────────────────────────────────────────────────────
 async function get(path){
-  const r=await fetch(`${API}/${path}`,{headers:{"Accept":"application/json"}});
+  // no-store: the CRM changes under you (drags, engine events) — never serve a
+  // cached feed/contact, or reopening shows stale activity.
+  const r=await fetch(`${API}/${path}`,{headers:{"Accept":"application/json"},cache:"no-store"});
   if(!r.ok)throw new Error(`${path} → HTTP ${r.status}`);
   return r.json();
 }
@@ -542,10 +555,11 @@ function renderContacts(list){
 async function openContact(id){
   if(!id)return;
   const wrap=$("#modal-wrap");wrap.classList.add("open");wrap.dataset.contact=id;
+  document.documentElement.classList.add("modal-open"); // lock background scroll
   $("#m-name").textContent="Loading…";$("#m-sub").textContent="";$("#m-fields").innerHTML="";
   $("#m-feed").innerHTML=`<div class="fitem muted">loading…</div>`;
   try{
-    const [c,act]=await Promise.all([get(`contacts/${id}`),get(`contacts/${id}/activity?limit=50`)]);
+    const [c,act]=await Promise.all([get(`contacts/${id}`),get(`contacts/${id}/activity?limit=500`)]);
     $("#m-name").textContent=c.name||c.email||"—";
     $("#m-sub").textContent=[c.title,c.company_name].filter(Boolean).join(" · ");
     const fields=[
@@ -566,15 +580,26 @@ async function openContact(id){
   }catch(e){$("#m-name").textContent="Error";$("#m-sub").textContent=e.message;}
 }
 function renderFeed(items){
-  $("#m-feed").innerHTML=(items||[]).map(a=>`<div class="fitem">
-    <span class="ftype">${esc(nice(a.type||"event"))}</span>${esc(a.message||"")}
-    <div class="fmeta">${a.channel?esc(a.channel)+" · ":""}${a.agent?esc(a.agent)+" · ":""}${new Date(a.created_at).toLocaleString()}</div>
+  const feed=$("#m-feed");
+  // Chat-style: oldest at top, newest at bottom, then snap to the bottom so the
+  // latest activity is in view and you scroll UP to read the history.
+  const sorted=(items||[]).slice().sort((a,b)=>
+    new Date(a.created_at||a.timestamp||0)-new Date(b.created_at||b.timestamp||0));
+  const cat=t=>{t=String(t||"");
+    if(/stage/.test(t))return"stage";
+    if(t==="note")return"note";
+    if(/repl|open|click|watch|complete|book|payment|registered|cta|proposal|form|connection/.test(t))return"engage";
+    return"event";};
+  feed.innerHTML=sorted.map(a=>`<div class="fitem">
+    <span class="ftype" data-cat="${cat(a.type)}">${esc(nice(a.type||"event"))}</span>${esc(a.message||"")}
+    <div class="fmeta">${a.channel?esc(a.channel)+" · ":""}${a.agent?esc(a.agent)+" · ":""}${new Date(a.created_at||a.timestamp).toLocaleString()}</div>
   </div>`).join("")||`<div class="fitem muted">No activity yet.</div>`;
+  feed.scrollTop=feed.scrollHeight;
 }
-function closeModal(){$("#modal-wrap").classList.remove("open");}
-$("#m-close").addEventListener("click",closeModal);
-$("#modal-wrap").addEventListener("click",e=>{if(e.target.id==="modal-wrap")closeModal();});
-document.addEventListener("keydown",e=>{if(e.key==="Escape")closeModal();});
+function closeDrawer(){$("#modal-wrap").classList.remove("open");document.documentElement.classList.remove("modal-open");}
+$("#m-close").addEventListener("click",closeDrawer);
+$("#modal-wrap").addEventListener("click",e=>{if(e.target.id==="modal-wrap")closeDrawer();});
+document.addEventListener("keydown",e=>{if(e.key==="Escape"){closeDrawer();closeModal();}});
 $("#m-noteform").addEventListener("submit",async e=>{
   e.preventDefault();
   const id=$("#modal-wrap").dataset.contact,msg=$("#m-note").value.trim();
@@ -582,7 +607,7 @@ $("#m-noteform").addEventListener("submit",async e=>{
   try{
     await post(`contacts/${id}/activity`,{type:"note",message:msg,agent:"dashboard"});
     $("#m-note").value="";
-    const act=await get(`contacts/${id}/activity?limit=50`);
+    const act=await get(`contacts/${id}/activity?limit=500`);
     renderFeed(act.activity||[]);toast("Note added");
   }catch(err){toast(err.message,true);}
 });
@@ -901,7 +926,7 @@ async function loadContacts(){
 function renderContactList(){
   if(!cList.length){$("#contacts-list").innerHTML=`<div class="empty">No contacts match. <a class="linklike" id="empty-nc">Add one</a>.</div>`;
     $("#empty-nc")&&($("#empty-nc").onclick=()=>contactModal());updateContactBulk();return;}
-  const rows=cList.map(c=>`<tr>
+  const rows=cList.map(c=>`<tr data-contact="${esc(c.id)}" style="cursor:pointer">
     <td class="checkcell"><input type="checkbox" class="csel" data-id="${esc(c.id)}"></td>
     <td><b>${esc(c.name||"—")}</b></td><td class="co">${esc(c.company_name||"")}</td>
     <td class="email">${esc(c.email||"")}</td>
@@ -920,11 +945,93 @@ $("#contacts-list").addEventListener("change",e=>{
 });
 $("#contacts-list").addEventListener("click",e=>{
   const ed=e.target.closest("[data-edit]"),dl=e.target.closest("[data-del]");
-  if(ed)contactModal(cList.find(x=>x.id===ed.dataset.edit));
-  if(dl){const c=cList.find(x=>x.id===dl.dataset.del);confirmDelete(`Delete contact "${c?.name||c?.email||""}"?`,async()=>{await del(`contacts/${dl.dataset.del}`);toast("Deleted");loadContacts();});}
+  if(ed)return contactModal(cList.find(x=>x.id===ed.dataset.edit));
+  if(dl){const c=cList.find(x=>x.id===dl.dataset.del);return confirmDelete(`Delete contact "${c?.name||c?.email||""}"?`,async()=>{await del(`contacts/${dl.dataset.del}`);toast("Deleted");loadContacts();});}
+  if(e.target.closest(".checkcell"))return; // checkbox toggles selection, not open
+  const tr=e.target.closest("tr[data-contact]");if(tr)openContact(tr.dataset.contact);
 });
 ["#contact-search","#filter-score","#filter-source"].forEach(s=>$(s).addEventListener(s==="#contact-search"?"input":"change",debounce(loadContacts,250)));
 $("#new-contact").onclick=()=>contactModal();
+
+// ── GHL-style CSV bulk import ─────────────────────────────────────────────────
+const IMP_FIELDS=[["email","Email"],["first_name","First name"],["last_name","Last name"],["name","Full name"],["phone","Phone"],["company","Company"],["title","Title"],["linkedin_url","LinkedIn URL"],["tags","Tags"]];
+const IMP_SYN={email:["email","e mail","email address"],first_name:["first name","firstname","first","given name"],last_name:["last name","lastname","last","surname","family name"],name:["name","full name","contact name","contact"],phone:["phone","phone number","mobile","cell","tel","telephone","whatsapp"],company:["company","company name","organization","organisation","account","business","employer"],title:["title","job title","position","role"],linkedin_url:["linkedin","linkedin url","linkedin profile","li url"],tags:["tags","tag","labels","label"]};
+function parseCSV(text){
+  text=String(text).replace(/^﻿/,"");
+  const rows=[];let row=[],cur="",q=false;
+  for(let i=0;i<text.length;i++){const ch=text[i];
+    if(q){ if(ch==='"'){ if(text[i+1]==='"'){cur+='"';i++;} else q=false; } else cur+=ch; }
+    else { if(ch==='"')q=true; else if(ch===','){row.push(cur);cur="";} else if(ch==='\r'){} else if(ch==='\n'){row.push(cur);rows.push(row);row=[];cur="";} else cur+=ch; }
+  }
+  if(cur!==""||row.length){row.push(cur);rows.push(row);}
+  const clean=rows.filter(r=>r.some(c=>String(c).trim()!==""));
+  const header=(clean.shift()||[]).map(h=>String(h).trim());
+  return {header,rows:clean};
+}
+function impGuess(cols,f){
+  const norm=s=>String(s||"").toLowerCase().replace(/[^a-z0-9]+/g," ").trim();
+  const syn=IMP_SYN[f]||[f];
+  for(let i=0;i<cols.length;i++){if(syn.some(s=>norm(cols[i])===norm(s)))return i;}
+  for(let i=0;i<cols.length;i++){if(syn.some(s=>norm(cols[i]).includes(norm(s))))return i;}
+  return -1;
+}
+$("#import-contacts").onclick=()=>{
+  openModal("Import contacts (CSV)",
+    `<div class="field"><label>CSV file</label><input type="file" id="imp-file" accept=".csv,text/csv"></div>
+     <div class="muted" style="font-size:12px;margin-top:-6px">First row must be column headers. Contacts dedupe by email, then phone / LinkedIn.</div>
+     <div id="imp-config" style="margin-top:14px"></div>`,
+    `<button class="btn" onclick="closeModal()">Cancel</button><button class="btn primary" id="imp-go" disabled>Import</button>`);
+  let parsed=null;
+  $("#imp-file").onchange=async e=>{
+    const f=e.target.files&&e.target.files[0]; if(!f) return;
+    try{ parsed=parseCSV(await f.text()); }catch(_){ toast("Could not read that file",true); return; }
+    if(!parsed.header.length||!parsed.rows.length){ toast("No data rows found in the CSV",true); $("#imp-go").disabled=true; return; }
+    const cols=parsed.header;
+    const sel=f2=>`<select data-imp="${f2}"><option value="">— skip —</option>`+cols.map((h,i)=>`<option value="${i}" ${i===impGuess(cols,f2)?"selected":""}>${esc(h||("Column "+(i+1)))}</option>`).join("")+`</select>`;
+    $("#imp-config").innerHTML=
+      `<div class="eyebrow" style="margin-bottom:8px">${parsed.rows.length} rows · map your columns</div>
+       <table class="dtable"><tbody>${IMP_FIELDS.map(([f2,l])=>`<tr><td style="width:120px">${l}</td><td>${sel(f2)}</td></tr>`).join("")}</tbody></table>
+       <div class="field-row" style="margin-top:12px">
+         <div class="field"><label>Default source</label><input id="imp-source" value="bulk_import"></div>
+         <div class="field"><label>Add tag to all</label><input id="imp-tag" placeholder="optional"></div>
+       </div>`;
+    $("#imp-go").disabled=false;
+  };
+  $("#imp-go").onclick=async()=>{
+    if(!parsed) return;
+    const map={}; $$("#imp-config select[data-imp]").forEach(s=>{ map[s.dataset.imp]=s.value===""?null:parseInt(s.value,10); });
+    const source=($("#imp-source")&&$("#imp-source").value||"").trim();
+    const extra=($("#imp-tag")&&$("#imp-tag").value||"").trim();
+    const cell=(row,f)=>map[f]!=null?String(row[map[f]]!=null?row[map[f]]:"").trim():"";
+    const contacts=parsed.rows.map(row=>{
+      const name=cell(row,"name")||[cell(row,"first_name"),cell(row,"last_name")].filter(Boolean).join(" ").trim();
+      const tr=cell(row,"tags");
+      const tags=[...(tr?tr.split(/[;,|]/).map(t=>t.trim()).filter(Boolean):[]),...(extra?[extra]:[])];
+      const c={};
+      const email=cell(row,"email"); if(email)c.email=email;
+      if(name)c.name=name;
+      const phone=cell(row,"phone"); if(phone)c.phone=phone;
+      const company=cell(row,"company"); if(company)c.company=company;
+      const title=cell(row,"title"); if(title)c.title=title;
+      const li=cell(row,"linkedin_url"); if(li)c.linkedin_url=li;
+      if(source)c.source=source;
+      if(tags.length)c.tags=tags;
+      return c;
+    }).filter(c=>c.email||c.name);
+    if(!contacts.length) return toast("Map an Email or Name column first",true);
+    const btn=$("#imp-go"); btn.disabled=true; btn.textContent="Importing…";
+    try{
+      let created=0,updated=0,errors=0,total=0; const CH=500;
+      for(let i=0;i<contacts.length;i+=CH){
+        const r=await post("contacts/bulk-import",{contacts:contacts.slice(i,i+CH)});
+        created+=r.created||0; updated+=r.updated||0; errors+=r.errors||0; total+=r.total||0;
+      }
+      closeModal();
+      toast(`Imported ${created} new · ${updated} updated${errors?` · ${errors} skipped`:""} (of ${total})`);
+      loadContacts();
+    }catch(e){ toast(e.message,true); btn.disabled=false; btn.textContent="Import"; }
+  };
+};
 function contactModal(c){
   const edit=!!c;
   openModal(edit?"Edit contact":"New contact",
@@ -1047,16 +1154,31 @@ function renderDealBoard(def,buckets){
   }).join("")||`<div class="gempty">This pipeline has no stages.</div>`;
 }
 $("#deal-pipe-sel").addEventListener("change",e=>{selDealPipe=e.target.value;loadBoard();});
-$("#new-deal").onclick=()=>{
+$("#new-deal").onclick=async()=>{
   const def=DEAL_PIPES.find(p=>p.key===selDealPipe);
   const stageOpts=(def?def.stages:[]).map(s=>({value:s.key,label:s.name}));
+  // GHL-style: an opportunity is opened against an EXISTING contact — the user
+  // picks from contacts already in the CRM (no free-typing a new person here).
+  let dealContacts=[];
+  try{const r=await get("contacts?limit=500");dealContacts=r.contacts||r.data||[];}catch(e){return toast(e.message,true);}
+  if(!dealContacts.length){
+    openModal("New opportunity",
+      `<p style="margin:4px 0 0;color:var(--ink-2)">You need a contact first. Add one in the <b>Contacts</b> tab, then create the opportunity against it.</p>`,
+      `<button class="btn" onclick="closeModal()">Close</button>`);
+    return;
+  }
+  const contactOpts=[{value:"",label:"— Select a contact —"},
+    ...dealContacts.map(c=>({value:c.id,label:`${c.name||c.email||"Unnamed"}${c.company_name?" · "+c.company_name:""}${c.email?" · "+c.email:""}`}))];
   openModal("New opportunity",
+    field("Contact","contact_id",{type:"select",options:contactOpts})+
     field("Title","title",{placeholder:"Deal name"})+field("Value ($)","value",{type:"number"})+
-    `<div class="field-row">${field("Contact name","contact_name")}${field("Contact email","contact_email",{type:"email",placeholder:"links / creates a contact"})}</div>`+
-    `<div class="field-row">${field("Company","company")}${field("Stage","stage",{type:"select",options:stageOpts})}</div>`,
+    field("Stage","stage",{type:"select",options:stageOpts}),
     `<button class="btn" onclick="closeModal()">Cancel</button><button class="btn primary" id="save-deal">Create</button>`);
-  $("#save-deal").onclick=async()=>{const v=formValues();if(!v.title)return toast("Title required",true);
-    try{await post("deals",{title:v.title,value:parseFloat(v.value)||0,contact_name:v.contact_name,contact_email:v.contact_email,company:v.company,stage:v.stage,pipeline_key:selDealPipe});closeModal();toast("Opportunity created");loadBoard();}
+  $("#save-deal").onclick=async()=>{const v=formValues();
+    if(!v.contact_id)return toast("Select a contact for this opportunity",true);
+    if(!v.title)return toast("Title required",true);
+    const picked=dealContacts.find(c=>c.id===v.contact_id);
+    try{await post("deals",{title:v.title,value:parseFloat(v.value)||0,contact_id:v.contact_id,contact_name:picked?.name||picked?.email||"",company:picked?.company_name||"",stage:v.stage,pipeline_key:selDealPipe});closeModal();toast("Opportunity created");loadBoard();}
     catch(e){toast(e.message,true);}};
 };
 
