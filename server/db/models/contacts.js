@@ -98,7 +98,12 @@ async function listPaginated(companyId, filters = {}) {
 // see its own tenant's row (mismatch ⇒ null ⇒ route 404). Internal callers that
 // legitimately need any row use getByIdUnscoped (kept private to this module).
 async function getById(id, companyId) {
-  if (companyId === undefined || companyId === null) return getByIdUnscoped(id);
+  if (companyId === undefined || companyId === null) {
+    // Defensive (gate 4): request handlers must always pass companyId. If we ever
+    // reach here from a route, it's a cross-tenant leak vector — surface it loudly.
+    console.warn('[contacts.getById] called without companyId — returning UNSCOPED row; pass companyId from the route.');
+    return getByIdUnscoped(id);
+  }
   const result = await query(
     `SELECT * FROM contacts WHERE id = $1 AND company_id = $2 AND deleted_at IS NULL LIMIT 1`,
     [id, companyId]

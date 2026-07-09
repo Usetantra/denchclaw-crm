@@ -6,6 +6,7 @@ const contactDb = require('../db/models/contacts');
 const companyDb = require('../db/models/companies');
 const { query } = require('../db/index');
 const { getPipelineConfig, getPipelineTransitions } = require('../db/pipeline');
+const { ENGAGEMENT_WEIGHTS, recordEngagement } = require('../lib/scoring');
 
 const { requireAuth, getUserCompanyId } = require('../middleware/auth');
 
@@ -23,25 +24,8 @@ const SOURCES = ['expandi', 'instantly', 'linkedin', 'website', 'referral', 'man
   'cold_email_prospect', 'cold_calendar_prospect', 'linkedin_prospect', 'linkedin_engagement',
   'facebook_engagement', 'twitter_engagement', 'instagram_engagement', 'paid_ads', 'social_engagement'];
 
-const ENGAGEMENT_WEIGHTS = {
-  email_opened: 2,
-  email_clicked: 5,
-  email_replied: 10,
-  whatsapp_read: 3,
-  whatsapp_replied: 10,
-  sms_replied: 8,
-  linkedin_connection_accepted: 5,
-  linkedin_message_replied: 10,
-  video_watched: 15,
-  video_completed: 20,
-  call_booked: 25,
-  call_completed: 30,
-  form_submitted: 15,
-  registered: 15,
-  cta_clicked: 10,
-  proposal_viewed: 15,
-  payment: 50,
-};
+// ENGAGEMENT_WEIGHTS + recordEngagement are imported from ../lib/scoring — the
+// single authority for the weight table and the hot/warm label thresholds.
 
 const DEFAULT_STAGE_TRANSITIONS = {
   lead:              ['accepted', 'contacted', 'lost'],
@@ -577,11 +561,9 @@ router.post('/contacts/:id/activity', validate(), async (req, res) => {
       data: data || null
     };
 
-    await contactDb.addActivity(req.params.id, entry, companyId);
-
-    const SCORE_WEIGHTS = { email_opened: 2, email_clicked: 5, email_replied: 10, call_booked: 25, call_completed: 30, form_submitted: 15, payment: 50 };
-    const weight = SCORE_WEIGHTS[entry.type] || 1;
-    await query(`UPDATE contacts SET lead_score_numeric = LEAST(COALESCE(lead_score_numeric, 0) + $1, 100) WHERE id = $2 AND company_id = $3`, [weight, req.params.id, companyId]);
+    // Log + score in one place: recordEngagement applies the full ENGAGEMENT_WEIGHTS
+    // table and ratchets the label (80 → hot; cold crossing 50 → warm).
+    await recordEngagement(req.params.id, companyId, entry);
 
     broadcast(req, { type: 'contact_activity', contact_id: req.params.id, entry });
     res.json(entry);
@@ -1518,11 +1500,13 @@ async function findOrCreateContact(email, defaults = {}) {
   return { contact, created: true };
 }
 
-async function findContactByPhone(phone) {
-  if (!phone) return null;
-  const normalized = phone.replace(/\D/g, '');
-  const allContacts = await contactDb.list(null, {});
-  return allContacts.find(c => c.phone && c.phone.replace(/\D/g, '') === normalized) || null;
+// Tenant-scoped (gate 4): must be called with the caller's companyId. Uses the
+// model's digit-normalized phone filter, scoped to the tenant — never searches
+// across all companies. Returns null if companyId is missing rather than leaking.
+async function findContactByPhone(phone, companyId) {
+  if (!phone || !companyId) return null;
+  const matches = await contactDb.list(companyId, { phone });
+  return matches[0] || null;
 }
 
 function calculateEngagementScore(contact) {
@@ -1534,28 +1518,13 @@ function calculateEngagementScore(contact) {
   return Math.min(score, 100);
 }
 
+// Thin wrapper kept for its existing call sites (stage advances, imports). All
+// activity-logging + scoring flows through recordEngagement so the weight table
+// and hot/warm thresholds live in exactly one place. The previous body recomputed
+// the score from a contact.activity array that doesn't exist on a DB row, which
+// silently reset lead_score_numeric to 0 on every call — this delegates instead.
 async function addContactActivity(contactId, companyId, entry) {
-  const contact = await contactDb.getById(contactId, companyId);
-  if (!contact) return false;
-
-  const timestampedEntry = { ...entry, timestamp: new Date().toISOString() };
-  await contactDb.addActivity(contactId, timestampedEntry, companyId);
-
-  const updated = await contactDb.getById(contactId, companyId);
-  const es = calculateEngagementScore(updated || contact);
-
-  const updateData = { lead_score_numeric: es };
-
-  if (es >= 80 && (contact.lead_score || contact.leadScore) !== 'hot') {
-    updateData.lead_score = 'hot';
-    updateData.lead_score_numeric = 90;
-  } else if (es >= 50 && (contact.lead_score || contact.leadScore) === 'cold') {
-    updateData.lead_score = 'warm';
-    updateData.lead_score_numeric = 60;
-  }
-
-  await contactDb.update(contactId, updateData, companyId);
-  return true;
+  return recordEngagement(contactId, companyId, entry);
 }
 
 router.findContactByEmail = findContactByEmail;

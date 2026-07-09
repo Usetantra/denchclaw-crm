@@ -125,6 +125,21 @@ async function main() {
     else check('default-company cannot read co_a row', 'CP1', r.status === 404, `status=${r.status} (should be 404)`);
   }
 
+  // 8b — phone search is tenant-scoped (gate-4 hardening). A co_a contact's phone
+  //      must be findable by co_a but NOT leak to co_b. Regression sentinel guarding
+  //      the scoped phone-lookup path (findContactByPhone / GET /contacts?phone=).
+  {
+    const aPhone = '+1555' + String(RUN).replace(/\D/g, '').slice(-7);
+    const digits = aPhone.replace(/\D/g, '');
+    await req('POST', '/api/crm/contacts', { company: CO_A, body: { name: 'Phone A', email: email('phone'), phone: aPhone } });
+    const own = await req('GET', `/api/crm/contacts?phone=${encodeURIComponent(aPhone)}`, { company: CO_A });
+    const foundOwn = (own.json?.contacts || []).some(c => (c.phone || '').replace(/\D/g, '') === digits);
+    check('phone search finds own-tenant contact', 'CP1', own.status === 200 && foundOwn, `status=${own.status} n=${own.json?.contacts?.length}`);
+    const other = await req('GET', `/api/crm/contacts?phone=${encodeURIComponent(aPhone)}`, { company: CO_B });
+    const leaked = (other.json?.contacts || []).some(c => (c.phone || '').replace(/\D/g, '') === digits);
+    check('phone search does not leak cross-tenant', 'CP1', other.status === 200 && !leaked, `status=${other.status} leaked=${leaked}`);
+  }
+
   // 9 — illegal stage transition lead→won → 400 with allowed_transitions
   {
     const c = await req('POST', '/api/crm/contacts', { company: CO_A, body: { name: 'Stage X', email: email('stage'), source: 'manual' } });

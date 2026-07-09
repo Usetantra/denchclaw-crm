@@ -7,6 +7,17 @@ const { query } = require('../db/index');
 const { requireAuth, getUserCompanyId } = require('../middleware/auth');
 const contactDb = require('../db/models/contacts');
 const { getPipelineConfig, getPipelineTransitions } = require('../db/pipeline');
+const { recordEngagement } = require('../lib/scoring');
+
+// Inbound reply → engagement event (per channel), so the Unified AI Inbox feeds
+// the same lead score the activity feed does. Channels with no scoring reply
+// event fall back to a generic 'message_replied' (weight 0 — logged, not scored).
+const REPLY_EVENT_BY_CHANNEL = {
+  email: 'email_replied',
+  whatsapp: 'whatsapp_replied',
+  sms: 'sms_replied',
+  linkedin: 'linkedin_message_replied',
+};
 
 router.use(requireAuth);
 
@@ -147,10 +158,12 @@ router.post('/conversations/:id/messages', async (req, res) => {
     if (!conv) return res.status(404).json({ error: 'conversation not found' });
 
     let message;
+    let isNewMessage;
     if (provider_message_id) {
       // Idempotent upsert: a webhook delivered twice yields one message row.
       // DO UPDATE SET provider_message_id = EXCLUDED.provider_message_id is a no-op write
-      // that makes RETURNING * return the existing row.
+      // that makes RETURNING * return the existing row. (xmax = 0) distinguishes a
+      // fresh insert from a conflict-hit so retries don't re-advance / re-score.
       const msgRes = await query(
         `INSERT INTO messages
            (conversation_id, company_id, direction, channel, body, ai_generated, intent,
@@ -158,11 +171,13 @@ router.post('/conversations/:id/messages', async (req, res) => {
          VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)
          ON CONFLICT (company_id, provider_message_id) WHERE provider_message_id IS NOT NULL
          DO UPDATE SET provider_message_id = EXCLUDED.provider_message_id
-         RETURNING *`,
+         RETURNING *, (xmax::text = '0') AS _inserted`,
         [req.params.id, companyId, direction, channel, body || null,
          ai_generated, intent || null, provider_message_id, JSON.stringify(metadata)]
       );
       message = msgRes.rows[0];
+      isNewMessage = message._inserted === true;
+      delete message._inserted;
     } else {
       const msgRes = await query(
         `INSERT INTO messages
@@ -172,6 +187,7 @@ router.post('/conversations/:id/messages', async (req, res) => {
          ai_generated, intent || null, JSON.stringify(metadata)]
       );
       message = msgRes.rows[0];
+      isNewMessage = true;
     }
 
     // Update conversation's last_message_at and intent when provided
@@ -190,10 +206,25 @@ router.post('/conversations/:id/messages', async (req, res) => {
 
     // For inbound messages: advance marketing stage to 'responded' if valid, then
     // return active campaign tags so the engine can suppress competing outbound.
+    // Gated on isNewMessage so a duplicate webhook delivery re-scores/re-advances
+    // nothing ("exactly one row" extends to "scores exactly once").
     let active_campaigns = [];
-    if (direction === 'inbound') {
+    if (direction === 'inbound' && isNewMessage) {
       const contact = await contactDb.getById(conv.contact_id, companyId);
       if (contact) {
+        // The reply is an engagement event: log it to the activity feed AND bump
+        // the lead score (channel-mapped weight), so the inbox feeds the score.
+        try {
+          const replyType = REPLY_EVENT_BY_CHANNEL[channel] || 'message_replied';
+          await recordEngagement(conv.contact_id, companyId, {
+            type: replyType,
+            message: `Inbound ${channel} reply${body ? ': ' + String(body).slice(0, 140) : ''}`,
+            agent: 'contact',
+            channel,
+            data: { conversation_id: req.params.id, provider_message_id: provider_message_id || null, intent: intent || null },
+          });
+        } catch (_e) { /* non-blocking — message already persisted */ }
+
         // Stage advance: responded is only reachable from engaged per the marketing pipeline.
         try {
           const pipeline = await getPipelineConfig(companyId, 'marketing');
