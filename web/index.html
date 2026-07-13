@@ -210,6 +210,16 @@
   .composer input:focus{border-color:var(--ink)}
   .composer button{background:var(--ink);border:none;color:#fff;border-radius:var(--radius);padding:0 18px;
         font-size:11px;letter-spacing:.14em;text-transform:uppercase;font-weight:600;cursor:pointer;font-family:var(--sans)}
+  /* Conversation thread drawer — chat layout: fixed head/actions/composer, msgs fills+scrolls */
+  #conv-wrap .modal{max-width:720px;height:88vh;max-height:88vh;display:flex;flex-direction:column;overflow:hidden;padding:0}
+  #conv-wrap .mhead{padding:20px 24px 12px;margin:0;flex:0 0 auto}
+  #conv-wrap .conv-bar{display:flex;gap:8px;align-items:center;flex-wrap:wrap;padding:0 24px 14px;border-bottom:1px solid var(--hair);flex:0 0 auto}
+  #conv-wrap .msgs{flex:1 1 auto;min-height:0;background:var(--hair-2)}
+  #conv-wrap .composer{flex:0 0 auto}
+  #cv-msgs .msg .mmeta{font-size:10px;letter-spacing:.03em;margin-top:5px;opacity:.72}
+  #cv-msgs .msg.user .mmeta{text-align:right}
+  .ai-tag{display:inline-block;font-size:9px;font-weight:700;letter-spacing:.06em;text-transform:uppercase;
+        padding:1px 6px;border-radius:999px;background:var(--cold-bg);color:var(--cold);margin-left:6px;vertical-align:middle}
   .composer button:disabled{opacity:.4;cursor:default}
 
   footer{max-width:var(--maxw);margin:40px auto 0;padding:20px 32px 30px;border-top:1px solid var(--hair);
@@ -262,6 +272,10 @@
   .pl-item:last-child{border-bottom:none}
   .pl-item.active{background:var(--hair-2)}
   .pl-item .tag{font-size:9px;letter-spacing:.1em;text-transform:uppercase;font-weight:700;color:var(--ink-4)}
+  .pl-item .tags{display:flex;gap:8px;align-items:center}
+  .pl-item .scope{font-size:9px;letter-spacing:.06em;text-transform:uppercase;font-weight:700;padding:2px 8px;border-radius:999px;white-space:nowrap}
+  .pl-item .scope.contact{background:var(--cold-bg);color:var(--cold)}
+  .pl-item .scope.deal{background:var(--warm-bg);color:var(--warm)}
   .pipe-editor{border:1px solid var(--hair);border-radius:10px;padding:18px}
   .stage-row{display:flex;align-items:center;gap:10px;padding:8px 9px;border:1px solid var(--hair);border-radius:8px;margin-bottom:8px;background:#fff}
   .stage-row.dragging{opacity:.4}
@@ -281,7 +295,7 @@
 
 <div class="tabbar"><div class="tabbar-inner">
   <button data-tab="dashboard" class="active">Dashboard</button>
-  <button data-tab="board">Deals</button>
+  <button data-tab="board">Opportunities</button>
   <button data-tab="contacts">Contacts</button>
   <button data-tab="companies">Companies</button>
   <button data-tab="pipelines">Pipelines</button>
@@ -329,7 +343,7 @@
   <!-- ── BOARD ──────────────────────────────────────────────────────────── -->
   <div id="view-board" style="display:none">
   <div class="toolbar">
-    <h2 class="h1" style="margin-right:12px">Deals</h2>
+    <h2 class="h1" style="margin-right:12px">Opportunities</h2>
     <select id="deal-pipe-sel"></select>
     <span class="muted" style="font-size:11px">drag cards to advance stages</span>
     <span class="spacer"></span>
@@ -380,7 +394,7 @@
       <span class="spacer"></span>
       <button class="btn primary" id="new-pipeline">+ New pipeline</button>
     </div>
-    <p class="muted" style="font-size:12px;margin:-4px 0 16px">Editing the built-in <b>Sales</b>/<b>Marketing</b> pipelines changes the stage machine for your workspace (keep automation in sync). Custom pipelines apply to deals and move freely.</p>
+    <p class="muted" style="font-size:12px;margin:-4px 0 16px">Editing the built-in <b>Sales</b>/<b>Marketing</b> pipelines changes the stage machine for your workspace (keep automation in sync). Custom pipelines apply to opportunities and move freely.</p>
     <div class="pipe-layout">
       <div class="pipe-list" id="pipe-list"></div>
       <div class="pipe-editor" id="pipe-editor"><div class="muted">Select a pipeline to edit its stages.</div></div>
@@ -462,6 +476,22 @@
   </div>
 </div>
 
+<!-- ── CONVERSATION THREAD DRAWER (Unified AI Inbox) ────────────────────── -->
+<div class="modal-wrap" id="conv-wrap">
+  <div class="modal conv-modal">
+    <div class="mhead">
+      <div><h2 id="cv-name">—</h2><div class="msub" id="cv-sub"></div></div>
+      <button class="mclose" id="cv-close" title="Close">×</button>
+    </div>
+    <div class="conv-bar" id="cv-actions"></div>
+    <div class="msgs" id="cv-msgs"><div class="msg bot">loading…</div></div>
+    <form class="composer" id="cv-composer" autocomplete="off">
+      <input id="cv-input" placeholder="Type a reply…" autocomplete="off" />
+      <button type="submit">Send</button>
+    </form>
+  </div>
+</div>
+
 <footer>
   <span class="eyebrow">DenchClaw CRM · Tantra RevOps</span>
   <span>Live dashboard · <code>denchclaw-crm</code> on <code>127.0.0.1:3100</code> · <span id="refreshed"></span></span>
@@ -501,7 +531,7 @@ async function get(path){
 async function apiFetch(method,path,body){
   const r=await fetch(`${API}/${path}`,{method,headers:{"Content-Type":"application/json"},body:JSON.stringify(body)});
   const j=await r.json().catch(()=>({}));
-  if(!r.ok){const e=new Error(j.error||`HTTP ${r.status}`);e.allowed=j.allowed_transitions;throw e;}
+  if(!r.ok){const e=new Error(j.error||`HTTP ${r.status}`);e.allowed=j.allowed_transitions||j.allowed;throw e;}
   return j;
 }
 const post=(p,b)=>apiFetch("POST",p,b);
@@ -520,8 +550,8 @@ function renderCards(s){
   const rows=[
     {label:"Contacts",value:c.total??0,sub:`${c.hot??0} hot · ${c.warm??0} warm`},
     {label:"New this week",value:c.new_this_week??0,sub:`${c.new_today??0} today`},
-    {label:"Open deals",value:d.open??0,sub:`$${(d.pipeline_value??0).toLocaleString()} pipeline`},
-    {label:"Won value",value:`$${(d.won_value??0).toLocaleString()}`,sub:`${d.won??0} deals closed`},
+    {label:"Open opportunities",value:d.open??0,sub:`$${(d.pipeline_value??0).toLocaleString()} pipeline`},
+    {label:"Won value",value:`$${(d.won_value??0).toLocaleString()}`,sub:`${d.won??0} opportunities closed`},
     {label:"Sends (30d)",value:(ca.total_sends??0).toLocaleString(),sub:`${ca.total_replies??0} replies`},
   ];
   $("#cards").innerHTML=rows.map(k=>`<div class="card"><div class="label">${esc(k.label)}</div>
@@ -565,9 +595,9 @@ async function openContact(id){
     const fields=[
       ["Email",c.email],["Phone",c.phone],["Company",c.company_name],["Title",c.title],
       ["LinkedIn",c.linkedin_url],["Source",c.source],
-      ["Marketing stage",nice(c.marketing_stage)],["Deal stage (legacy)",nice(c.deal_stage)],
+      ["Marketing stage",nice(c.marketing_stage)],["Opportunity stage (legacy)",nice(c.deal_stage)],
       ["Lead score",`${c.lead_score||"—"} (${c.lead_score_numeric??0})`],
-      ["Deal value",c.deal_value>0?`$${parseFloat(c.deal_value).toLocaleString()}`:"—"],
+      ["Opportunity value",c.deal_value>0?`$${parseFloat(c.deal_value).toLocaleString()}`:"—"],
       ["Tags",(c.tags||[]).join(", ")],
       ["UTM source",c.utm_source],["UTM medium",c.utm_medium],["UTM campaign",c.utm_campaign],
       ["Last contacted",c.last_contacted?fmtDate(c.last_contacted):"—"],
@@ -599,7 +629,7 @@ function renderFeed(items){
 function closeDrawer(){$("#modal-wrap").classList.remove("open");document.documentElement.classList.remove("modal-open");}
 $("#m-close").addEventListener("click",closeDrawer);
 $("#modal-wrap").addEventListener("click",e=>{if(e.target.id==="modal-wrap")closeDrawer();});
-document.addEventListener("keydown",e=>{if(e.key==="Escape"){closeDrawer();closeModal();}});
+document.addEventListener("keydown",e=>{if(e.key==="Escape"){closeDrawer();closeModal();closeConv();}});
 $("#m-noteform").addEventListener("submit",async e=>{
   e.preventDefault();
   const id=$("#modal-wrap").dataset.contact,msg=$("#m-note").value.trim();
@@ -695,10 +725,11 @@ function initBoardDnD(){
   board.addEventListener("drop",async e=>{
     const col=e.target.closest(".gcol");if(!col||!dragInfo||col.dataset.type!==dragInfo.type)return;
     e.preventDefault();
-    const to=col.dataset.stage,{id,from}=dragInfo;clearHi();
+    const to=col.dataset.stage,{id,from,type}=dragInfo;clearHi();
     if(to===from)return;
     try{
-      await patch(`deals/${id}`,{stage:to,pipeline_key:selDealPipe});
+      if(type==="contact")await post(`contacts/${id}/advance`,{pipeline_key:selDealPipe,stage:to});
+      else await patch(`deals/${id}`,{stage:to,pipeline_key:selDealPipe});
       toast(`Moved to ${nice(to)}`);loadBoard();
     }catch(err){
       const allowed=err.allowed;
@@ -717,7 +748,7 @@ const STATUS_COLORS={open:"#12b76a",closed:"#98a2b3",snoozed:"#f79009",escalated
 function renderInbox(convs){
   const rows=(convs||[]).map(c=>{
     const sc=STATUS_COLORS[c.status]||"#98a2b3";
-    return `<tr>
+    return `<tr data-conv="${esc(c.id)}" style="cursor:pointer">
       <td><b>${esc(c.contact_name||"—")}</b><br><span class="muted" style="font-size:11px">${esc(c.contact_email||"")}</span></td>
       <td><span class="ch-badge">${esc(c.channel||"—")}</span></td>
       <td><span class="status-pill" style="background:${sc}20;color:${sc}">${esc(c.status||"—")}</span></td>
@@ -752,6 +783,76 @@ $("#inbox-filters").addEventListener("click",e=>{
   document.querySelectorAll("#inbox-filters button").forEach(x=>x.classList.toggle("active",x.dataset.f===inboxFilter));
   loadInbox();
 });
+// Open a conversation thread when its row is clicked (but not its action buttons).
+$("#inbox-body").addEventListener("click",e=>{
+  if(e.target.closest(".act-btn"))return;
+  const tr=e.target.closest("tr[data-conv]");if(tr)openConversation(tr.dataset.conv);
+});
+
+// ── Conversation thread drawer ────────────────────────────────────────────────
+let convCur=null;
+async function openConversation(id){
+  const wrap=$("#conv-wrap");wrap.classList.add("open");wrap.dataset.conv=id;
+  document.documentElement.classList.add("modal-open");
+  $("#cv-name").textContent="Loading…";$("#cv-sub").textContent="";
+  $("#cv-actions").innerHTML="";$("#cv-msgs").innerHTML=`<div class="msg bot">loading…</div>`;
+  try{
+    const [c,m]=await Promise.all([get(`conversations/${id}`),get(`conversations/${id}/messages?limit=200`)]);
+    convCur=c;
+    $("#cv-name").textContent=c.contact_name||c.contact_email||"Conversation";
+    const sc=STATUS_COLORS[c.status]||"#98a2b3";
+    $("#cv-sub").innerHTML=`<span class="ch-badge">${esc(c.channel||"—")}</span> `+
+      `<span class="status-pill" style="background:${sc}20;color:${sc}">${esc(c.status||"open")}</span> · `+
+      `assignee: <b>${esc(c.assignee||"ai")}</b>${c.intent?` · intent: ${esc(c.intent)}`:""}`;
+    renderConvActions(c);
+    renderThread(m.messages||[]);
+    if(c.status!=="closed")$("#cv-input").focus();
+  }catch(e){$("#cv-name").textContent="Error";$("#cv-sub").textContent=e.message;}
+}
+function renderConvActions(c){
+  const b=[];
+  if(c.assignee!=="human")b.push(`<button class="btn sm" data-cv-act="escalate">↑ Escalate to human</button>`);
+  else b.push(`<button class="btn sm" data-cv-act="ai">↩ Hand back to AI</button>`);
+  if(c.status!=="closed")b.push(`<button class="btn sm" data-cv-act="close">Close</button>`);
+  if(c.contact_id)b.push(`<button class="btn sm" data-cv-act="contact">Open contact →</button>`);
+  $("#cv-actions").innerHTML=b.join("");
+}
+function renderThread(msgs){
+  const box=$("#cv-msgs");
+  if(!msgs.length){box.innerHTML=`<div class="msg bot">No messages yet.</div>`;return;}
+  box.innerHTML=msgs.map(m=>{
+    const out=m.direction==="outbound";
+    const who=out?(m.ai_generated?"AI":"You"):"Contact";
+    return `<div class="msg ${out?"user":"bot"}">${esc(m.body||"—")}
+      <div class="mmeta">${esc(who)}${out&&m.ai_generated?`<span class="ai-tag">AI</span>`:""} · ${esc(m.channel||"")}${m.intent?" · "+esc(m.intent):""} · ${new Date(m.created_at).toLocaleString()}</div>
+    </div>`;
+  }).join("");
+  box.scrollTop=box.scrollHeight;
+}
+$("#cv-actions").addEventListener("click",async e=>{
+  const btn=e.target.closest("[data-cv-act]");if(!btn)return;
+  const act=btn.dataset.cvAct,id=$("#conv-wrap").dataset.conv;
+  if(act==="contact"){const cid=convCur&&convCur.contact_id;closeConv();if(cid)openContact(cid);return;}
+  const body=act==="escalate"?{assignee:"human"}:act==="ai"?{assignee:"ai"}:act==="close"?{status:"closed"}:null;
+  if(!body)return;
+  try{await patch(`conversations/${id}`,body);toast(act==="close"?"Closed":act==="escalate"?"Escalated to human":"Handed back to AI");
+    await openConversation(id);loadInbox();}
+  catch(err){toast(err.message,true);}
+});
+$("#cv-composer").addEventListener("submit",async e=>{
+  e.preventDefault();
+  const id=$("#conv-wrap").dataset.conv,txt=$("#cv-input").value.trim();
+  if(!id||!txt||!convCur)return;
+  try{
+    await post(`conversations/${id}/messages`,{direction:"outbound",channel:convCur.channel,body:txt,ai_generated:false});
+    $("#cv-input").value="";
+    const m=await get(`conversations/${id}/messages?limit=200`);
+    renderThread(m.messages||[]);loadInbox();
+  }catch(err){toast(err.message,true);}
+});
+function closeConv(){$("#conv-wrap").classList.remove("open");document.documentElement.classList.remove("modal-open");}
+$("#cv-close").addEventListener("click",closeConv);
+$("#conv-wrap").addEventListener("click",e=>{if(e.target.id==="conv-wrap")closeConv();});
 
 // ── Analytics ────────────────────────────────────────────────────────────────
 function renderFunnel(el,stages,order){
@@ -859,14 +960,16 @@ async function load(){
 }
 
 // ── Tab switching ─────────────────────────────────────────────────────────────
-let _inboxLoaded=false,_analyticsLoaded=false;
 function setTab(tab){
   document.querySelectorAll(".tabbar button").forEach(b=>b.classList.toggle("active",b.dataset.tab===tab));
   ["dashboard","board","contacts","companies","pipelines","inbox","analytics"].forEach(v=>{
     const el=$(`#view-${v}`);if(el)el.style.display=v===tab?"":"none";
   });
-  if(tab==="inbox"&&!_inboxLoaded){loadInbox();_inboxLoaded=true;}
-  if(tab==="analytics"&&!_analyticsLoaded){loadAnalytics();_analyticsLoaded=true;}
+  // Every tab refetches on entry so numbers are always live (get() is no-store).
+  // Previously analytics/inbox loaded once, so stage moves never reflected here.
+  if(tab==="dashboard")load();
+  if(tab==="inbox")loadInbox();
+  if(tab==="analytics")loadAnalytics();
   if(tab==="contacts")loadContacts();
   if(tab==="companies")loadCompanies();
   if(tab==="board")loadBoard();
@@ -1068,7 +1171,7 @@ function renderCompanyList(){
     <td>${c.website?`<a class="linklike" href="${esc(/^https?:/.test(c.website)?c.website:"https://"+c.website)}" target="_blank" rel="noopener">${esc(c.website)}</a>`:""}</td>
     <td><div class="rowact"><button class="btn sm" data-edit="${esc(c.id)}">Edit</button><button class="btn sm danger" data-del="${esc(c.id)}">Del</button></div></td></tr>`).join("");
   $("#companies-list").innerHTML=`<table><thead><tr><th class="checkcell"><input type="checkbox" id="cosel-all"></th>
-    <th>Company</th><th>Industry</th><th>Contacts</th><th>Pipeline</th><th>Deals</th><th>Website</th><th></th></tr></thead><tbody>${rows}</tbody></table>`;
+    <th>Company</th><th>Industry</th><th>Contacts</th><th>Pipeline</th><th>Opportunities</th><th>Website</th><th></th></tr></thead><tbody>${rows}</tbody></table>`;
   updateCompanyBulk();
 }
 function updateCompanyBulk(){$("#company-bulk").classList.toggle("show",coSel.size>0);$("#company-selN").textContent=`${coSel.size} selected`;}
@@ -1092,16 +1195,16 @@ async function openCompanyDetail(id){
     const contactsHtml=(ct.contacts||[]).length?`<table><thead><tr><th>Name</th><th>Title</th><th>Stage</th><th>Value</th></tr></thead><tbody>${
       ct.contacts.map(p=>`<tr><td><b>${esc(p.name||"—")}</b><div class="muted" style="font-size:11px">${esc(p.email||"")}</div></td><td>${esc(p.title||"")}</td><td>${esc(p.marketing_stage||p.deal_stage||"")}</td><td>${money(p.deal_value)}</td></tr>`).join("")
     }</tbody></table>`:`<div class="empty">No linked contacts.</div>`;
-    const dealsHtml=(dl.deals||[]).length?`<table><thead><tr><th>Deal</th><th>Contact</th><th>Stage</th><th>Value</th></tr></thead><tbody>${
+    const dealsHtml=(dl.deals||[]).length?`<table><thead><tr><th>Opportunity</th><th>Contact</th><th>Stage</th><th>Value</th></tr></thead><tbody>${
       dl.deals.map(d=>`<tr><td><b>${esc(d.title||"—")}</b></td><td>${esc(d.contact_name||"")}</td><td>${esc(d.stage||"")}</td><td>${money(d.value)}</td></tr>`).join("")
-    }</tbody></table>`:`<div class="empty">No deals yet.</div>`;
+    }</tbody></table>`:`<div class="empty">No opportunities yet.</div>`;
     $("#modal-title").textContent=c.name||"Account";
     $("#modal-body").innerHTML=`
-      <div style="display:flex;gap:8px;margin:2px 0 14px">${stat("Contacts",c.contact_count||0)}${stat("Lead value",money(c.pipeline_value))}${stat("Deals",c.deal_count||0)}${stat("Deal value",money(c.deal_value))}</div>
+      <div style="display:flex;gap:8px;margin:2px 0 14px">${stat("Contacts",c.contact_count||0)}${stat("Lead value",money(c.pipeline_value))}${stat("Opportunities",c.deal_count||0)}${stat("Opportunity value",money(c.deal_value))}</div>
       ${meta?`<div class="muted" style="margin-bottom:6px">${esc(meta)}</div>`:""}
       ${c.website?`<div style="margin-bottom:14px"><a class="linklike" href="${esc(/^https?:/.test(c.website)?c.website:"https://"+c.website)}" target="_blank" rel="noopener">${esc(c.website)}</a></div>`:""}
       <h3 class="h1" style="font-size:15px;margin:12px 0 6px">Contacts (${(ct.contacts||[]).length})</h3>${contactsHtml}
-      <h3 class="h1" style="font-size:15px;margin:16px 0 6px">Deals (${(dl.deals||[]).length})</h3>${dealsHtml}`;
+      <h3 class="h1" style="font-size:15px;margin:16px 0 6px">Opportunities (${(dl.deals||[]).length})</h3>${dealsHtml}`;
   }catch(e){$("#modal-body")&&($("#modal-body").innerHTML=`<div class="empty">${esc(e.message)}</div>`);}
 }
 $("#company-search").addEventListener("input",debounce(loadCompanies,250));
@@ -1123,7 +1226,13 @@ function companyModal(c){
 // ── Deals board (pipeline-aware) ──────────────────────────────────────────────
 let selDealPipe="sales";
 let DEAL_PIPES=[];
-async function ensureDealPipes(){ const r=await get("pipelines"); DEAL_PIPES=(r.pipelines||[]).filter(p=>p.applies_to==="deal"); }
+async function ensureDealPipes(){
+  // GHL-style: the Opportunities tab lists EVERY pipeline. Opportunity (deal)
+  // pipelines first, then contact pipelines (Marketing) which render their
+  // contacts as cards and advance the contact's marketing stage on drag.
+  const all=(await get("pipelines")).pipelines||[];
+  DEAL_PIPES=[...all.filter(p=>p.applies_to==="deal"), ...all.filter(p=>p.applies_to!=="deal")];
+}
 async function loadBoard(){
   try{
     await ensureDealPipes();
@@ -1132,30 +1241,48 @@ async function loadBoard(){
     if(sel) sel.innerHTML=DEAL_PIPES.map(p=>`<option value="${esc(p.key)}" ${p.key===selDealPipe?"selected":""}>${esc(p.name)}</option>`).join("");
     const def=DEAL_PIPES.find(p=>p.key===selDealPipe);
     if(!def){$("#board").innerHTML=`<div class="gempty">No pipeline.</div>`;return;}
+    const nb=$("#new-deal");if(nb)nb.textContent=def.applies_to==="contact"?"+ New contact":"+ New opportunity";
     const data=await get(`pipeline?pipeline_key=${encodeURIComponent(selDealPipe)}`);
     renderDealBoard(def,data.pipeline||{});
   }catch(e){$("#board").innerHTML=`<div class="gempty">${esc(e.message)}</div>`;}
 }
 function renderDealBoard(def,buckets){
   const b=$("#board");b.className="board";
+  const isContact=def.applies_to==="contact"; // Marketing etc. → cards are contacts
   b.innerHTML=(def.stages||[]).map(s=>{
-    const bucket=buckets[s.key]||{count:0,deals:[]};
-    const items=bucket.deals||[];
-    const total=items.reduce((x,d)=>x+(parseFloat(d.value)||0),0);
+    const bucket=buckets[s.key]||{count:0,deals:[],contacts:[]};
+    const items=(isContact?bucket.contacts:bucket.deals)||[];
     const color=s.color||"#98a2b3";
-    const cards=items.map(d=>`<div class="gcard" draggable="true" data-type="deal" data-id="${esc(d.id)}" data-stage="${esc(s.key)}" style="--cc:${color}">
-      <div class="gtitle">${esc(d.title||"—")}</div>
-      ${parseFloat(d.value)>0?`<div class="gval">$${parseFloat(d.value).toLocaleString()}</div>`:""}
-      ${d.contact_name?`<div class="gmeta"><span class="avatar">${esc(initials(d.contact_name))}</span><span class="gsub">${esc(d.contact_name)}</span></div>`:""}</div>`).join("")||`<div class="gempty">—</div>`;
-    return `<div class="gcol" data-type="deal" data-stage="${esc(s.key)}" style="--sc:${color}">
+    let cards,total=0;
+    if(isContact){
+      cards=items.map(c=>{
+        const sc=(typeof SCORE_COLORS!=="undefined"&&SCORE_COLORS[c.lead_score])||"#98a2b3";
+        return `<div class="gcard" draggable="true" data-type="contact" data-id="${esc(c.id)}" data-contact="${esc(c.id)}" data-stage="${esc(s.key)}" style="--cc:${sc}">
+          <div class="gmeta" style="margin-top:0"><span class="avatar">${esc(initials(c.name||c.email||"?"))}</span><span class="gtitle">${esc(c.name||c.email||"—")}</span></div>
+          ${c.company_name?`<div class="gsub" style="margin-top:5px">${esc(c.company_name)}</div>`:""}
+          <div class="gmeta"><span class="score ${esc(c.lead_score||"neutral")}">${esc(c.lead_score||"—")}</span>${c.source?`<span class="gsrc">${esc(c.source)}</span>`:""}</div>
+        </div>`;
+      }).join("")||`<div class="gempty">—</div>`;
+    }else{
+      total=items.reduce((x,d)=>x+(parseFloat(d.value)||0),0);
+      cards=items.map(d=>`<div class="gcard" draggable="true" data-type="deal" data-id="${esc(d.id)}" data-stage="${esc(s.key)}" style="--cc:${color}">
+        <div class="gtitle">${esc(d.title||"—")}</div>
+        ${parseFloat(d.value)>0?`<div class="gval">$${parseFloat(d.value).toLocaleString()}</div>`:""}
+        ${d.contact_name?`<div class="gmeta"><span class="avatar">${esc(initials(d.contact_name))}</span><span class="gsub">${esc(d.contact_name)}</span></div>`:""}</div>`).join("")||`<div class="gempty">—</div>`;
+    }
+    const count=bucket.count!=null?bucket.count:items.length;
+    return `<div class="gcol" data-type="${isContact?"contact":"deal"}" data-stage="${esc(s.key)}" style="--sc:${color}">
       <div class="ghead"><div class="gname"><span class="cdot"></span>${esc(s.name)}</div>
-      <div class="gsum"><b>${items.length}</b>${total>0?` · $${total.toLocaleString()}`:""}</div></div>
+      <div class="gsum"><b>${count}</b>${total>0?` · $${total.toLocaleString()}`:""}</div></div>
       <div class="gbody">${cards}</div></div>`;
   }).join("")||`<div class="gempty">This pipeline has no stages.</div>`;
 }
 $("#deal-pipe-sel").addEventListener("change",e=>{selDealPipe=e.target.value;loadBoard();});
 $("#new-deal").onclick=async()=>{
   const def=DEAL_PIPES.find(p=>p.key===selDealPipe);
+  // Contact pipeline (Marketing): the "New" button adds a contact (enters at the
+  // first marketing stage), not an opportunity.
+  if(def&&def.applies_to==="contact"){contactModal();return;}
   const stageOpts=(def?def.stages:[]).map(s=>({value:s.key,label:s.name}));
   // GHL-style: an opportunity is opened against an EXISTING contact — the user
   // picks from contacts already in the CRM (no free-typing a new person here).
@@ -1171,7 +1298,7 @@ $("#new-deal").onclick=async()=>{
     ...dealContacts.map(c=>({value:c.id,label:`${c.name||c.email||"Unnamed"}${c.company_name?" · "+c.company_name:""}${c.email?" · "+c.email:""}`}))];
   openModal("New opportunity",
     field("Contact","contact_id",{type:"select",options:contactOpts})+
-    field("Title","title",{placeholder:"Deal name"})+field("Value ($)","value",{type:"number"})+
+    field("Title","title",{placeholder:"Opportunity name"})+field("Value ($)","value",{type:"number"})+
     field("Stage","stage",{type:"select",options:stageOpts}),
     `<button class="btn" onclick="closeModal()">Cancel</button><button class="btn primary" id="save-deal">Create</button>`);
   $("#save-deal").onclick=async()=>{const v=formValues();
@@ -1191,8 +1318,15 @@ async function loadPipelinesTab(){
   catch(e){$("#pipe-list").innerHTML=`<div class="pl-item muted">${esc(e.message)}</div>`;}
 }
 function renderPipeList(){
-  $("#pipe-list").innerHTML=PIPES.map(p=>`<div class="pl-item ${p.key===editPipeKey?"active":""}" data-key="${esc(p.key)}">
-    <span>${esc(p.name)}</span><span class="tag">${p.builtin?"built-in":"custom"}</span></div>`).join("")||`<div class="pl-item muted">None</div>`;
+  $("#pipe-list").innerHTML=PIPES.map(p=>{
+    const isC=p.applies_to==="contact";
+    const scope=isC?"Contacts":"Opportunities";
+    const tip=isC?"Moves contacts through their marketing journey — shown in Analytics & on each contact, not the Opportunities board"
+                 :"Moves opportunities — shown on the Opportunities board";
+    return `<div class="pl-item ${p.key===editPipeKey?"active":""}" data-key="${esc(p.key)}">
+    <span>${esc(p.name)}</span>
+    <span class="tags"><span class="scope ${isC?"contact":"deal"}" title="${esc(tip)}">${scope}</span><span class="tag">${p.builtin?"built-in":"custom"}</span></span></div>`;
+  }).join("")||`<div class="pl-item muted">None</div>`;
 }
 $("#pipe-list").addEventListener("click",e=>{const it=e.target.closest(".pl-item[data-key]");if(!it)return;editPipeKey=it.dataset.key;renderPipeList();renderPipeEditor();});
 function renderPipeEditor(){
@@ -1212,7 +1346,7 @@ function renderPipeEditor(){
   renderStageRows();
   $("#add-stage").onclick=()=>{editStages.push({name:"New stage",color:"#667085"});renderStageRows();};
   $("#save-pipe").onclick=savePipe;
-  const d=$("#pipe-del");if(d)d.onclick=()=>confirmDelete(`Delete pipeline "${p.name}"? Its deals move back to Sales.`,async()=>{await del(`pipelines/${p.key}`);editPipeKey=null;toast("Deleted");loadPipelinesTab();});
+  const d=$("#pipe-del");if(d)d.onclick=()=>confirmDelete(`Delete pipeline "${p.name}"? Its opportunities move back to Sales.`,async()=>{await del(`pipelines/${p.key}`);editPipeKey=null;toast("Deleted");loadPipelinesTab();});
 }
 function renderStageRows(){
   $("#stage-rows").innerHTML=editStages.map((s,i)=>`<div class="stage-row" draggable="true" data-idx="${i}">
