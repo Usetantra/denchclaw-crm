@@ -254,6 +254,17 @@ router.post('/conversations/:id/messages', async (req, res) => {
       }
     }
 
+    // Audit: log an outbound send on the contact's activity feed (channel recorded),
+    // so "sent a message to contact" shows up alongside replies and stage changes.
+    if (direction === 'outbound' && isNewMessage) {
+      await contactDb.addActivity(conv.contact_id, {
+        type: 'message_sent',
+        message: `Sent ${channel} message${body ? ': ' + String(body).slice(0, 140) : ''}${ai_generated ? ' (AI)' : ''}`,
+        channel,
+        data: { conversation_id: req.params.id, ai_generated: !!ai_generated, provider_message_id: provider_message_id || null },
+      }, companyId);
+    }
+
     return res.status(201).json({ message, active_campaigns });
   } catch (err) {
     console.error('[Conversations] POST /conversations/:id/messages error:', err.message);
