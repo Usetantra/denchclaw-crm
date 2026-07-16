@@ -1,0 +1,12 @@
+name = "denchclaw-crm-inbound"
+main = "worker.js"
+compatibility_date = "2024-11-01"
+
+# Public URL of the CRM inbound webhook (plaintext var). Point this at wherever the
+# CRM is reachable — e.g. https://staging.usetantra.com/webhooks/email/inbound
+[vars]
+CRM_WEBHOOK_URL = "https://REPLACE-WITH-PUBLIC-HOST/webhooks/email/inbound"
+
+# CRM_WEBHOOK_SECRET is a SECRET, not a var — set it with:
+#   wrangler secret put CRM_WEBHOOK_SECRET
+# and paste the INBOUND_WEBHOOK_SECRET value from the CRM's .env.

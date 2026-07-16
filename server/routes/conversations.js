@@ -8,6 +8,7 @@ const { requireAuth, getUserCompanyId } = require('../middleware/auth');
 const contactDb = require('../db/models/contacts');
 const { getPipelineConfig, getPipelineTransitions } = require('../db/pipeline');
 const { recordEngagement } = require('../lib/scoring');
+const resendEmail = require('../lib/email-resend');
 
 // Inbound reply → engagement event (per channel), so the Unified AI Inbox feeds
 // the same lead score the activity feed does. Channels with no scoring reply
@@ -146,7 +147,7 @@ router.post('/conversations/:id/messages', async (req, res) => {
     if (!companyId) return res.status(401).json({ error: 'Authentication required' });
 
     const { direction, channel, body, ai_generated = false, intent,
-            provider_message_id, metadata = {} } = req.body;
+            provider_message_id, metadata = {}, deliver = false } = req.body;
     if (!direction || !channel) return res.status(400).json({ error: 'direction and channel required' });
     if (!['inbound', 'outbound'].includes(direction)) return res.status(400).json({ error: 'direction must be inbound or outbound' });
 
@@ -157,9 +158,30 @@ router.post('/conversations/:id/messages', async (req, res) => {
     const conv = convRes.rows[0];
     if (!conv) return res.status(404).json({ error: 'conversation not found' });
 
+    // Real delivery via the channel's provider adapter (currently email → Resend).
+    // Only fires for an outbound email when the composer asks to deliver AND a
+    // provider is configured; otherwise the message is just recorded (demo mode).
+    let deliveredId = null;
+    if (deliver && direction === 'outbound' && channel === 'email' && resendEmail.isConfigured()) {
+      let toAddr = metadata.to;
+      if (!toAddr) { const ct = await contactDb.getById(conv.contact_id, companyId); toAddr = ct && ct.email; }
+      try {
+        const sent = await resendEmail.sendEmail({
+          from: metadata.from, to: toAddr, cc: metadata.cc, bcc: metadata.bcc,
+          subject: metadata.subject, text: body,
+          replyTo: metadata.reply_to || process.env.INBOUND_REPLY_TO || undefined,
+        });
+        deliveredId = sent.id;
+      } catch (e) {
+        console.error('[Conversations] email delivery failed:', e.message);
+        return res.status(502).json({ error: `Email delivery failed — ${e.message}` });
+      }
+    }
+    const effectiveProviderId = deliveredId || provider_message_id;
+
     let message;
     let isNewMessage;
-    if (provider_message_id) {
+    if (effectiveProviderId) {
       // Idempotent upsert: a webhook delivered twice yields one message row.
       // DO UPDATE SET provider_message_id = EXCLUDED.provider_message_id is a no-op write
       // that makes RETURNING * return the existing row. (xmax = 0) distinguishes a
@@ -173,7 +195,7 @@ router.post('/conversations/:id/messages', async (req, res) => {
          DO UPDATE SET provider_message_id = EXCLUDED.provider_message_id
          RETURNING *, (xmax::text = '0') AS _inserted`,
         [req.params.id, companyId, direction, channel, body || null,
-         ai_generated, intent || null, provider_message_id, JSON.stringify(metadata)]
+         ai_generated, intent || null, effectiveProviderId, JSON.stringify(metadata)]
       );
       message = msgRes.rows[0];
       isNewMessage = message._inserted === true;
@@ -257,11 +279,12 @@ router.post('/conversations/:id/messages', async (req, res) => {
     // Audit: log an outbound send on the contact's activity feed (channel recorded),
     // so "sent a message to contact" shows up alongside replies and stage changes.
     if (direction === 'outbound' && isNewMessage) {
+      const subj = metadata && metadata.subject ? ` — "${metadata.subject}"` : '';
       await contactDb.addActivity(conv.contact_id, {
         type: 'message_sent',
-        message: `Sent ${channel} message${body ? ': ' + String(body).slice(0, 140) : ''}${ai_generated ? ' (AI)' : ''}`,
+        message: `Sent ${channel} message${subj}${body ? ': ' + String(body).slice(0, 140) : ''}${ai_generated ? ' (AI)' : ''}`,
         channel,
-        data: { conversation_id: req.params.id, ai_generated: !!ai_generated, provider_message_id: provider_message_id || null },
+        data: { conversation_id: req.params.id, ai_generated: !!ai_generated, provider_message_id: provider_message_id || null, subject: (metadata && metadata.subject) || null },
       }, companyId);
     }
 

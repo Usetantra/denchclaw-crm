@@ -36,6 +36,8 @@ const conversationsRouter = require('./routes/conversations');
 const analyticsRouter = require('./routes/analytics');
 const companiesRouter = require('./routes/companies');
 const pipelinesRouter = require('./routes/pipelines');
+const webhooksRouter = require('./routes/webhooks');
+app.use('/webhooks', webhooksRouter); // provider → CRM (no internal key; secret-checked)
 app.use('/api/crm/chat', chatRouter);
 app.use('/api/crm/companies', companiesRouter);
 app.use('/api/crm/pipelines', pipelinesRouter);

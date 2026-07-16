@@ -13,6 +13,23 @@ const { requireAuth, getUserCompanyId } = require('../middleware/auth');
 // All CRM routes require X-Internal-Key
 router.use(requireAuth);
 
+// ─── Connected sending identities (the "From" on each channel) ────────────────
+// In production these are written when a user connects an email account / phone
+// number (the connect flow saves them here). Configurable via CHANNEL_SENDERS
+// (JSON env); a default is provided so the inbox composer's From selector is
+// populated and functional locally. The composer only ever shows these — a user
+// never free-types a From.
+const CHANNEL_SENDERS = (() => {
+  try { return process.env.CHANNEL_SENDERS ? JSON.parse(process.env.CHANNEL_SENDERS) : null; }
+  catch (e) { console.warn('[CRM] CHANNEL_SENDERS is not valid JSON — using defaults'); return null; }
+})() || {
+  email:    [{ identity: 'hello@usetantra.com', label: 'Tantra · hello@usetantra.com',        default: true }],
+  whatsapp: [{ identity: '+14155550142',        label: 'Tantra WhatsApp · +1 415 555 0142',   default: true }],
+  sms:      [{ identity: '+14155550142',        label: 'Tantra SMS · +1 415 555 0142',        default: true }],
+  linkedin: [{ identity: 'tantra-growth',       label: 'Tantra Growth (LinkedIn)',            default: true }],
+};
+router.get('/channel-senders', (req, res) => res.json({ senders: CHANNEL_SENDERS }));
+
 // No-op validator — engines send well-formed data; validation at API boundary
 const validate = () => (req, res, next) => next();
 
@@ -20,7 +37,7 @@ const LEAD_SCORES = { hot: 90, warm: 60, neutral: 30, cold: 10, negative: 0 };
 
 const DEFAULT_DEAL_STAGES = ['lead', 'accepted', 'contacted', 'booked', 'qualified', 'no_show', 'unqualified', 'proposal', 'proposal_accepted', 'negotiation', 'onboarding', 'won', 'lost', 'nurture'];
 const DEAL_STAGES = DEFAULT_DEAL_STAGES;
-const SOURCES = ['expandi', 'instantly', 'linkedin', 'website', 'referral', 'manual', 'webinar', 'whatsapp', 'sms', 'content',
+const SOURCES = ['expandi', 'instantly', 'linkedin', 'website', 'referral', 'manual', 'webinar', 'whatsapp', 'sms', 'content', 'inbound_email',
   'cold_email_prospect', 'cold_calendar_prospect', 'linkedin_prospect', 'linkedin_engagement',
   'facebook_engagement', 'twitter_engagement', 'instagram_engagement', 'paid_ads', 'social_engagement'];
 
