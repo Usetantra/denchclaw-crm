@@ -230,6 +230,7 @@
   .cv-fields textarea{min-height:68px;resize:vertical;line-height:1.5}
   .cv-send-row{display:flex;justify-content:flex-end}
   #cv-msgs .msg .msg-subj{font-weight:700;font-size:12px;margin-bottom:4px}
+  #cv-msgs .msg .reply-ref{font-size:10.5px;opacity:.72;border-left:2px solid currentColor;padding-left:8px;margin-bottom:6px;line-height:1.4}
   #cv-msgs .msg .mmeta{font-size:10px;letter-spacing:.03em;margin-top:5px;opacity:.72}
   #cv-msgs .msg.user .mmeta{text-align:right}
   .ai-tag{display:inline-block;font-size:9px;font-weight:700;letter-spacing:.06em;text-transform:uppercase;
@@ -865,13 +866,27 @@ function renderConvActions(c){
 function renderThread(msgs){
   const box=$("#cv-msgs");
   if(!msgs.length){box.innerHTML=`<div class="msg bot">No messages yet.</div>`;return;}
-  box.innerHTML=msgs.map(m=>{
+  box.innerHTML=msgs.map((m,i)=>{
     const out=m.direction==="outbound";
     const who=out?(m.ai_generated?"AI":"You"):"Contact";
     const md=m.metadata||{};
     const subj=md.subject?`<div class="msg-subj">${esc(md.subject)}</div>`:"";
     const cc=md.cc?` · cc ${esc(md.cc)}`:"";
-    return `<div class="msg ${out?"user":"bot"}">${subj}${esc(m.body||"—")}
+    // "In reply to" reference on inbound replies: match the In-Reply-To header to
+    // an earlier message's id; else fall back to the nearest preceding outbound.
+    let replyRef="";
+    if(!out){
+      let target=null;
+      if(md.in_reply_to)target=msgs.find(x=>x.metadata&&x.metadata.message_id&&x.metadata.message_id===md.in_reply_to);
+      if(!target)for(let j=i-1;j>=0;j--){if(msgs[j].direction==="outbound"){target=msgs[j];break;}}
+      if(target){
+        const tmd=target.metadata||{};
+        const label=tmd.subject||"your message";
+        const snip=String(target.body||"").replace(/\s+/g," ").trim();
+        replyRef=`<div class="reply-ref">↩ In reply to <b>${esc(label)}</b>${snip?` — ${esc(snip.slice(0,80))}${snip.length>80?"…":""}`:""}</div>`;
+      }
+    }
+    return `<div class="msg ${out?"user":"bot"}">${replyRef}${subj}${esc(m.body||"—")}
       <div class="mmeta">${esc(who)}${out&&m.ai_generated?`<span class="ai-tag">AI</span>`:""} · ${esc(m.channel||"")}${m.intent?" · "+esc(m.intent):""}${cc} · ${new Date(m.created_at).toLocaleString()}</div>
     </div>`;
   }).join("");

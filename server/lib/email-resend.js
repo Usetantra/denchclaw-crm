@@ -28,6 +28,12 @@ async function sendEmail({ from, to, cc, bcc, subject, text, replyTo }) {
   // Reply-To routes replies to the inbound address (e.g. a Cloudflare-routed
   // handle) so they come back into the CRM inbox instead of the From mailbox.
   if (replyTo) payload.reply_to = replyTo;
+  // Stamp a stable Message-ID so an inbound reply's In-Reply-To can be matched
+  // back to this exact message ("in reply to …" in the thread). Best-effort —
+  // the UI falls back to the nearest preceding outbound if the header doesn't line up.
+  const domain = (String(from).match(/@([^>\s]+)/) || [])[1] || 'crm.local';
+  const messageId = `<crm-${Date.now()}-${Math.random().toString(36).slice(2, 10)}@${domain}>`;
+  payload.headers = { 'Message-ID': messageId };
 
   const r = await fetch('https://api.resend.com/emails', {
     method: 'POST',
@@ -40,7 +46,7 @@ async function sendEmail({ from, to, cc, bcc, subject, text, replyTo }) {
     const msg = j.message || j.error || `HTTP ${r.status}`;
     throw new Error(`Resend: ${msg}`);
   }
-  return { id: j.id || null };
+  return { id: j.id || null, messageId };
 }
 
 module.exports = { isConfigured, sendEmail };

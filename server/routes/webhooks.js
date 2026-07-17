@@ -29,13 +29,16 @@ function normalize(body) {
     const from = typeof d.from === 'string' ? d.from : (d.from && d.from.address) || '';
     const to = Array.isArray(d.to) ? d.to[0] : (d.to || d.received_for || '');
     return { from: extractEmail(from), to: extractEmail(to), subject: d.subject || '',
-      text: d.text || d.html || '', messageId: d.message_id || d.email_id || null };
+      text: d.text || d.html || '', messageId: d.message_id || d.email_id || null,
+      inReplyTo: d.in_reply_to || null, references: d.references || null };
   }
   // Generic full-payload shape (Cloudflare Email Routing worker, SendGrid, tests).
   const from = extractEmail(body.from || '');
   const to = extractEmail(Array.isArray(body.to) ? body.to[0] : (body.to || ''));
   return { from, to, subject: body.subject || '', text: body.text || body.html || '',
-    messageId: body.message_id || body.messageId || null };
+    messageId: body.message_id || body.messageId || null,
+    inReplyTo: body.in_reply_to || body.inReplyTo || null,
+    references: body.references || null };
 }
 
 async function api(method, path, payload) {
@@ -54,7 +57,7 @@ router.post('/email/inbound', async (req, res) => {
     if (SECRET && req.get('x-webhook-secret') !== SECRET) {
       return res.status(401).json({ error: 'invalid webhook secret' });
     }
-    const { from, subject, text, messageId } = normalize(req.body || {});
+    const { from, subject, text, messageId, inReplyTo, references } = normalize(req.body || {});
     if (!from) return res.status(400).json({ error: 'no sender address' });
 
     // Resolve the contact by sender email; create one if this is a new person.
@@ -76,7 +79,7 @@ router.post('/email/inbound', async (req, res) => {
       direction: 'inbound', channel: 'email',
       body: text || subject || '(no content)',
       provider_message_id: messageId || undefined,
-      metadata: { subject, from },
+      metadata: { subject, from, in_reply_to: inReplyTo || null, references: references || null },
     });
 
     return res.status(msg.status === 201 ? 200 : 502).json({

@@ -26,6 +26,9 @@ export default {
       text: parsed.text || '',
       html: parsed.html || '',
       message_id: parsed.messageId || message.headers.get('message-id') || null,
+      // Threading headers → let the CRM show "in reply to <that message>".
+      in_reply_to: parsed.inReplyTo || message.headers.get('in-reply-to') || null,
+      references: parsed.references || message.headers.get('references') || null,
     };
 
     const r = await fetch(env.CRM_WEBHOOK_URL, {

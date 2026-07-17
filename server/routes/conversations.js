@@ -172,6 +172,9 @@ router.post('/conversations/:id/messages', async (req, res) => {
           replyTo: metadata.reply_to || process.env.INBOUND_REPLY_TO || undefined,
         });
         deliveredId = sent.id;
+        // Persist the email Message-ID so an inbound reply's In-Reply-To can be
+        // matched back to this message ("in reply to …" in the thread).
+        if (sent.messageId) metadata.message_id = sent.messageId;
       } catch (e) {
         console.error('[Conversations] email delivery failed:', e.message);
         return res.status(502).json({ error: `Email delivery failed — ${e.message}` });
