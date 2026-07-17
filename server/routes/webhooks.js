@@ -7,6 +7,7 @@
 // duplicated logic. Mounted OUTSIDE requireAuth (the provider has no internal
 // key); protected instead by a shared secret.
 const express = require('express');
+const crypto = require('crypto');
 const router = express.Router();
 const contactDb = require('../db/models/contacts');
 
@@ -14,7 +15,22 @@ const PORT = process.env.PORT || 3100;
 const SELF = `http://127.0.0.1:${PORT}`;
 const INTERNAL_KEY = process.env.INTERNAL_API_KEY;
 const DEFAULT_COMPANY = process.env.DEFAULT_COMPANY_ID || 'tantra';
+// ─── Webhook auth (the ONLY guard on this route) ──────────────────────────────
+// This endpoint is mounted outside requireAuth (providers have no internal key)
+// and it WRITES: it creates contacts, advances marketing stages and scores leads.
+// So it fails CLOSED — with no secret configured the route is disabled (503)
+// rather than silently accepting anonymous writes from the internet.
 const SECRET = process.env.INBOUND_WEBHOOK_SECRET || '';
+if (!SECRET) {
+  console.warn('[Webhooks] INBOUND_WEBHOOK_SECRET is not set — the inbound email webhook is DISABLED (503). Set it to enable inbound email.');
+}
+
+// Constant-time compare so the secret can't be recovered by response timing.
+function secretOk(provided) {
+  const a = Buffer.from(String(provided || ''), 'utf8');
+  const b = Buffer.from(SECRET, 'utf8');
+  return a.length === b.length && crypto.timingSafeEqual(a, b);
+}
 
 // ─── Tenant routing (gate 4 for inbound) ──────────────────────────────────────
 // The RECEIVING address is the tenant key: mail to crm@acme.com belongs to acme.
@@ -91,7 +107,12 @@ async function api(method, path, payload, company) {
 // POST /webhooks/email/inbound
 router.post('/email/inbound', async (req, res) => {
   try {
-    if (SECRET && req.get('x-webhook-secret') !== SECRET) {
+    // Fail closed: unconfigured ⇒ disabled, never open.
+    if (!SECRET) {
+      console.error('[Webhooks] inbound rejected — INBOUND_WEBHOOK_SECRET is not configured');
+      return res.status(503).json({ error: 'inbound webhook not configured' });
+    }
+    if (!secretOk(req.get('x-webhook-secret'))) {
       return res.status(401).json({ error: 'invalid webhook secret' });
     }
     const { from, to, subject, text, messageId, inReplyTo, references } = normalize(req.body || {});
