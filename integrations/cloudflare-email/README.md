@@ -40,6 +40,20 @@ npx wrangler deploy
 2. **Routing address** → add e.g. `crm-reply@yourdomain` → action **Send to a Worker**
    → pick `denchclaw-crm-inbound`. (Or set a catch-all → Worker.)
 
+## Multi-tenant routing (`INBOUND_ROUTING`)
+
+The **recipient address decides which tenant owns the email**. Single-tenant (today's
+model) needs no config — everything resolves to `DEFAULT_COMPANY_ID`. For more than
+one company, map receiving addresses (or bare domains) to company ids:
+
+```
+INBOUND_ROUTING={"crm@growthclub.org":"tantra","@acme.com":"acme"}
+```
+
+Resolution order: exact address → `@domain` → `domain`. When `INBOUND_ROUTING` is set
+and a recipient maps to nothing, the delivery is **rejected with 422** rather than
+silently filed under the default tenant.
+
 ## Close the loop: make replies come back
 
 Set the CRM to stamp that address as **Reply-To** on outbound email, so a recipient's
