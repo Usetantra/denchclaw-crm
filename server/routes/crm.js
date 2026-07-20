@@ -13,6 +13,23 @@ const { requireAuth, getUserCompanyId } = require('../middleware/auth');
 // All CRM routes require X-Internal-Key
 router.use(requireAuth);
 
+// ─── Connected sending identities (the "From" on each channel) ────────────────
+// In production these are written when a user connects an email account / phone
+// number (the connect flow saves them here). Configurable via CHANNEL_SENDERS
+// (JSON env); a default is provided so the inbox composer's From selector is
+// populated and functional locally. The composer only ever shows these — a user
+// never free-types a From.
+const CHANNEL_SENDERS = (() => {
+  try { return process.env.CHANNEL_SENDERS ? JSON.parse(process.env.CHANNEL_SENDERS) : null; }
+  catch (e) { console.warn('[CRM] CHANNEL_SENDERS is not valid JSON — using defaults'); return null; }
+})() || {
+  email:    [{ identity: 'hello@usetantra.com', label: 'Tantra · hello@usetantra.com',        default: true }],
+  whatsapp: [{ identity: '+14155550142',        label: 'Tantra WhatsApp · +1 415 555 0142',   default: true }],
+  sms:      [{ identity: '+14155550142',        label: 'Tantra SMS · +1 415 555 0142',        default: true }],
+  linkedin: [{ identity: 'tantra-growth',       label: 'Tantra Growth (LinkedIn)',            default: true }],
+};
+router.get('/channel-senders', (req, res) => res.json({ senders: CHANNEL_SENDERS }));
+
 // No-op validator — engines send well-formed data; validation at API boundary
 const validate = () => (req, res, next) => next();
 
@@ -20,7 +37,7 @@ const LEAD_SCORES = { hot: 90, warm: 60, neutral: 30, cold: 10, negative: 0 };
 
 const DEFAULT_DEAL_STAGES = ['lead', 'accepted', 'contacted', 'booked', 'qualified', 'no_show', 'unqualified', 'proposal', 'proposal_accepted', 'negotiation', 'onboarding', 'won', 'lost', 'nurture'];
 const DEAL_STAGES = DEFAULT_DEAL_STAGES;
-const SOURCES = ['expandi', 'instantly', 'linkedin', 'website', 'referral', 'manual', 'webinar', 'whatsapp', 'sms', 'content',
+const SOURCES = ['expandi', 'instantly', 'linkedin', 'website', 'referral', 'manual', 'webinar', 'whatsapp', 'sms', 'content', 'inbound_email',
   'cold_email_prospect', 'cold_calendar_prospect', 'linkedin_prospect', 'linkedin_engagement',
   'facebook_engagement', 'twitter_engagement', 'instagram_engagement', 'paid_ads', 'social_engagement'];
 
@@ -334,6 +351,14 @@ router.post('/contacts', validate(), async (req, res) => {
     };
 
     const contact = await contactDb.create(contactData);
+    // Audit: the contact_activity feed is the contact's full history. contactDb.create
+    // does not persist the in-memory `activity` array, so write the creation event here.
+    await contactDb.addActivity(contact.id, {
+      type: 'contact_created',
+      message: `Contact created${source ? ' from ' + source : ''}`,
+      channel: null,
+      data: { source: source || 'manual', name: contact.name, email: contact.email },
+    }, companyId);
     // Auto-identify the employer account and link this contact (+ any siblings).
     if (company) contact.company_ref_id = await companyDb.identifyAndLink(companyId, company);
     broadcast(req, { type: 'contact_created', contact });
@@ -511,6 +536,31 @@ router.patch('/contacts/:id', async (req, res) => {
       }, companyId);
 
       triggerStageAutomation({ ...existing, ...updateData }, oldStage, newStage).catch(() => {});
+    }
+
+    // Audit: log meaningful field edits (e.g. from the dashboard edit modal). Skips
+    // housekeeping churn (last_contacted/next_follow_up/metadata) and deal_stage
+    // (already logged as a stage_change above), and only fires when a value truly
+    // changed and the caller didn't supply its own activity_message.
+    const AUDIT_FIELDS = { name: 'name', email: 'email', phone: 'phone', company_name: 'company',
+      title: 'title', linkedin_url: 'LinkedIn', lead_score: 'lead score', source: 'source',
+      deal_value: 'value', tags: 'tags' };
+    const changedLabels = [];
+    for (const [f, label] of Object.entries(AUDIT_FIELDS)) {
+      if (updateData[f] === undefined) continue;
+      const before = existing[f], after = updateData[f];
+      const eq = Array.isArray(after)
+        ? JSON.stringify([...after].sort()) === JSON.stringify([...(before || [])].sort())
+        : String(after ?? '') === String(before ?? '');
+      if (!eq) changedLabels.push(label);
+    }
+    if (changedLabels.length && !updates.activity_message) {
+      await contactDb.addActivity(req.params.id, {
+        type: 'contact_updated',
+        message: `Updated ${changedLabels.join(', ')}`,
+        agent: updates.agent || 'system',
+        data: { fields: changedLabels },
+      }, companyId);
     }
 
     const contact = await contactDb.update(req.params.id, updateData, companyId);
@@ -780,6 +830,16 @@ router.post('/deals', validate(), async (req, res) => {
       [deal.id, deal.companyId, deal.contact_id, deal.company_ref_id, deal.title, deal.value, deal.stage, deal.pipeline_key, 'crm',
        JSON.stringify({ contact_name: deal.contact_name, notes: deal.notes, activity: deal.activity })]
     );
+
+    // Audit: record the opportunity on the linked contact's activity feed.
+    if (deal.contact_id) {
+      await contactDb.addActivity(deal.contact_id, {
+        type: 'opportunity_created',
+        message: `Opportunity created: "${deal.title}"${deal.value > 0 ? ' ($' + Number(deal.value).toLocaleString() + ')' : ''}`,
+        channel: 'crm',
+        data: { deal_id: deal.id, stage: deal.stage, value: deal.value, pipeline_key: deal.pipeline_key },
+      }, companyId);
+    }
 
     broadcast(req, { type: 'deal_created', deal });
     res.status(201).json(deal);
@@ -1493,6 +1553,13 @@ async function findOrCreateContact(email, defaults = {}) {
   };
 
   contact = await contactDb.create(contactData);
+  // Audit: log the creation on the contact's feed (covers deals, webhooks, imports).
+  await contactDb.addActivity(contact.id, {
+    type: 'contact_created',
+    message: `Contact created${defaults.source ? ' from ' + defaults.source : ''}`,
+    channel: null,
+    data: { source: defaults.source || 'webhook', name: contact.name, email: contact.email },
+  }, companyId);
   // Auto-identify the employer account (covers bulk-import, deals, webhooks).
   if (companyId && defaults.company) {
     contact.company_ref_id = await companyDb.identifyAndLink(companyId, defaults.company);
