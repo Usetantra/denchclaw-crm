@@ -10,6 +10,13 @@ const express = require('express');
 const crypto = require('crypto');
 const router = express.Router();
 const contactDb = require('../db/models/contacts');
+const { query } = require('../db/index');
+
+// Public identifier from a LinkedIn profile URL (linkedin.com/in/<ident>).
+function linkedinIdent(url) {
+  const m = String(url || '').match(/linkedin\.com\/in\/([^/?#]+)/i);
+  return m ? m[1].toLowerCase() : '';
+}
 
 const PORT = process.env.PORT || 3100;
 const SELF = `http://127.0.0.1:${PORT}`;
@@ -153,6 +160,86 @@ router.post('/email/inbound', async (req, res) => {
     });
   } catch (err) {
     console.error('[Webhooks] inbound email error:', err.message);
+    return res.status(500).json({ error: 'inbound processing failed' });
+  }
+});
+
+// POST /webhooks/linkedin/inbound
+// Unipile "new message" event → resolve the contact by LinkedIn profile, open the
+// linkedin conversation (storing the chat id so replies can target it), and record
+// the inbound message (reuses dedupe / stage-advance / scoring via loopback).
+//
+// NOTE: Unipile's exact webhook field names should be confirmed against a live
+// event; the extraction below is tolerant of the common shapes.
+router.post('/linkedin/inbound', async (req, res) => {
+  try {
+    if (!SECRET) {
+      console.error('[Webhooks] linkedin inbound rejected — INBOUND_WEBHOOK_SECRET is not configured');
+      return res.status(503).json({ error: 'inbound webhook not configured' });
+    }
+    if (!secretOk(req.get('x-webhook-secret'))) {
+      return res.status(401).json({ error: 'invalid webhook secret' });
+    }
+
+    const b = req.body || {};
+    const msg = b.message && typeof b.message === 'object' ? b.message : b;
+    const sender = b.sender || msg.sender || b.from || {};
+    const text = typeof b.message === 'string' ? b.message : (msg.text || msg.body || b.text || '');
+    const messageId = b.message_id || msg.id || msg.message_id || null;
+    const chatId = b.chat_id || msg.chat_id || b.chatId || null;
+    const attendeeId = sender.attendee_provider_id || sender.provider_id || b.attendee_provider_id || null;
+    const senderName = sender.attendee_name || sender.name || b.sender_name || '';
+    const profileUrl = sender.attendee_profile_url || sender.profile_url || b.sender_profile_url ||
+      sender.public_identifier || b.profile_url || '';
+    const accountId = b.account_id || null;
+
+    // Tenant: the connected LinkedIn account determines the company. INBOUND_ROUTING
+    // (keyed by the Unipile account_id) enables multi-tenant; unset ⇒ single-tenant
+    // default; configured-but-unmapped ⇒ reject (fail closed, same as email).
+    let company;
+    if (!INBOUND_ROUTING) company = DEFAULT_COMPANY;
+    else company = INBOUND_ROUTING[accountId] || null;
+    if (!company) {
+      console.warn('[Webhooks] no tenant mapped for LinkedIn account:', accountId || '(none)');
+      return res.status(422).json({ error: `no tenant mapped for LinkedIn account ${accountId || '(none)'}` });
+    }
+
+    // Resolve the contact by LinkedIn profile; create one if new.
+    const ident = linkedinIdent(profileUrl);
+    let contact = null;
+    if (ident) {
+      const r = await query(
+        `SELECT * FROM contacts WHERE company_id = $1 AND linkedin_url ILIKE $2 AND deleted_at IS NULL LIMIT 1`,
+        [company, `%/in/${ident}%`]
+      );
+      contact = r.rows[0] || null;
+    }
+    if (!contact) {
+      const linkedin_url = profileUrl || (ident ? `https://www.linkedin.com/in/${ident}` : '');
+      const created = await api('POST', '/api/crm/contacts',
+        { name: senderName || ident || 'LinkedIn contact', linkedin_url, source: 'linkedin' }, company);
+      contact = created.json;
+    }
+    if (!contact || !contact.id) return res.status(502).json({ error: 'could not resolve contact' });
+
+    // Open the linkedin conversation, storing the Unipile chat + attendee ids so a
+    // reply from the composer can target the existing thread.
+    const conv = await api('POST', '/api/crm/conversations',
+      { contact_id: contact.id, channel: 'linkedin', metadata: { unipile_chat_id: chatId, unipile_attendee_id: attendeeId, unipile_account_id: accountId } }, company);
+    if (!conv.json || !conv.json.id) return res.status(502).json({ error: 'could not open conversation' });
+
+    const m = await api('POST', `/api/crm/conversations/${conv.json.id}/messages`, {
+      direction: 'inbound', channel: 'linkedin',
+      body: text || '(no content)',
+      provider_message_id: messageId || undefined,
+      metadata: { from: profileUrl || senderName, unipile_chat_id: chatId, unipile_attendee_id: attendeeId },
+    }, company);
+
+    return res.status(m.status === 201 ? 200 : 502).json({
+      ok: m.status === 201, company_id: company, contact_id: contact.id, conversation_id: conv.json.id,
+    });
+  } catch (err) {
+    console.error('[Webhooks] inbound linkedin error:', err.message);
     return res.status(500).json({ error: 'inbound processing failed' });
   }
 });

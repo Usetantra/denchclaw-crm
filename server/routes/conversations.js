@@ -9,6 +9,7 @@ const contactDb = require('../db/models/contacts');
 const { getPipelineConfig, getPipelineTransitions } = require('../db/pipeline');
 const { recordEngagement } = require('../lib/scoring');
 const resendEmail = require('../lib/email-resend');
+const linkedinUnipile = require('../lib/linkedin-unipile');
 
 // Inbound reply → engagement event (per channel), so the Unified AI Inbox feeds
 // the same lead score the activity feed does. Channels with no scoring reply
@@ -178,6 +179,45 @@ router.post('/conversations/:id/messages', async (req, res) => {
       } catch (e) {
         console.error('[Conversations] email delivery failed:', e.message);
         return res.status(502).json({ error: `Email delivery failed — ${e.message}` });
+      }
+    }
+    // LinkedIn delivery via Unipile. metadata.from selects WHICH connected
+    // account sends. Replies target the thread's existing chat when it belongs
+    // to that account; otherwise the contact's profile is resolved from the
+    // selected account and a new chat is started (409 with needs_connection when
+    // they aren't 1st-degree). DISABLED unless LINKEDIN_SEND_ENABLED=true — with
+    // it unset the message is recorded but not delivered.
+    if (deliver && direction === 'outbound' && channel === 'linkedin'
+        && linkedinUnipile.isConfigured() && linkedinUnipile.sendEnabled()) {
+      const cmeta = (typeof conv.metadata === 'string' ? JSON.parse(conv.metadata) : conv.metadata) || {};
+      const liAccount = metadata.from || cmeta.unipile_account_id || linkedinUnipile.defaultAccountId();
+      try {
+        let sent;
+        if (cmeta.unipile_chat_id && (!cmeta.unipile_account_id || cmeta.unipile_account_id === liAccount)) {
+          sent = await linkedinUnipile.sendMessage({ chatId: cmeta.unipile_chat_id, text: body });
+        } else {
+          const ct = await contactDb.getById(conv.contact_id, companyId);
+          const ident = (String((ct && ct.linkedin_url) || '').match(/linkedin\.com\/in\/([^/?#]+)/i) || [])[1];
+          if (!ident) return res.status(422).json({ error: 'contact has no LinkedIn profile URL' });
+          const prof = await linkedinUnipile.resolveProfile(ident, liAccount);
+          if (prof.distance && prof.distance !== 'FIRST_DEGREE') {
+            return res.status(409).json({
+              error: `not connected on LinkedIn (${prof.distance}) — send a connection request first`,
+              needs_connection: true,
+            });
+          }
+          sent = await linkedinUnipile.sendMessage({ accountId: liAccount, attendeeProviderId: prof.providerId, text: body });
+          if (sent.chatId) {
+            await query(
+              `UPDATE conversations SET metadata = metadata || $1, updated_at = now() WHERE id = $2 AND company_id = $3`,
+              [JSON.stringify({ unipile_chat_id: sent.chatId, unipile_account_id: liAccount }), req.params.id, companyId]
+            );
+          }
+        }
+        deliveredId = sent.id || deliveredId;
+      } catch (e) {
+        console.error('[Conversations] linkedin delivery failed:', e.message);
+        return res.status(502).json({ error: `LinkedIn delivery failed — ${e.message}` });
       }
     }
     const effectiveProviderId = deliveredId || provider_message_id;
