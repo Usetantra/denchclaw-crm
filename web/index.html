@@ -158,6 +158,11 @@
   .fgrid .f{border-top:1px solid var(--hair);padding-top:8px}
   .fgrid .f .fl{font-size:10px;letter-spacing:.12em;text-transform:uppercase;color:var(--ink-4)}
   .fgrid .f .fv{font-size:13px;color:var(--ink-2);margin-top:3px;word-break:break-word}
+  .fgrid .f input.fed,.fgrid .f select.fed{width:100%;box-sizing:border-box;border:1px solid transparent;border-bottom:1px solid var(--hair);
+        background:transparent;font-size:13px;color:var(--ink-2);padding:3px 2px;font-family:var(--sans);outline:none;margin-top:3px}
+  .fgrid .f input.fed:hover,.fgrid .f select.fed:hover{border-bottom-color:var(--ink-4)}
+  .fgrid .f input.fed:focus,.fgrid .f select.fed:focus{border:1px solid var(--ink);border-radius:5px;background:#fff}
+  .fgrid .fsave{grid-column:1/-1;display:flex;align-items:center;gap:10px;border-top:none;padding-top:4px}
   .feed{border:1px solid var(--hair);border-radius:var(--radius);max-height:min(50vh,480px);min-height:190px;overflow-y:auto;overscroll-behavior:contain;background:var(--bg)}
   .feed .fitem{padding:12px 16px;border-bottom:1px solid var(--hair-2);font-size:13.5px;line-height:1.55;color:var(--ink)}
   .feed .fitem:nth-child(even){background:var(--hair-2)}
@@ -229,6 +234,10 @@
   .cv-fields select[disabled]{color:var(--ink-4);background:var(--hair-2)}
   .cv-fields textarea{min-height:68px;resize:vertical;line-height:1.5}
   .cv-send-row{display:flex;justify-content:flex-end}
+  .cv-li-status{font-size:11.5px;line-height:1.5}
+  .cv-li-status .li-ok{color:var(--live)}
+  .cv-li-status .li-warn{color:var(--warm)}
+  .cv-li-status textarea{width:100%;box-sizing:border-box;min-height:48px;margin-top:6px;border:1px solid var(--hair);border-radius:6px;padding:8px 10px;font-size:13px;font-family:var(--sans);outline:none}
   #cv-msgs .msg .msg-subj{font-weight:700;font-size:12px;margin-bottom:4px}
   #cv-msgs .msg .reply-ref{font-size:10.5px;opacity:.72;border-left:2px solid currentColor;padding-left:8px;margin-bottom:6px;line-height:1.4}
   #cv-msgs .msg .mmeta{font-size:10px;letter-spacing:.03em;margin-top:5px;opacity:.72}
@@ -608,20 +617,57 @@ async function openContact(id){
     const [c,act]=await Promise.all([get(`contacts/${id}`),get(`contacts/${id}/activity?limit=500`)]);
     $("#m-name").textContent=c.name||c.email||"—";
     $("#m-sub").textContent=[c.title,c.company_name].filter(Boolean).join(" · ");
-    const fields=[
-      ["Email",c.email],["Phone",c.phone],["Company",c.company_name],["Title",c.title],
-      ["LinkedIn",c.linkedin_url],["Source",c.source],
-      ["Marketing stage",nice(c.marketing_stage)],["Opportunity stage (legacy)",nice(c.deal_stage)],
-      ["Lead score",`${c.lead_score||"—"} (${c.lead_score_numeric??0})`],
-      ["Opportunity value",c.deal_value>0?`$${parseFloat(c.deal_value).toLocaleString()}`:"—"],
-      ["Tags",(c.tags||[]).join(", ")],
+    // Editable fields render as inputs; system/derived fields stay read-only
+    // (stages are governed by the pipeline state machine, not free-edited here).
+    const srcOpts=(typeof SOURCES!=="undefined"?SOURCES.slice():["manual"]);
+    if(c.source&&!srcOpts.includes(c.source))srcOpts.unshift(c.source);
+    const scoreOpts=(typeof SCORES!=="undefined"?SCORES.slice():["hot","warm","neutral","cold"]);
+    if(c.lead_score&&!scoreOpts.includes(c.lead_score))scoreOpts.unshift(c.lead_score);
+    const editable=[
+      ["Name","name","text",c.name],
+      ["Email","email","email",c.email],
+      ["Phone","phone","text",c.phone],
+      ["Company","company_name","text",c.company_name],
+      ["Title","title","text",c.title],
+      ["LinkedIn","linkedin_url","text",c.linkedin_url],
+      ["Source","source","select",c.source,srcOpts],
+      ["Lead score","lead_score","select",c.lead_score,scoreOpts],
+      ["Opportunity value ($)","deal_value","number",c.deal_value||0],
+      ["Tags (comma separated)","tags","text",(c.tags||[]).join(", ")],
+      ["Next follow-up","next_follow_up","date",c.next_follow_up?String(c.next_follow_up).slice(0,10):""],
+    ];
+    const readonly=[
+      ["Marketing stage",nice(c.marketing_stage)],
+      ["Score (numeric)",String(c.lead_score_numeric??0)],
       ["UTM source",c.utm_source],["UTM medium",c.utm_medium],["UTM campaign",c.utm_campaign],
       ["Last contacted",c.last_contacted?fmtDate(c.last_contacted):"—"],
-      ["Next follow-up",c.next_follow_up?fmtDate(c.next_follow_up):"—"],
       ["Created",fmtDate(c.created_at)],["Contact ID",c.id],
     ];
-    $("#m-fields").innerHTML=fields.map(([l,v])=>`<div class="f"><div class="fl">${esc(l)}</div>
-      <div class="fv">${esc(v||"—")}</div></div>`).join("");
+    $("#m-fields").innerHTML=
+      editable.map(([l,f,t,v,opts])=>`<div class="f"><div class="fl">${esc(l)}</div>
+        ${t==="select"
+          ?`<select class="fed" data-f="${f}">${opts.map(o=>`<option value="${esc(o)}" ${String(v)===o?"selected":""}>${esc(nice(o))}</option>`).join("")}</select>`
+          :`<input class="fed" data-f="${f}" type="${t}" value="${esc(v==null?"":v)}">`}
+      </div>`).join("")
+      +readonly.map(([l,v])=>`<div class="f"><div class="fl">${esc(l)} 🔒</div><div class="fv">${esc(v||"—")}</div></div>`).join("")
+      +`<div class="f fsave"><button class="btn sm primary" id="m-save">Save changes</button></div>`;
+    $("#m-save").onclick=async()=>{
+      const upd={};
+      document.querySelectorAll("#m-fields .fed").forEach(el=>{
+        const f=el.dataset.f,v=el.value.trim();
+        if(f==="tags"){const arr=v?v.split(/[,;]/).map(s=>s.trim()).filter(Boolean):[];
+          if(JSON.stringify(arr)!==JSON.stringify(c.tags||[]))upd.tags=arr;return;}
+        if(f==="deal_value"){const n=parseFloat(v)||0;
+          if(n!==(parseFloat(c.deal_value)||0))upd.deal_value=n;return;}
+        if(f==="next_follow_up"){const cur=c.next_follow_up?String(c.next_follow_up).slice(0,10):"";
+          if(v!==cur)upd.next_follow_up=v||null;return;}
+        const cur=c[f]==null?"":String(c[f]);
+        if(v!==cur)upd[f]=v;
+      });
+      if(!Object.keys(upd).length)return toast("No changes to save");
+      try{await patch(`contacts/${id}`,upd);toast("Saved");openContact(id);loadContacts&&loadContacts();}
+      catch(e){toast(e.message,true);}
+    };
     renderFeed(act.activity||[]);
   }catch(e){$("#m-name").textContent="Error";$("#m-sub").textContent=e.message;}
 }
@@ -762,11 +808,27 @@ let inboxFilter="open";
 const STATUS_COLORS={open:"#12b76a",closed:"#98a2b3",snoozed:"#f79009",escalated:"#b42318"};
 
 function renderInbox(convs){
-  const rows=(convs||[]).map(c=>{
+  // GHL-style: ONE row per contact. A contact active on several channels shows a
+  // single row with all their channel badges; the newest conversation drives the
+  // row (and its actions), and the drawer's channel tabs switch between threads.
+  const ts=c=>new Date(c.last_message_at||c.created_at).getTime()||0;
+  const byContact=new Map();
+  for(const c of (convs||[])){
+    const k=c.contact_id||c.id;
+    const grp=byContact.get(k);
+    if(!grp)byContact.set(k,{latest:c,channels:[c.channel]});
+    else{
+      if(c.channel&&!grp.channels.includes(c.channel))grp.channels.push(c.channel);
+      if(ts(c)>ts(grp.latest))grp.latest=c;
+    }
+  }
+  const rows=[...byContact.values()]
+    .sort((a,b)=>ts(b.latest)-ts(a.latest))
+    .map(({latest:c,channels})=>{
     const sc=STATUS_COLORS[c.status]||"#98a2b3";
     return `<tr data-conv="${esc(c.id)}" style="cursor:pointer">
       <td><b>${esc(c.contact_name||"—")}</b><br><span class="muted" style="font-size:11px">${esc(c.contact_email||"")}</span></td>
-      <td><span class="ch-badge">${esc(c.channel||"—")}</span></td>
+      <td>${channels.map(ch=>`<span class="ch-badge" style="margin-right:4px">${esc(ch||"—")}</span>`).join("")}</td>
       <td><span class="status-pill" style="background:${sc}20;color:${sc}">${esc(c.status||"—")}</span></td>
       <td>${esc(c.assignee||"—")}</td>
       <td class="muted">${esc(c.intent||"—")}</td>
@@ -806,9 +868,11 @@ $("#inbox-body").addEventListener("click",e=>{
 });
 
 // ── Conversation thread drawer ────────────────────────────────────────────────
-let convCur=null,convContact=null,composerChannel=null,cvBody="",channelSenders=null;
+let convCur=null,convContact=null,composerChannel=null,cvBody="",channelSenders=null,linkedInAccounts=null,linkedInDefaultAcct=null;
 const CV_CHANNELS=["email","whatsapp","sms","linkedin"];
 async function ensureChannelSenders(){ if(!channelSenders){ try{channelSenders=(await get("channel-senders")).senders||{};}catch{channelSenders={};} } }
+async function ensureLinkedInAccounts(force){ if(force)linkedInAccounts=null;
+  if(!linkedInAccounts){ try{const r=await get("linkedin/accounts");linkedInAccounts=r.accounts||[];linkedInDefaultAcct=r.default_account_id||null;}catch{linkedInAccounts=[];} } }
 async function openConversation(id){
   const wrap=$("#conv-wrap");wrap.classList.add("open");
   document.documentElement.classList.add("modal-open");
@@ -842,6 +906,7 @@ async function loadChannelView(contactId, chan, contactLabel){
     renderConvHeader(convCur,contactLabel);renderConvActions(convCur);
     $("#cv-msgs").innerHTML=`<div class="msg bot">No ${esc(chan)} messages yet — send one to start the thread.</div>`;
   }
+  if(chan==="linkedin")await ensureLinkedInAccounts();
   renderComposer();
   if(!conv||conv.status!=="closed")$("#cv-body")&&$("#cv-body").focus();
 }
@@ -934,10 +999,58 @@ function renderComposer(){
       </div>
       <div class="cvf"><label>Message</label><textarea id="cv-body" placeholder="Write your ${esc(chan)} message…">${esc(cvBody)}</textarea></div>`;
   }else{
-    html=`<div class="cvf"><label>Message</label><textarea id="cv-body" placeholder="Write your LinkedIn message…">${esc(cvBody)}</textarea></div>`;
+    // LinkedIn: pick WHICH connected account sends; offer to connect a new one.
+    const accts=linkedInAccounts||[];
+    const selAcct=(linkedInDefaultAcct&&accts.some(a=>a.id===linkedInDefaultAcct))?linkedInDefaultAcct:(accts[0]&&accts[0].id);
+    const fromSel=accts.length
+      ? `<select id="cv-from">${accts.map(a=>`<option value="${esc(a.id)}" ${a.id===selAcct?"selected":""}>${esc(a.name)}</option>`).join("")}<option value="__connect">➕ Connect a new LinkedIn account…</option></select>`
+      : `<select id="cv-from"><option value="__connect">➕ Connect a LinkedIn account…</option></select>`;
+    html=`<div class="cvf"><label>From (LinkedIn account)</label>${fromSel}</div>
+      <div id="cv-li-status" class="cv-li-status"></div>
+      <div class="cvf" id="cv-li-msgwrap"><label>Message</label><textarea id="cv-body" placeholder="Write your LinkedIn message…">${esc(cvBody)}</textarea></div>`;
   }
   $("#cv-fields").innerHTML=html;
+  const sendBtn=$("#cv-send");if(sendBtn)sendBtn.style.display="";
+  if(chan==="linkedin")checkLinkedInState();
 }
+// LinkedIn composer state: existing thread → message; connected (1st degree) →
+// message; not connected → connection-request UI; no account → connect prompt.
+function toggleLiSend(on){const w=$("#cv-li-msgwrap"),s=$("#cv-send");if(w)w.style.display=on?"":"none";if(s)s.style.display=on?"":"none";}
+async function checkLinkedInState(){
+  const st=$("#cv-li-status");if(!st||!convCur)return;
+  const sel=$("#cv-from"),acct=sel?sel.value:null;
+  if(!acct||acct==="__connect"){st.innerHTML=`<span class="li-warn">Connect a LinkedIn account to send.</span>`;toggleLiSend(false);return;}
+  const cmeta=(convCur.metadata&&(typeof convCur.metadata==="string"?JSON.parse(convCur.metadata):convCur.metadata))||{};
+  if(cmeta.unipile_chat_id&&(!cmeta.unipile_account_id||cmeta.unipile_account_id===acct)){
+    st.innerHTML=`<span class="li-ok">✓ Existing thread — replies go into the same chat</span>`;toggleLiSend(true);return;}
+  st.innerHTML=`<span class="muted">checking connection…</span>`;
+  try{
+    const p=await get(`linkedin/profile?contact_id=${convCur.contact_id}&account_id=${encodeURIComponent(acct)}`);
+    if(!p.has_linkedin){st.innerHTML=`<span class="li-warn">This contact has no LinkedIn profile URL — add it on the contact first.</span>`;toggleLiSend(false);return;}
+    if(p.connected){st.innerHTML=`<span class="li-ok">✓ Connected (1st degree) as ${esc(p.name||"")} — you can message directly</span>`;toggleLiSend(true);}
+    else{
+      st.innerHTML=`<div class="li-warn">Not connected (${esc(p.distance||"unknown")}) — send a connection request first:</div>
+        <textarea id="cv-li-note" placeholder="Optional note (max 300 chars)" maxlength="300"></textarea>
+        <button type="button" class="btn sm primary" id="cv-li-invite" style="margin-top:6px">Send connection request</button>`;
+      toggleLiSend(false);
+      $("#cv-li-invite").onclick=async()=>{
+        const btn=$("#cv-li-invite");btn.disabled=true;
+        try{await post("linkedin/invite",{contact_id:convCur.contact_id,account_id:acct,message:($("#cv-li-note")||{value:""}).value.trim()});
+          toast("Connection request sent");st.innerHTML=`<span class="li-ok">✓ Connection request sent — you can message once they accept</span>`;}
+        catch(e){toast(e.message,true);btn.disabled=false;}
+      };
+    }
+  }catch(e){st.innerHTML=`<span class="li-warn">${esc(e.message)}</span>`;toggleLiSend(false);}
+}
+$("#cv-fields").addEventListener("change",async e=>{
+  if(e.target.id!=="cv-from"||composerChannel!=="linkedin")return;
+  if(e.target.value==="__connect"){
+    try{const r=await post("linkedin/connect-link",{});if(r.url){window.open(r.url,"_blank");toast("Finish connecting in the new tab, then come back and reselect");await ensureLinkedInAccounts(true);renderComposer();}}
+    catch(err){toast(err.message,true);}
+    return;
+  }
+  checkLinkedInState();
+});
 $("#cv-chan").addEventListener("click",async e=>{
   const b=e.target.closest("button[data-chan]");if(!b||!convCur)return;
   if(b.dataset.chan===composerChannel)return;
@@ -965,6 +1078,11 @@ $("#cv-composer").addEventListener("submit",async e=>{
     meta.subject=subject;
     if(val("#cv-cc"))meta.cc=val("#cv-cc");
     if(val("#cv-bcc"))meta.bcc=val("#cv-bcc");
+  }
+  if(chan==="linkedin"){
+    const v=val("#cv-from");
+    if(!v||v==="__connect")return toast("Connect / select a LinkedIn account to send",true);
+    meta.from=v; // which connected account sends
   }
   try{
     // No conversation on this channel yet → find-or-create it, then post there.
