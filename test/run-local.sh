@@ -118,3 +118,9 @@ CRM_API_BASE="http://127.0.0.1:${TEST_PORT}" \
 INTERNAL_API_KEY="$KEY" \
 DATABASE_URL="$DATABASE_URL_TEST" \
 node test/unit-cp1-funnel-pipelines.mjs
+
+echo "[test] running CP2 step-scheduler verification (enrollment -> queue -> ack -> stage write-back)"
+CRM_API_BASE="http://127.0.0.1:${TEST_PORT}" \
+INTERNAL_API_KEY="$KEY" \
+DATABASE_URL="$DATABASE_URL_TEST" \
+node test/unit-cp2-step-scheduler.mjs

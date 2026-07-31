@@ -14,6 +14,56 @@ router.use(requireAuth);
 
 const CHANNELS = ['email', 'sms', 'whatsapp', 'ai_call', 'linkedin'];
 
+// CP2 D4b.1 — is the sequence's declared stage_writeback chain actually
+// walkable through the pipeline's transitions, in step_order?
+//
+// Returns null when the chain is fine, or a ready-to-send 400 body when it is
+// not. Validation is incremental (each new step is checked against its nearest
+// declaring neighbour on both sides) because steps are added one call at a
+// time and may arrive out of order — checking both directions means the chain
+// is verified whichever order the builder UI submits them in.
+async function validateStageWritebackChain(companyId, sequenceId, stepOrder, stageWriteback) {
+  const sequence = await seqDb.getSequenceById(sequenceId, companyId);
+  if (!sequence) return null; // addStep's own 404 covers this
+  if (!sequence.pipeline_key) {
+    return { error: 'stage_writeback requires the sequence to be tied to a pipeline_key' };
+  }
+  const cfg = await getPipelineConfig(companyId, sequence.pipeline_key);
+  if (!cfg) return { error: `unknown pipeline_key '${sequence.pipeline_key}' on this sequence` };
+
+  const stageKeys = cfg.stages.map(s => s && s.key);
+  if (!stageKeys.includes(stageWriteback)) {
+    return {
+      error: `stage_writeback '${stageWriteback}' is not a stage of pipeline '${sequence.pipeline_key}'`,
+      allowed_stages: stageKeys,
+    };
+  }
+
+  const transitionsOf = (key) => {
+    const s = cfg.stages.find(st => st && st.key === key);
+    return s && Array.isArray(s.transitions) ? s.transitions : [];
+  };
+
+  const steps = await seqDb.listSteps(sequenceId, companyId);
+  const declaring = steps.filter(s => s.stage_writeback && s.step_order !== stepOrder);
+  const prev = declaring.filter(s => s.step_order < stepOrder).pop();
+  const next = declaring.find(s => s.step_order > stepOrder);
+
+  if (prev && prev.stage_writeback !== stageWriteback && !transitionsOf(prev.stage_writeback).includes(stageWriteback)) {
+    return {
+      error: `stage_writeback chain is not walkable: step ${prev.step_order} writes back '${prev.stage_writeback}', which cannot transition to '${stageWriteback}'`,
+      from: prev.stage_writeback, to: stageWriteback, allowed: transitionsOf(prev.stage_writeback),
+    };
+  }
+  if (next && next.stage_writeback !== stageWriteback && !transitionsOf(stageWriteback).includes(next.stage_writeback)) {
+    return {
+      error: `stage_writeback chain is not walkable: '${stageWriteback}' cannot transition to '${next.stage_writeback}' declared by step ${next.step_order}`,
+      from: stageWriteback, to: next.stage_writeback, allowed: transitionsOf(stageWriteback),
+    };
+  }
+  return null;
+}
+
 // GET /api/crm/sequences?status=&pipeline_key=
 router.get('/', async (req, res) => {
   try {
@@ -99,7 +149,14 @@ router.patch('/:id', async (req, res) => {
     }
     const updated = await seqDb.updateSequenceStatus(req.params.id, companyId, status);
     if (!updated) return res.status(404).json({ error: 'sequence not found' });
-    res.json(updated);
+    // CP2: re-activating must actually resume. While a sequence is paused, an
+    // ack advances the enrollment but queues nothing (D5b) — so without this
+    // backfill any enrollment whose ack landed inside the pause window would
+    // stay active with an empty queue forever, and "pause" would be a
+    // one-way door rather than a pause.
+    let requeued = [];
+    if (status === 'active') requeued = await seqDb.resumeSequenceQueue(companyId, req.params.id);
+    res.json({ ...updated, ...(requeued.length ? { requeued_actions: requeued.length } : {}) });
   } catch (err) {
     console.error('[CRM] PATCH /sequences/:id error:', err.message);
     res.status(500).json({ error: 'failed to update sequence' });
@@ -111,7 +168,7 @@ router.post('/:id/steps', async (req, res) => {
   try {
     const companyId = getUserCompanyId(req);
     if (!companyId) return res.status(401).json({ error: 'Authentication required' });
-    const { step_order, channel, delay_seconds, template_ref, entry_conditions, exit_conditions } = req.body || {};
+    const { step_order, channel, delay_seconds, template_ref, entry_conditions, exit_conditions, stage_writeback } = req.body || {};
     if (!Number.isInteger(step_order) || step_order < 1) {
       return res.status(400).json({ error: 'step_order must be a positive integer' });
     }
@@ -125,11 +182,27 @@ router.post('/:id/steps', async (req, res) => {
       }
     }
 
+    // CP2 D4b.1 — validate the declared stage_writeback CHAIN at configuration
+    // time. webinar_sales' follow-up transitions are strictly linear, so a
+    // chain that cannot walk the pipeline is not a cosmetic mistake: the first
+    // write-back that can't apply is refused, which leaves the deal stale, which
+    // makes every later write-back illegal too — messages keep sending while
+    // the board lies, for up to 13 days. Catching it here turns a silent
+    // 13-day drift into a 400 at the moment the sequence is configured.
+    if (stage_writeback !== undefined && stage_writeback !== null) {
+      if (typeof stage_writeback !== 'string' || !stage_writeback.trim()) {
+        return res.status(400).json({ error: 'stage_writeback must be a non-empty string' });
+      }
+      const invalid = await validateStageWritebackChain(companyId, req.params.id, step_order, stage_writeback);
+      if (invalid) return res.status(400).json(invalid);
+    }
+
     let step;
     try {
       step = await seqDb.addStep(req.params.id, companyId, {
         stepOrder: step_order, channel, delaySeconds: delay_seconds || 0,
         templateRef: template_ref || null, entryConditions: entry_conditions || {}, exitConditions: exit_conditions || {},
+        stageWriteback: stage_writeback === undefined ? null : stage_writeback,
       });
     } catch (dbErr) {
       // sequence_steps has UNIQUE(sequence_id, step_order) with no
@@ -164,6 +237,30 @@ router.get('/:id/enrollments', async (req, res) => {
   } catch (err) {
     console.error('[CRM] GET /sequences/:id/enrollments error:', err.message);
     res.status(500).json({ error: 'failed to load enrollments' });
+  }
+});
+
+// GET /api/crm/sequences/:id/queue — CP2's proof surface: who is enrolled, at
+// which step, and what is actually queued for them.
+//
+// A NEW endpoint rather than an extension of /enrollments: that one returns
+// bare enrollment rows and is already consumed, and this one joins contacts
+// and scheduled_actions for a read-only view. It also closes CP1 follow-up F3
+// (the detail pane could show a COUNT of enrollments but never WHO).
+// Tenant-scoped through getSequenceById, so another tenant's sequence id is a
+// 404, not a leak.
+router.get('/:id/queue', async (req, res) => {
+  try {
+    const companyId = getUserCompanyId(req);
+    if (!companyId) return res.status(401).json({ error: 'Authentication required' });
+    const sequence = await seqDb.getSequenceById(req.params.id, companyId);
+    if (!sequence) return res.status(404).json({ error: 'sequence not found' });
+
+    const enrollments = await seqDb.listEnrollmentsWithQueue(companyId, req.params.id);
+    res.json({ total: enrollments.length, sequence_status: sequence.status, enrollments });
+  } catch (err) {
+    console.error('[CRM] GET /sequences/:id/queue error:', err.message);
+    res.status(500).json({ error: 'failed to load sequence queue' });
   }
 });
 

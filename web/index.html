@@ -1177,18 +1177,53 @@ async function renderSeqEditor(){
     </div>
     <div class="eyebrow" style="margin-bottom:10px">Steps — fire in order after enrollment</div>
     <div id="seq-step-rows"></div>
-    <button class="btn sm" id="add-seq-step" style="margin-top:6px">+ Add step</button>`;
+    <button class="btn sm" id="add-seq-step" style="margin-top:6px">+ Add step</button>
+    <div class="eyebrow" style="margin:22px 0 10px">Enrollments &amp; queue</div>
+    <div id="seq-queue"><div class="muted" style="font-size:13px">Loading…</div></div>`;
   $("#seq-step-rows").innerHTML=(s.steps||[]).length
     ?s.steps.map(st=>`<div class="stage-row" style="cursor:default">
         <span class="tag">#${st.step_order}</span>
         <span style="flex:1">${esc(st.channel)}${st.template_ref?` · <code>${esc(st.template_ref)}</code>`:""}</span>
+        ${st.stage_writeback?`<span class="tag" title="Reporting stage this step mirrors onto the pipeline when it sends">→ ${esc(nice(st.stage_writeback))}</span>`:""}
         <span class="muted" style="font-size:12px">${st.delay_seconds?`+${Math.round(st.delay_seconds/3600)}h`:"immediately"}</span>
       </div>`).join("")
     :`<div class="muted" style="font-size:13px">No steps yet — add the first one.</div>`;
+  renderSeqQueue(s.id);
   $("#seq-editor").querySelectorAll("[data-seq-status]").forEach(b=>b.onclick=async()=>{
     try{await patch(`sequences/${s.id}`,{status:b.dataset.seqStatus});toast("Sequence updated");loadSequencesTab();}
     catch(e){toast(e.message,true);}});
   $("#add-seq-step").onclick=()=>openAddStepModal(s);
+}
+// CP2 — read-only "who is enrolled and what is actually queued for them".
+// Closes CP1 follow-up F3: the pane could show a COUNT but never WHO.
+// Absolute timestamps, deliberately, not "in 3 days" — the whole point is to
+// let a tester read the +0/+3d/+6d/+9d/+16d ladder off the screen.
+const SEQ_JOB_COLOR={pending:"#667085",claimed:"#f79009",sent:"#12b76a",skipped:"#98a2b3",failed:"#f04438"};
+const SEQ_ENR_COLOR={active:"#12b76a",completed:"#667085",exited:"#f04438",paused:"#f79009"};
+async function renderSeqQueue(seqId){
+  const host=$("#seq-queue");if(!host)return;
+  let r;try{r=await get(`sequences/${seqId}/queue`);}
+  catch(e){host.innerHTML=`<div class="muted" style="font-size:13px">${esc(e.message)}</div>`;return;}
+  if(!(r.enrollments||[]).length){host.innerHTML=`<div class="muted" style="font-size:13px">Nobody is enrolled yet.</div>`;return;}
+  host.innerHTML=r.enrollments.map(en=>{
+    const ec=SEQ_ENR_COLOR[en.status]||"#98a2b3";
+    const rows=(en.actions||[]).map(a=>{
+      const jc=SEQ_JOB_COLOR[a.status]||"#667085";
+      const when=a.status==="sent"&&a.sent_at?`sent ${esc(new Date(a.sent_at).toLocaleString())}`
+        :`scheduled ${esc(new Date(a.scheduled_for).toLocaleString())}`;
+      return `<div class="stage-row" style="cursor:default;padding-left:14px">
+        <span class="tag">#${esc(String(a.step_order))}</span>
+        <span style="flex:1">${esc(a.channel)}${a.stage_writeback?` · → ${esc(nice(a.stage_writeback))}`:""}</span>
+        <span class="muted" style="font-size:12px">${when}</span>
+        <span class="tag" style="background:${jc}22;color:${jc};border-color:${jc}55">${esc(a.status)}</span>
+      </div>`;}).join("")
+      ||`<div class="muted" style="font-size:12px;padding-left:14px">Nothing queued.</div>`;
+    return `<div style="margin-bottom:14px">
+      <div class="stage-row" style="cursor:default">
+        <span style="flex:1"><b>${esc(en.contact_name||en.contact_email||"(unnamed)")}</b>
+          <span class="muted" style="font-size:12px">· step ${esc(String(en.current_step_order??"—"))}</span></span>
+        <span class="tag" style="background:${ec}22;color:${ec};border-color:${ec}55">${esc(en.status)}${en.exit_reason?` · ${esc(en.exit_reason)}`:""}</span>
+      </div>${rows}</div>`;}).join("");
 }
 function openAddStepModal(s){
   const nextOrder=Math.max(0,...(s.steps||[]).map(st=>st.step_order))+1;
@@ -1196,10 +1231,12 @@ function openAddStepModal(s){
     field("Order","step_order",{value:nextOrder})+
     field("Channel","channel",{type:"select",options:SEQ_CHANNELS.map(c=>({value:c,label:nice(c)}))})+
     field("Delay after previous step (hours)","delay_hours",{value:0})+
-    field("Template ref","template_ref",{placeholder:"e.g. welcome_email_v1"}),
+    field("Template ref","template_ref",{placeholder:"e.g. welcome_email_v1"})+
+    field("Stage write-back (optional)","stage_writeback",{placeholder:"e.g. no_show_followup_2"}),
     `<button class="btn" onclick="closeModal()">Cancel</button><button class="btn primary" id="save-seq-step">Add step</button>`);
   $("#save-seq-step").onclick=async()=>{const v=formValues();
     const body={step_order:parseInt(v.step_order,10)||nextOrder,channel:v.channel,delay_seconds:Math.round((parseFloat(v.delay_hours)||0)*3600),template_ref:v.template_ref||null};
+    if(v.stage_writeback&&v.stage_writeback.trim())body.stage_writeback=v.stage_writeback.trim();
     try{await post(`sequences/${s.id}/steps`,body);closeModal();toast("Step added");loadSequencesTab();}
     catch(e){toast(e.message,true);}};
 }

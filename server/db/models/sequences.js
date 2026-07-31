@@ -10,7 +10,7 @@
 // enrollForTriggerStage is B2's hook point (called from crm.js's /advance and
 // legacy PATCH stage-change routes); B3 (dispatcher) and B7 (builder UI)
 // still build on top of this file. No HTTP routes of its own.
-const { query } = require('../index');
+const { query, getClient } = require('../index');
 const contactDb = require('./contacts');
 
 // ─── sequences ─────────────────────────────────────────────────────────────
@@ -80,8 +80,56 @@ async function enrollForTriggerStage(companyId, contactId, pipelineKey, stage) {
     console.error(
       `[CRM][sequence-enrollment-failure] company=${companyId} pipeline=${pipelineKey} stage=${stage}: ${err.message}`
     );
+    // CP2 D10: a swallowed error used to be invisible to everyone but the
+    // server log, and D1 widened the failure surface from "enrollment" to
+    // "enrollment AND its first queued step" — so a dropped ladder now also
+    // means no messages will ever send. Record it on the contact's timeline
+    // where a human actually looks. Best-effort by construction: this is the
+    // failure path already, so it must not be able to throw either.
+    try {
+      await contactDb.addActivity(contactId, {
+        type: 'sequence_enrollment_failed',
+        message: `Sequence enrollment failed for ${pipelineKey}/${stage} — no messages were scheduled`,
+        data: { pipeline_key: pipelineKey, stage, error: err.message },
+      }, companyId);
+    } catch (activityErr) {
+      console.error(`[CRM][sequence-enrollment-failure] could not record activity: ${activityErr.message}`);
+    }
     return [];
   }
+}
+
+// CP2 — re-materialize the queue for a sequence coming back from paused/archived.
+//
+// D5b says a non-active sequence enqueues nothing. Without this, that skip is
+// PERMANENT: if a step is acked while the sequence is paused, the enrollment
+// advances its current_step_id but no row is ever queued for the new step, and
+// nothing re-drives it — so "re-activating resumes" would be false for every
+// enrollment whose ack landed inside the pause window, and the ladder would be
+// silently dead forever.
+//
+// The backfill is deliberately narrow: only ACTIVE enrollments, only where the
+// current step has no scheduled_action at all. Re-timing is anchored on the
+// resume (now + the step's own delay), never on the original pause, so a long
+// pause can never dump a backlog of instantly-due sends on a contact.
+async function resumeSequenceQueue(companyId, sequenceId) {
+  if (!companyId) throw new Error('sequences.resumeSequenceQueue requires companyId');
+  const stranded = await query(
+    `SELECT e.id FROM enrollments e
+      WHERE e.sequence_id = $1 AND e.company_id = $2
+        AND e.status = 'active' AND e.current_step_id IS NOT NULL
+        AND NOT EXISTS (
+          SELECT 1 FROM scheduled_actions sa
+           WHERE sa.enrollment_id = e.id AND sa.step_id = e.current_step_id
+        )`,
+    [sequenceId, companyId]
+  );
+  const requeued = [];
+  for (const row of stranded.rows) {
+    const action = await materializeNextStep(companyId, row.id, { after: new Date() });
+    if (action) requeued.push(action.id);
+  }
+  return requeued;
 }
 
 async function updateSequenceStatus(id, companyId, status) {
@@ -100,14 +148,17 @@ async function updateSequenceStatus(id, companyId, status) {
 // and a future direct query against this table that forgets to join through
 // sequences would otherwise have no defense-in-depth layer at all.
 
-async function addStep(sequenceId, companyId, { stepOrder, channel, delaySeconds = 0, templateRef = null, entryConditions = {}, exitConditions = {} }) {
+async function addStep(sequenceId, companyId, { stepOrder, channel, delaySeconds = 0, templateRef = null, entryConditions = {}, exitConditions = {}, stageWriteback = null }) {
   if (!companyId) throw new Error('sequences.addStep requires companyId');
   const owned = await getSequenceById(sequenceId, companyId);
   if (!owned) return null;
+  // stage_writeback (CP2 D4, migration 019) is the reporting stage this step
+  // mirrors onto the pipeline when it is acked 'sent'. NULL — the default and
+  // every pre-CP2 step — means "write nothing back".
   const result = await query(
-    `INSERT INTO sequence_steps (company_id, sequence_id, step_order, channel, delay_seconds, template_ref, entry_conditions, exit_conditions)
-     VALUES ($1,$2,$3,$4,$5,$6,$7,$8) RETURNING *`,
-    [companyId, sequenceId, stepOrder, channel, delaySeconds, templateRef, JSON.stringify(entryConditions), JSON.stringify(exitConditions)]
+    `INSERT INTO sequence_steps (company_id, sequence_id, step_order, channel, delay_seconds, template_ref, entry_conditions, exit_conditions, stage_writeback)
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9) RETURNING *`,
+    [companyId, sequenceId, stepOrder, channel, delaySeconds, templateRef, JSON.stringify(entryConditions), JSON.stringify(exitConditions), stageWriteback]
   );
   return result.rows[0];
 }
@@ -161,23 +212,50 @@ async function enroll(companyId, { sequenceId, contactId }) {
   );
   if (existing.rows[0]) return existing.rows[0];
 
-  const firstStep = await query(
-    'SELECT id FROM sequence_steps WHERE sequence_id = $1 ORDER BY step_order ASC LIMIT 1',
-    [sequenceId]
-  );
-
+  // CP2 D1: the enrollment row and its first scheduled_action are written in
+  // ONE transaction. Before CP2 the insert stood alone and nothing ever
+  // queued — an enrollment was a dead record. Doing it atomically is what
+  // makes "an enrollment always has its first queued action" an invariant
+  // rather than a hope: a crash between the two writes can no longer leave a
+  // contact enrolled in a ladder that will never fire.
+  const client = await getClient();
   try {
-    const result = await query(
-      `INSERT INTO enrollments (company_id, sequence_id, contact_id, current_step_id)
-       VALUES ($1,$2,$3,$4) RETURNING *`,
-      [companyId, sequenceId, contactId, firstStep.rows[0]?.id || null]
+    await client.query('BEGIN');
+    const firstStep = await client.query(
+      'SELECT id FROM sequence_steps WHERE sequence_id = $1 AND company_id = $2 ORDER BY step_order ASC LIMIT 1',
+      [sequenceId, companyId]
     );
-    return result.rows[0];
+    const stepId = firstStep.rows[0]?.id || null;
+
+    // CP2 D1b: a sequence with NO steps completes on the spot. Leaving it
+    // 'active' would strand the contact forever — sequences are created
+    // 'active' and steps are added by a separate call, so a trigger firing in
+    // that window enrolls into a stepless sequence; the partial unique index
+    // then blocks re-enrolment while that row stays active, and no route
+    // exists to update an enrollment back out of it.
+    const result = await client.query(
+      `INSERT INTO enrollments (company_id, sequence_id, contact_id, current_step_id, status, completed_at)
+       VALUES ($1,$2,$3,$4,$5, CASE WHEN $5 = 'completed' THEN now() ELSE NULL END) RETURNING *`,
+      [companyId, sequenceId, contactId, stepId, stepId ? 'active' : 'completed']
+    );
+    const enrollment = result.rows[0];
+
+    if (stepId) {
+      // Anchored on the enrollment's own enrolled_at (D2: step 1 fires at
+      // enrolled_at + delay_seconds), not on wall-clock now().
+      await materializeNextStep(companyId, enrollment.id, { client, after: enrollment.enrolled_at });
+    }
+
+    await client.query('COMMIT');
+    return enrollment;
   } catch (err) {
+    await client.query('ROLLBACK');
     // Two concurrent enroll() calls for the same (sequence, contact) both
     // pass the SELECT above (classic TOCTOU under READ COMMITTED) — the
     // partial unique index rejects the loser with 23505. Re-select and
     // return the winner rather than surfacing a raw constraint violation.
+    // The loser's whole transaction (enrollment AND its queued step 1) rolls
+    // back together, so the winner's single step-1 row is the only one left.
     if (err.code === '23505') {
       const winner = await query(
         `SELECT * FROM enrollments WHERE sequence_id = $1 AND contact_id = $2 AND company_id = $3 AND status = 'active'`,
@@ -186,7 +264,54 @@ async function enroll(companyId, { sequenceId, contactId }) {
       if (winner.rows[0]) return winner.rows[0];
     }
     throw err;
+  } finally {
+    client.release();
   }
+}
+
+// CP2 D1/D2 — materialize the enrollment's CURRENT step as a scheduled_actions
+// row (the dispatcher's queue). This is the single seam that was missing
+// before CP2: scheduleAction() existed but no server code ever called it.
+//
+// `after` is the anchor the step's delay is measured FROM — enrolled_at for
+// step 1, the ack time for every later step (D2: delays are relative to the
+// predecessor's fire time, never cumulative from enrollment).
+// `client` threads an open transaction through so the caller can make this
+// atomic with whatever else it is writing.
+//
+// ON CONFLICT DO NOTHING against migration 019's UNIQUE (enrollment_id,
+// step_id) is the idempotency backstop (D8): a replayed ack can never queue
+// the same step twice. A conflict returns null, which callers treat as
+// "already queued", not as a failure.
+async function materializeNextStep(companyId, enrollmentId, { client = null, after = new Date() } = {}) {
+  if (!companyId) throw new Error('sequences.materializeNextStep requires companyId');
+  const run = (text, params) => (client ? client.query(text, params) : query(text, params));
+
+  const enr = await run('SELECT * FROM enrollments WHERE id = $1 AND company_id = $2', [enrollmentId, companyId]);
+  const enrollment = enr.rows[0];
+  // Only an ACTIVE enrollment queues work — a completed/exited/paused one is
+  // done and must not be resurrected by a late side-effect.
+  if (!enrollment || enrollment.status !== 'active' || !enrollment.current_step_id) return null;
+
+  const st = await run(
+    'SELECT * FROM sequence_steps WHERE id = $1 AND sequence_id = $2 AND company_id = $3',
+    [enrollment.current_step_id, enrollment.sequence_id, companyId]
+  );
+  const step = st.rows[0];
+  if (!step) return null;
+
+  // channel/template_ref/contact_id are derived from the enrollment+step, never
+  // from a caller — the same property scheduleAction() established and which
+  // stops a caller scheduling a job whose channel lies about the step's own.
+  const inserted = await run(
+    `INSERT INTO scheduled_actions (company_id, enrollment_id, step_id, contact_id, channel, template_ref, payload, scheduled_for)
+     VALUES ($1,$2,$3,$4,$5,$6,'{}'::jsonb, $7::timestamptz + ($8 || ' seconds')::interval)
+     ON CONFLICT (enrollment_id, step_id) DO NOTHING
+     RETURNING *`,
+    [companyId, enrollment.id, step.id, enrollment.contact_id, step.channel, step.template_ref,
+     after instanceof Date ? after.toISOString() : after, String(step.delay_seconds)]
+  );
+  return inserted.rows[0] || null;
 }
 
 async function getEnrollment(id, companyId) {
@@ -207,6 +332,41 @@ async function listEnrollments(companyId, { sequenceId, contactId, status } = {}
     params
   );
   return result.rows;
+}
+
+// CP2 — one enrollment per row with the contact's name, its current step
+// number, and every queued/sent action, for the sequence detail's
+// "Enrollments & queue" block. Two queries, not one-per-enrollment: the same
+// pool-budget reasoning as listStepsForSequences.
+async function listEnrollmentsWithQueue(companyId, sequenceId) {
+  if (!companyId) throw new Error('sequences.listEnrollmentsWithQueue requires companyId');
+  const enrollments = await query(
+    `SELECT e.id, e.status, e.exit_reason, e.enrolled_at, e.completed_at, e.contact_id,
+            c.name AS contact_name, c.email AS contact_email,
+            cs.step_order AS current_step_order
+       FROM enrollments e
+       JOIN contacts c ON c.id = e.contact_id AND c.company_id = e.company_id
+       LEFT JOIN sequence_steps cs ON cs.id = e.current_step_id
+      WHERE e.sequence_id = $1 AND e.company_id = $2
+      ORDER BY e.enrolled_at DESC`,
+    [sequenceId, companyId]
+  );
+  if (!enrollments.rows.length) return [];
+
+  const actions = await query(
+    `SELECT sa.id, sa.enrollment_id, sa.channel, sa.status, sa.scheduled_for, sa.sent_at,
+            sa.template_ref, sa.attempt, ss.step_order, ss.stage_writeback
+       FROM scheduled_actions sa
+       JOIN sequence_steps ss ON ss.id = sa.step_id
+      WHERE sa.enrollment_id = ANY($1::uuid[]) AND sa.company_id = $2
+      ORDER BY ss.step_order ASC`,
+    [enrollments.rows.map(e => e.id), companyId]
+  );
+  const byEnrollment = actions.rows.reduce((acc, a) => {
+    (acc[a.enrollment_id] = acc[a.enrollment_id] || []).push(a);
+    return acc;
+  }, {});
+  return enrollments.rows.map(e => ({ ...e, actions: byEnrollment[e.id] || [] }));
 }
 
 async function updateEnrollment(id, companyId, { status, currentStepId, exitReason } = {}) {
@@ -261,9 +421,20 @@ async function scheduleAction(companyId, { enrollmentId, stepId, payload = {}, s
   );
   if (!step.rows[0]) return null;
 
+  // CP2/migration 019 added UNIQUE (enrollment_id, step_id), and enroll() now
+  // materializes step 1 itself — so "schedule this step for this enrollment"
+  // is naturally an UPSERT rather than a blind INSERT. Re-scheduling an
+  // already-queued step re-times it instead of raising 23505 or creating the
+  // duplicate the constraint exists to forbid. `status` is deliberately NOT
+  // reset: re-timing a row must never resurrect one that already sent.
   const result = await query(
     `INSERT INTO scheduled_actions (company_id, enrollment_id, step_id, contact_id, channel, template_ref, payload, scheduled_for)
-     VALUES ($1,$2,$3,$4,$5,$6,$7,$8) RETURNING *`,
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8)
+     ON CONFLICT (enrollment_id, step_id) DO UPDATE
+       SET scheduled_for = EXCLUDED.scheduled_for,
+           payload = EXCLUDED.payload,
+           updated_at = now()
+     RETURNING *`,
     [companyId, enrollmentId, stepId, enrollment.contact_id, step.rows[0].channel, step.rows[0].template_ref, JSON.stringify(payload), scheduledFor]
   );
   return result.rows[0];
@@ -284,9 +455,9 @@ async function listScheduledActions(companyId, { enrollmentId, status, channel }
 }
 
 module.exports = {
-  createSequence, getSequenceById, listSequences, updateSequenceStatus,
+  createSequence, getSequenceById, listSequences, updateSequenceStatus, resumeSequenceQueue,
   addStep, listSteps, listStepsForSequences,
-  enroll, getEnrollment, listEnrollments, updateEnrollment,
-  scheduleAction, listScheduledActions,
+  enroll, getEnrollment, listEnrollments, listEnrollmentsWithQueue, updateEnrollment,
+  scheduleAction, listScheduledActions, materializeNextStep,
   enrollForTriggerStage,
 };
