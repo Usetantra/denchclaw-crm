@@ -48,9 +48,9 @@ backups, cron jobs, and superuser slots.
 | `DB_POOL_MAX` | `10` | pg pool cap — see connection budget above. |
 | `DB_RETRY_BASE_MS` / `DB_RETRY_CAP_MS` | `1000` / `30000` | Startup probe backoff tuning. |
 | `INTERNAL_API_KEY` | ephemeral dev key | Single shared key (bound to `*`). |
-| `INTERNAL_API_KEYS` | unset | JSON key→company binding, e.g. `{"k1":["co_a"],"k2":"*"}`. |
-| `INTERNAL_API_ALLOWED_CIDRS` | `127.0.0.1/32,::1/128` | Caller IP gate. |
-| `DEFAULT_COMPANY_ID` | `growthclub` | Company when `X-Company-Id` absent. |
+| `INTERNAL_API_KEYS` | unset | JSON key→company binding, e.g. `{"k1":["co_a"],"k2":"*"}`. **Set this for any multi-tenant deploy** — unset binds the single key to `*` (any `X-Company-Id` accepted); the server logs a startup warning under `NODE_ENV=production`. DB-backed per-tenant keys are roadmap A3. |
+| `INTERNAL_API_ALLOWED_CIDRS` | `127.0.0.1/32,::1/128` | Caller IP gate — real IPv4/IPv6 CIDR matching; loopback always allowed. |
+| `DEFAULT_COMPANY_ID` | `tantra` | Company when `X-Company-Id` absent (legacy `growthclub`/`dev_company` fold to it). |
 | `CLOUDFLARE_ACCOUNT_ID` / `CLOUDFLARE_AI_TOKEN` / `CLOUDFLARE_CHAT_MODEL` | — | `/api/crm/chat` assistant. |
 
 ## Tests

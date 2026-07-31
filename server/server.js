@@ -40,6 +40,13 @@ const tenantsRouter = require('./routes/tenants');
 const channelJobsRouter = require('./routes/channel-jobs');
 const sequencesRouter = require('./routes/sequences');
 const apiKeysRouter = require('./routes/api-keys');
+const webhooksRouter = require('./routes/webhooks');
+
+// CP-M union: this block conflicted because main added the /webhooks mount
+// exactly where the branch added its four /api/crm routers. Selecting either
+// side would have unmounted a whole feature with no test failure — inbound
+// email, or all of A3/B1/B3/B7 at once. Both survive.
+app.use('/webhooks', webhooksRouter); // provider → CRM (no internal key; secret-checked)
 app.use('/api/crm/chat', chatRouter);
 app.use('/api/crm/companies', companiesRouter);
 app.use('/api/crm/pipelines', pipelinesRouter);

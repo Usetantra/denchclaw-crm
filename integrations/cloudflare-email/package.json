@@ -1,0 +1,14 @@
+{
+  "name": "denchclaw-crm-inbound",
+  "private": true,
+  "type": "module",
+  "dependencies": {
+    "postal-mime": "^2.2.5"
+  },
+  "devDependencies": {
+    "wrangler": "^3.80.0"
+  },
+  "scripts": {
+    "deploy": "wrangler deploy"
+  }
+}

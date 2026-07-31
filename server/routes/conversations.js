@@ -6,8 +6,26 @@ const { v4: uuidv4 } = require('uuid');
 const { query } = require('../db/index');
 const { requireAuth, getUserCompanyId } = require('../middleware/auth');
 const contactDb = require('../db/models/contacts');
+// CP-M union (D4): both sides added imports here. The branch needs sequenceDb +
+// isManualStage for the inbound-reply auto-advance (the CP1 mode gate and B2's
+// enrollment hook); main needs scoring + Resend for the inbox composer and the
+// inbox-fed lead score. All of it survives.
 const sequenceDb = require('../db/models/sequences');
 const { getPipelineConfig, getPipelineTransitions, isManualStage } = require('../db/pipeline');
+const { recordEngagement } = require('../lib/scoring');
+const resendEmail = require('../lib/email-resend');
+// CP-M D11: A5's suppression list, needed by the composer's deliver path below.
+const limitsDb = require('../db/models/limits');
+
+// Inbound reply → engagement event (per channel), so the Unified AI Inbox feeds
+// the same lead score the activity feed does. Channels with no scoring reply
+// event fall back to a generic 'message_replied' (weight 0 — logged, not scored).
+const REPLY_EVENT_BY_CHANNEL = {
+  email: 'email_replied',
+  whatsapp: 'whatsapp_replied',
+  sms: 'sms_replied',
+  linkedin: 'linkedin_message_replied',
+};
 
 router.use(requireAuth);
 
@@ -136,7 +154,7 @@ router.post('/conversations/:id/messages', async (req, res) => {
     if (!companyId) return res.status(401).json({ error: 'Authentication required' });
 
     const { direction, channel, body, ai_generated = false, intent,
-            provider_message_id, metadata = {} } = req.body;
+            provider_message_id, metadata = {}, deliver = false } = req.body;
     if (!direction || !channel) return res.status(400).json({ error: 'direction and channel required' });
     if (!['inbound', 'outbound'].includes(direction)) return res.status(400).json({ error: 'direction must be inbound or outbound' });
 
@@ -147,11 +165,85 @@ router.post('/conversations/:id/messages', async (req, res) => {
     const conv = convRes.rows[0];
     if (!conv) return res.status(404).json({ error: 'conversation not found' });
 
+    // Real delivery via the channel's provider adapter (currently email → Resend).
+    // Only fires for an outbound email when the composer asks to deliver AND a
+    // provider is configured; otherwise the message is just recorded (demo mode).
+    // CP-M D11 — the merge itself opened this hole, so the merge closes it.
+    // Main's composer delivers mail directly and consulted `suppressions` not at
+    // all; the branch enforced A5 only in the dispatcher's claim path and at
+    // pipeline entry. Unioned, a human could hit "send" and mail a contact who
+    // has withdrawn consent — a compliance hole, not a style issue, and one no
+    // existing test would catch (A5's tests only exercise branch paths).
+    //
+    // Same function and semantics the dispatcher uses (dispatch.js's claim
+    // scan): it matches a GLOBAL suppression (channel IS NULL) or one for THIS
+    // channel. Gated on the request's intent to deliver rather than on whether a
+    // provider happens to be configured, so the answer can't silently change
+    // with deployment config. A `deliver:false` call still records normally —
+    // only actually sending is refused.
+    //
+    // The check is ADDRESS-keyed, not just conversation-keyed. Suppression lives
+    // on a contact, but the address this route delivers to is caller-supplied
+    // (`metadata.to`, and cc/bcc) and defaults to the conversation's contact only
+    // when omitted. Checking `conv.contact_id` alone left the hole open: post a
+    // message on an UNSUPPRESSED contact's conversation with a SUPPRESSED
+    // contact's address in `metadata.to`, and the mail goes out. So every
+    // address this request would actually deliver to is mapped back to a contact
+    // in this tenant and checked too. An address belonging to no contact cannot
+    // be suppressed (suppressions are contact-keyed), so it passes.
+    if (deliver && direction === 'outbound') {
+      const suspects = new Map([[conv.contact_id, 'conversation contact']]);
+      if (channel === 'email') {
+        const addrs = [metadata.to, metadata.cc, metadata.bcc]
+          .flatMap(v => (Array.isArray(v) ? v : (v ? [v] : [])));
+        for (const raw of addrs) {
+          const m = String(raw || '').match(/<([^>]+)>/);
+          const addr = (m ? m[1] : String(raw || '')).trim().toLowerCase();
+          if (!addr) continue;
+          const target = await contactDb.getByEmail(addr, companyId);
+          if (target && !suspects.has(target.id)) suspects.set(target.id, `recipient ${addr}`);
+        }
+      }
+      for (const [suspectId, why] of suspects) {
+        if (await limitsDb.isSuppressed(companyId, suspectId, channel)) {
+          console.warn(`[Conversations] composer delivery refused — ${why} (${suspectId}) is suppressed on '${channel}'`);
+          return res.status(403).json({
+            error: 'contact is suppressed on this channel — delivery refused',
+            contact_id: suspectId,
+            channel,
+          });
+        }
+      }
+    }
+
+    let deliveredId = null;
+    if (deliver && direction === 'outbound' && channel === 'email' && resendEmail.isConfigured()) {
+      let toAddr = metadata.to;
+      if (!toAddr) { const ct = await contactDb.getById(conv.contact_id, companyId); toAddr = ct && ct.email; }
+      try {
+        const sent = await resendEmail.sendEmail({
+          from: metadata.from, to: toAddr, cc: metadata.cc, bcc: metadata.bcc,
+          subject: metadata.subject, text: body,
+          replyTo: metadata.reply_to || process.env.INBOUND_REPLY_TO || undefined,
+        });
+        deliveredId = sent.id;
+        // Persist the email Message-ID so an inbound reply's In-Reply-To can be
+        // matched back to this message ("in reply to …" in the thread).
+        if (sent.messageId) metadata.message_id = sent.messageId;
+      } catch (e) {
+        console.error('[Conversations] email delivery failed:', e.message);
+        return res.status(502).json({ error: `Email delivery failed — ${e.message}` });
+      }
+    }
+    const effectiveProviderId = deliveredId || provider_message_id;
+
     let message;
-    if (provider_message_id) {
+    let isNewMessage;
+    if (effectiveProviderId) {
       // Idempotent upsert: a webhook delivered twice yields one message row.
       // DO UPDATE SET provider_message_id = EXCLUDED.provider_message_id is a no-op write
-      // that makes RETURNING * return the existing row.
+      // that makes RETURNING * return the existing row. (xmax = 0) distinguishes a
+      // fresh insert from a conflict-hit so retries don't re-advance / re-score.
       const msgRes = await query(
         `INSERT INTO messages
            (conversation_id, company_id, direction, channel, body, ai_generated, intent,
@@ -159,11 +251,13 @@ router.post('/conversations/:id/messages', async (req, res) => {
          VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)
          ON CONFLICT (company_id, provider_message_id) WHERE provider_message_id IS NOT NULL
          DO UPDATE SET provider_message_id = EXCLUDED.provider_message_id
-         RETURNING *`,
+         RETURNING *, (xmax::text = '0') AS _inserted`,
         [req.params.id, companyId, direction, channel, body || null,
-         ai_generated, intent || null, provider_message_id, JSON.stringify(metadata)]
+         ai_generated, intent || null, effectiveProviderId, JSON.stringify(metadata)]
       );
       message = msgRes.rows[0];
+      isNewMessage = message._inserted === true;
+      delete message._inserted;
     } else {
       const msgRes = await query(
         `INSERT INTO messages
@@ -173,6 +267,7 @@ router.post('/conversations/:id/messages', async (req, res) => {
          ai_generated, intent || null, JSON.stringify(metadata)]
       );
       message = msgRes.rows[0];
+      isNewMessage = true;
     }
 
     // Update conversation's last_message_at and intent when provided
@@ -191,10 +286,25 @@ router.post('/conversations/:id/messages', async (req, res) => {
 
     // For inbound messages: advance marketing stage to 'responded' if valid, then
     // return active campaign tags so the engine can suppress competing outbound.
+    // Gated on isNewMessage so a duplicate webhook delivery re-scores/re-advances
+    // nothing ("exactly one row" extends to "scores exactly once").
     let active_campaigns = [];
-    if (direction === 'inbound') {
+    if (direction === 'inbound' && isNewMessage) {
       const contact = await contactDb.getById(conv.contact_id, companyId);
       if (contact) {
+        // The reply is an engagement event: log it to the activity feed AND bump
+        // the lead score (channel-mapped weight), so the inbox feeds the score.
+        try {
+          const replyType = REPLY_EVENT_BY_CHANNEL[channel] || 'message_replied';
+          await recordEngagement(conv.contact_id, companyId, {
+            type: replyType,
+            message: `Inbound ${channel} reply${body ? ': ' + String(body).slice(0, 140) : ''}`,
+            agent: 'contact',
+            channel,
+            data: { conversation_id: req.params.id, provider_message_id: provider_message_id || null, intent: intent || null },
+          });
+        } catch (_e) { /* non-blocking — message already persisted */ }
+
         // Stage advance: responded is only reachable from engaged per the marketing pipeline.
         try {
           const pipeline = await getPipelineConfig(companyId, 'marketing');
@@ -233,6 +343,18 @@ router.post('/conversations/:id/messages', async (req, res) => {
           .filter(t => String(t).startsWith('campaign:'))
           .map(t => t.replace('campaign:', ''));
       }
+    }
+
+    // Audit: log an outbound send on the contact's activity feed (channel recorded),
+    // so "sent a message to contact" shows up alongside replies and stage changes.
+    if (direction === 'outbound' && isNewMessage) {
+      const subj = metadata && metadata.subject ? ` — "${metadata.subject}"` : '';
+      await contactDb.addActivity(conv.contact_id, {
+        type: 'message_sent',
+        message: `Sent ${channel} message${subj}${body ? ': ' + String(body).slice(0, 140) : ''}${ai_generated ? ' (AI)' : ''}`,
+        channel,
+        data: { conversation_id: req.params.id, ai_generated: !!ai_generated, provider_message_id: provider_message_id || null, subject: (metadata && metadata.subject) || null },
+      }, companyId);
     }
 
     return res.status(201).json({ message, active_campaigns });

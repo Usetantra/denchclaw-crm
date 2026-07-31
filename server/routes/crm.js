@@ -8,16 +8,38 @@ const tenantDb = require('../db/models/tenants');
 const sequenceDb = require('../db/models/sequences');
 const limitDb = require('../db/models/limits');
 const { query } = require('../db/index');
+// CP-M union (D3): the branch's full pipeline surface (CP1's stage authority
+// needs all six) plus main's scoring imports. Main moved ENGAGEMENT_WEIGHTS out
+// of this file into lib/scoring — that move must survive, because the in-file
+// copy went with it.
 const {
   getPipelineConfig, getPipelineTransitions,
   isManualStage, isTerminalStage, terminalStageKeys,
   findFunnelContactPipelineForStage, onPipelineCacheInvalidate,
 } = require('../db/pipeline');
+const { ENGAGEMENT_WEIGHTS, recordEngagement } = require('../lib/scoring');
 
 const { requireAuth, getUserCompanyId } = require('../middleware/auth');
 
 // All CRM routes require X-Internal-Key
 router.use(requireAuth);
+
+// ─── Connected sending identities (the "From" on each channel) ────────────────
+// In production these are written when a user connects an email account / phone
+// number (the connect flow saves them here). Configurable via CHANNEL_SENDERS
+// (JSON env); a default is provided so the inbox composer's From selector is
+// populated and functional locally. The composer only ever shows these — a user
+// never free-types a From.
+const CHANNEL_SENDERS = (() => {
+  try { return process.env.CHANNEL_SENDERS ? JSON.parse(process.env.CHANNEL_SENDERS) : null; }
+  catch (e) { console.warn('[CRM] CHANNEL_SENDERS is not valid JSON — using defaults'); return null; }
+})() || {
+  email:    [{ identity: 'hello@usetantra.com', label: 'Tantra · hello@usetantra.com',        default: true }],
+  whatsapp: [{ identity: '+14155550142',        label: 'Tantra WhatsApp · +1 415 555 0142',   default: true }],
+  sms:      [{ identity: '+14155550142',        label: 'Tantra SMS · +1 415 555 0142',        default: true }],
+  linkedin: [{ identity: 'tantra-growth',       label: 'Tantra Growth (LinkedIn)',            default: true }],
+};
+router.get('/channel-senders', (req, res) => res.json({ senders: CHANNEL_SENDERS }));
 
 // No-op validator — engines send well-formed data; validation at API boundary
 const validate = () => (req, res, next) => next();
@@ -35,29 +57,12 @@ const LEAD_SCORES = { hot: 90, warm: 60, neutral: 30, cold: 10, negative: 0 };
 
 const DEFAULT_DEAL_STAGES = ['lead', 'accepted', 'contacted', 'booked', 'qualified', 'no_show', 'unqualified', 'proposal', 'proposal_accepted', 'negotiation', 'onboarding', 'won', 'lost', 'nurture'];
 const DEAL_STAGES = DEFAULT_DEAL_STAGES;
-const SOURCES = ['expandi', 'instantly', 'linkedin', 'website', 'referral', 'manual', 'webinar', 'whatsapp', 'sms', 'content',
+const SOURCES = ['expandi', 'instantly', 'linkedin', 'website', 'referral', 'manual', 'webinar', 'whatsapp', 'sms', 'content', 'inbound_email',
   'cold_email_prospect', 'cold_calendar_prospect', 'linkedin_prospect', 'linkedin_engagement',
   'facebook_engagement', 'twitter_engagement', 'instagram_engagement', 'paid_ads', 'social_engagement'];
 
-const ENGAGEMENT_WEIGHTS = {
-  email_opened: 2,
-  email_clicked: 5,
-  email_replied: 10,
-  whatsapp_read: 3,
-  whatsapp_replied: 10,
-  sms_replied: 8,
-  linkedin_connection_accepted: 5,
-  linkedin_message_replied: 10,
-  video_watched: 15,
-  video_completed: 20,
-  call_booked: 25,
-  call_completed: 30,
-  form_submitted: 15,
-  registered: 15,
-  cta_clicked: 10,
-  proposal_viewed: 15,
-  payment: 50,
-};
+// ENGAGEMENT_WEIGHTS + recordEngagement are imported from ../lib/scoring — the
+// single authority for the weight table and the hot/warm label thresholds.
 
 const DEFAULT_STAGE_TRANSITIONS = {
   lead:              ['accepted', 'contacted', 'lost'],
@@ -402,6 +407,14 @@ router.post('/contacts', validate(), async (req, res) => {
     };
 
     const contact = await contactDb.create(contactData);
+    // Audit: the contact_activity feed is the contact's full history. contactDb.create
+    // does not persist the in-memory `activity` array, so write the creation event here.
+    await contactDb.addActivity(contact.id, {
+      type: 'contact_created',
+      message: `Contact created${source ? ' from ' + source : ''}`,
+      channel: null,
+      data: { source: source || 'manual', name: contact.name, email: contact.email },
+    }, companyId);
     // Auto-identify the employer account and link this contact (+ any siblings).
     if (company) contact.company_ref_id = await companyDb.identifyAndLink(companyId, company);
     broadcast(req, { type: 'contact_created', contact });
@@ -615,6 +628,31 @@ router.patch('/contacts/:id', async (req, res) => {
       // (same) — both already hooked below/elsewhere in this file.
     }
 
+    // Audit: log meaningful field edits (e.g. from the dashboard edit modal). Skips
+    // housekeeping churn (last_contacted/next_follow_up/metadata) and deal_stage
+    // (already logged as a stage_change above), and only fires when a value truly
+    // changed and the caller didn't supply its own activity_message.
+    const AUDIT_FIELDS = { name: 'name', email: 'email', phone: 'phone', company_name: 'company',
+      title: 'title', linkedin_url: 'LinkedIn', lead_score: 'lead score', source: 'source',
+      deal_value: 'value', tags: 'tags' };
+    const changedLabels = [];
+    for (const [f, label] of Object.entries(AUDIT_FIELDS)) {
+      if (updateData[f] === undefined) continue;
+      const before = existing[f], after = updateData[f];
+      const eq = Array.isArray(after)
+        ? JSON.stringify([...after].sort()) === JSON.stringify([...(before || [])].sort())
+        : String(after ?? '') === String(before ?? '');
+      if (!eq) changedLabels.push(label);
+    }
+    if (changedLabels.length && !updates.activity_message) {
+      await contactDb.addActivity(req.params.id, {
+        type: 'contact_updated',
+        message: `Updated ${changedLabels.join(', ')}`,
+        agent: updates.agent || 'system',
+        data: { fields: changedLabels },
+      }, companyId);
+    }
+
     const contact = await contactDb.update(req.params.id, updateData, companyId);
     // Employer name changed → re-identify/link the account.
     if (updateData.company_name !== undefined) {
@@ -663,11 +701,9 @@ router.post('/contacts/:id/activity', validate(), async (req, res) => {
       data: data || null
     };
 
-    await contactDb.addActivity(req.params.id, entry, companyId);
-
-    const SCORE_WEIGHTS = { email_opened: 2, email_clicked: 5, email_replied: 10, call_booked: 25, call_completed: 30, form_submitted: 15, payment: 50 };
-    const weight = SCORE_WEIGHTS[entry.type] || 1;
-    await query(`UPDATE contacts SET lead_score_numeric = LEAST(COALESCE(lead_score_numeric, 0) + $1, 100) WHERE id = $2 AND company_id = $3`, [weight, req.params.id, companyId]);
+    // Log + score in one place: recordEngagement applies the full ENGAGEMENT_WEIGHTS
+    // table and ratchets the label (80 → hot; cold crossing 50 → warm).
+    await recordEngagement(req.params.id, companyId, entry);
 
     broadcast(req, { type: 'contact_activity', contact_id: req.params.id, entry });
     res.json(entry);
@@ -1011,6 +1047,16 @@ router.post('/deals', validate(), async (req, res) => {
       [deal.id, deal.companyId, deal.contact_id, deal.company_ref_id, deal.title, deal.value, deal.stage, deal.pipeline_key, 'crm',
        JSON.stringify({ contact_name: deal.contact_name, notes: deal.notes, activity: deal.activity })]
     );
+
+    // Audit: record the opportunity on the linked contact's activity feed.
+    if (deal.contact_id) {
+      await contactDb.addActivity(deal.contact_id, {
+        type: 'opportunity_created',
+        message: `Opportunity created: "${deal.title}"${deal.value > 0 ? ' ($' + Number(deal.value).toLocaleString() + ')' : ''}`,
+        channel: 'crm',
+        data: { deal_id: deal.id, stage: deal.stage, value: deal.value, pipeline_key: deal.pipeline_key },
+      }, companyId);
+    }
 
     broadcast(req, { type: 'deal_created', deal });
     res.status(201).json(deal);
@@ -1804,6 +1850,13 @@ async function findOrCreateContact(email, defaults = {}) {
   };
 
   contact = await contactDb.create(contactData);
+  // Audit: log the creation on the contact's feed (covers deals, webhooks, imports).
+  await contactDb.addActivity(contact.id, {
+    type: 'contact_created',
+    message: `Contact created${defaults.source ? ' from ' + defaults.source : ''}`,
+    channel: null,
+    data: { source: defaults.source || 'webhook', name: contact.name, email: contact.email },
+  }, companyId);
   // Auto-identify the employer account (covers bulk-import, deals, webhooks).
   if (companyId && defaults.company) {
     contact.company_ref_id = await companyDb.identifyAndLink(companyId, defaults.company);
@@ -1811,11 +1864,19 @@ async function findOrCreateContact(email, defaults = {}) {
   return { contact, created: true };
 }
 
+// CP-M (D3): NOT a feature union — both sides wrote the same function, so there
+// is nothing to keep from both. Main's wins on merit: identical tenant scoping,
+// but it pushes the digit normalization into SQL via the model's `phone` filter
+// (contacts.js:42-46, which survives the merge) instead of loading EVERY contact
+// in the tenant into memory and filtering in JS. No behaviour is lost.
+//
+// Tenant-scoped (gate 4): must be called with the caller's companyId. Uses the
+// model's digit-normalized phone filter, scoped to the tenant — never searches
+// across all companies. Returns null if companyId is missing rather than leaking.
 async function findContactByPhone(phone, companyId) {
   if (!phone || !companyId) return null;
-  const normalized = phone.replace(/\D/g, '');
-  const allContacts = await contactDb.list(companyId, {});
-  return allContacts.find(c => c.phone && c.phone.replace(/\D/g, '') === normalized) || null;
+  const matches = await contactDb.list(companyId, { phone });
+  return matches[0] || null;
 }
 
 function calculateEngagementScore(contact) {
@@ -1827,28 +1888,13 @@ function calculateEngagementScore(contact) {
   return Math.min(score, 100);
 }
 
+// Thin wrapper kept for its existing call sites (stage advances, imports). All
+// activity-logging + scoring flows through recordEngagement so the weight table
+// and hot/warm thresholds live in exactly one place. The previous body recomputed
+// the score from a contact.activity array that doesn't exist on a DB row, which
+// silently reset lead_score_numeric to 0 on every call — this delegates instead.
 async function addContactActivity(contactId, companyId, entry) {
-  const contact = await contactDb.getById(contactId, companyId);
-  if (!contact) return false;
-
-  const timestampedEntry = { ...entry, timestamp: new Date().toISOString() };
-  await contactDb.addActivity(contactId, timestampedEntry, companyId);
-
-  const updated = await contactDb.getById(contactId, companyId);
-  const es = calculateEngagementScore(updated || contact);
-
-  const updateData = { lead_score_numeric: es };
-
-  if (es >= 80 && (contact.lead_score || contact.leadScore) !== 'hot') {
-    updateData.lead_score = 'hot';
-    updateData.lead_score_numeric = 90;
-  } else if (es >= 50 && (contact.lead_score || contact.leadScore) === 'cold') {
-    updateData.lead_score = 'warm';
-    updateData.lead_score_numeric = 60;
-  }
-
-  await contactDb.update(contactId, updateData, companyId);
-  return true;
+  return recordEngagement(contactId, companyId, entry);
 }
 
 router.findContactByEmail = findContactByEmail;

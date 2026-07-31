@@ -99,7 +99,18 @@ async function listPaginated(companyId, filters = {}) {
 // fallback: a missing companyId is a caller bug, not a valid "give me any
 // tenant's row" request, so it throws instead of silently going cross-tenant.
 async function getById(id, companyId) {
-  if (!companyId) throw new Error('contacts.getById requires companyId');
+  if (!companyId) {
+    // CP-M union (D5). Main and the branch both hardened this call, in the same
+    // direction but by different amounts: main kept the unscoped fallback and
+    // merely made it LOUD, while the branch (A1) deleted the unscoped helper
+    // outright and made a missing companyId fatal. Re-applying main's lines
+    // verbatim would resurrect the unscoped read — and would not even run, since
+    // the function no longer exists on this branch. So the union is main's
+    // diagnostic on top of the branch's stricter contract: say exactly what went
+    // wrong, then refuse. `test/unit-tenancy.mjs:49-52` asserts the throw.
+    console.warn('[contacts.getById] called without companyId — refusing; pass companyId from the route.');
+    throw new Error('contacts.getById requires companyId');
+  }
   const result = await query(
     `SELECT * FROM contacts WHERE id = $1 AND company_id = $2 AND deleted_at IS NULL LIMIT 1`,
     [id, companyId]
