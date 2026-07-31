@@ -109,8 +109,20 @@ async function main() {
     col.rows[0]?.data_type === 'text' && col.rows[0]?.is_nullable === 'YES', JSON.stringify(col.rows[0]));
   const idx = await db.query(`SELECT indexdef FROM pg_indexes WHERE indexname='uq_scheduled_actions_enrollment_step'`);
   check('E1 UNIQUE (enrollment_id, step_id) index present', /UNIQUE/.test(idx.rows[0]?.indexdef || ''), JSON.stringify(idx.rows));
-  const legacySteps = await db.query(`SELECT count(*)::int n FROM sequence_steps WHERE stage_writeback IS NOT NULL`);
-  check('E1 pre-existing steps are unaffected (no writeback backfilled)', legacySteps.rows[0].n === 0, JSON.stringify(legacySteps.rows));
+  // "Existing rows are unaffected" is proven against a row this test creates
+  // and then re-migrates, NOT by counting writebacks across the whole table:
+  // that counted every step EARLIER RUNS of this same suite had legitimately
+  // created with a writeback, so it failed the moment the suite ran twice
+  // against one database — a test-isolation artefact, not a schema defect.
+  // Re-applying the migration over a real pre-existing row is also the
+  // stronger claim.
+  const probeSeq = await seqDb.createSequence({ companyId: CO, name: `E1 probe ${RUN}`, pipelineKey: 'webinar_sales', triggerStage: null });
+  const probeStep = await seqDb.addStep(probeSeq.id, CO, { stepOrder: 1, channel: 'email', delaySeconds: 0 });
+  check('E1 a step created without a writeback is NULL, not defaulted', probeStep.stage_writeback === null, String(probeStep.stage_writeback));
+  await db.query(mig);
+  const reProbe = await db.query('SELECT stage_writeback FROM sequence_steps WHERE id=$1', [probeStep.id]);
+  check('E1 re-applying the migration leaves a pre-existing step untouched (no backfill)',
+    reProbe.rows[0]?.stage_writeback === null, JSON.stringify(reProbe.rows[0]));
 
   // ── E2 — enrolling queues exactly one row for step 1 ──────────────────────
   {
@@ -339,6 +351,105 @@ async function main() {
     check('E10b the enrollment did NOT advance', after.current_step_id === before.current_step_id, `${before.current_step_id} -> ${after.current_step_id}`);
     const rows = await actionsFor(enr.id);
     check('E10b no extra row was queued', rows.filter(r => r.step_id === steps[1].id).length === 0, JSON.stringify(rows.map(r => r.step_id)));
+  }
+
+  // ── R1 — a stranded ladder is REPAIRED by replaying the ack ──────────────
+  // Critic HIGH (reproduced independently by two lenses): D3 commits the send
+  // first and runs side-effects separately, so a side-effect that throws — or
+  // a process death right after COMMIT — leaves the enrollment sitting on an
+  // already-sent step. Nothing could re-drive it: the job row is terminal so
+  // no claim scan revisits it, and resumeSequenceQueue()'s NOT EXISTS cannot
+  // see it either, because a scheduled_action for the current step DOES exist
+  // (it is just 'sent'). One transient error meant a silently dead ladder,
+  // forever. Replay is now the repair, and it is safe because the side-effect
+  // is idempotent: D3b makes it a no-op unless the job IS the current step.
+  {
+    const contact = await mkContact(CO, 'R1 Stranded Ladder');
+    const deal = await mkDeal(contact.id, CO, 'scheduled_call');
+    const { seq, steps } = await mkSequence({ name: 'R1 replay repairs', triggerStage: null, steps: [
+      { delay: 0, writeback: 'disqualified' }, { delay: 3 * DAY },
+    ] });
+    const enr = await seqDb.enroll(CO, { sequenceId: seq.id, contactId: contact.id });
+    const job = (await actionsFor(enr.id))[0];
+    await db.query(`UPDATE deals SET metadata = '"{{{ not json"'::jsonb WHERE id=$1`, [deal.id]);
+    const first = await claimAndAck(job.id, 'sent');
+    check('R1 the ack succeeds even though the side-effect throws', first.ack?.status === 200, JSON.stringify(first.ack?.json));
+    const stranded = await enrollmentRow(enr.id);
+    check('R1 the enrollment is stranded on the already-sent step', stranded.current_step_id === job.step_id, String(stranded.current_step_id));
+    check('R1 step 2 was never queued', (await actionsFor(enr.id)).length === 1, String((await actionsFor(enr.id)).length));
+
+    // Fix the cause, then prove the OTHER recovery path genuinely cannot help —
+    // this is why the replay had to carry the side-effect.
+    await db.query(`UPDATE deals SET metadata='{}'::jsonb WHERE id=$1`, [deal.id]);
+    const backfilled = await seqDb.resumeSequenceQueue(CO, seq.id);
+    check('R1 resumeSequenceQueue cannot heal a strand whose step already has a sent row',
+      backfilled.length === 0, JSON.stringify(backfilled));
+
+    const replay = await ack(job.id, 'sent');
+    check('R1 the replay still returns the idempotent 200', replay.status === 200 && replay.json?.status === 'sent', JSON.stringify(replay.json));
+    const healed = await enrollmentRow(enr.id);
+    check('R1 the replay ADVANCED the stranded enrollment to step 2', healed.current_step_id === steps[1].id, String(healed.current_step_id));
+    const rows = await actionsFor(enr.id);
+    check('R1 step 2 is queued exactly once', rows.filter(r => r.step_id === steps[1].id).length === 1, JSON.stringify(rows.map(r => r.step_id)));
+    check('R1 step 1 is still ONE sent row — the repair never re-sent it',
+      rows.filter(r => r.step_id === steps[0].id && r.status === 'sent').length === 1, JSON.stringify(rows.map(r => `${r.step_id}:${r.status}`)));
+    check('R1 the write-back that originally failed was applied on repair',
+      (await dealRow(deal.id)).stage === 'disqualified', (await dealRow(deal.id)).stage);
+
+    // ...and replaying again is inert, so D8 survives the repair path.
+    await ack(job.id, 'sent');
+    const after2 = await enrollmentRow(enr.id);
+    check('R1 a further replay is a no-op — D8 still holds after a repair',
+      after2.current_step_id === steps[1].id && (await actionsFor(enr.id)).length === 2,
+      `${after2.current_step_id} / ${(await actionsFor(enr.id)).length}`);
+  }
+
+  // ── R2 — a side-effect that cannot even get a pool client is contained ────
+  // Critic HIGH (reproduced with fault injection): getClient() used to sit
+  // OUTSIDE runStepSideEffects' try, so its rejection — the failure mode a
+  // small shared DB_POOL_MAX makes most likely — propagated through ackJob()
+  // into the route. The executor got HTTP 500 for an ack whose send was
+  // ALREADY COMMITTED, which is exactly the signal that makes an executor
+  // re-deliver a message that physically went out.
+  {
+    const { createRequire } = await import('node:module');
+    const require_ = createRequire(import.meta.url);
+    const dbCjs = require_('../server/db/index.js');
+    const realGetClient = dbCjs.getClient;
+    let calls = 0, failOnCall = -1;
+    dbCjs.getClient = async function (...a) {
+      calls += 1;
+      if (calls === failOnCall) throw new Error('injected pool exhaustion');
+      return realGetClient.apply(this, a);
+    };
+    // Required AFTER the patch on purpose: dispatch.js destructures getClient
+    // at require time, so patching later would not be seen.
+    const dispatchDb = require_('../server/db/models/dispatch.js');
+
+    let threw = null, res = null;
+    try {
+      const contact = await mkContact(CO, 'R2 Pool Exhaustion');
+      await mkDeal(contact.id, CO, 'scheduled_call');
+      const { seq } = await mkSequence({ name: 'R2 pool exhaustion', triggerStage: null, steps: [{ delay: 0 }, { delay: DAY }] });
+      const enr = await seqDb.enroll(CO, { sequenceId: seq.id, contactId: contact.id });
+      const job = (await actionsFor(enr.id))[0];
+      await db.query(`UPDATE scheduled_actions SET status='claimed', claimed_by='r2-exec', claimed_at=now() WHERE id=$1`, [job.id]);
+
+      // call #1 is ackJobCore's own client (must succeed — the send has to be
+      // recorded); call #2 is the side-effect's (injected failure).
+      calls = 0; failOnCall = 2;
+      try { res = await dispatchDb.ackJob(CO, job.id, { claimedBy: 'r2-exec', status: 'sent' }); }
+      catch (e) { threw = e; }
+
+      check('R2 ackJob does NOT throw when the side-effect cannot get a pool client', !threw, threw?.message);
+      check('R2 the ack still reports 200 — the send was recorded', res?.httpStatus === 200, JSON.stringify(res));
+      const row = (await db.query('SELECT status FROM scheduled_actions WHERE id=$1', [job.id])).rows[0];
+      check("R2 the job is committed 'sent' — a contained side-effect never undoes the send", row?.status === 'sent', row?.status);
+      check('R2 the injected failure really did fire (the test proves something)', calls >= 2, String(calls));
+    } finally {
+      failOnCall = -1;
+      dbCjs.getClient = realGetClient;
+    }
   }
 
   // ── E11 — terminal outcomes (D7), each proven separately ─────────────────

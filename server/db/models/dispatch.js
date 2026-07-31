@@ -236,15 +236,32 @@ async function ackJobCore(companyId, jobId, { claimedBy, status, providerMessage
       // failed) — idempotent replay if it's the SAME status, 409 otherwise.
       await client.query('COMMIT');
       if (job.status === status) {
-        // CP2 D8: an idempotent replay returns the same 200 and carries NO
-        // side-effect — the enrollment must not advance twice, the next step
-        // must not be queued twice, and the stage must not be written back
-        // twice.
+        // CP2 D8: an idempotent replay returns the same 200 and must not
+        // advance twice, queue the next step twice, or write the stage back
+        // twice. It nonetheless CARRIES the side-effect — because the
+        // side-effect is itself idempotent, and replay is the only repair
+        // path this design has.
+        //
+        // Why: D3 commits the send first and runs the side-effects in a
+        // separate transaction, so there is a window (side-effect throws, or
+        // the process dies right after COMMIT) where the message went out but
+        // the enrollment never advanced. The job row is terminal, so the claim
+        // scan will never revisit it, and resumeSequenceQueue() cannot see it
+        // either — a scheduled_action for the current step DOES exist, it is
+        // just 'sent'. Without this the ladder is stranded FOREVER after a
+        // single transient error, which the critic reproduced.
+        // Replaying is safe by construction: runStepSideEffects acts only when
+        // job.step_id === enrollment.current_step_id (D3b) and only on an
+        // active enrollment, and the enqueue is ON CONFLICT DO NOTHING (D8).
+        // So on a healthy enrollment — already advanced past this step — the
+        // replay is a no-op, and on a stranded one it is the repair.
+        const replayable = ['sent', 'skipped'].includes(job.status);
         return {
           result: {
             httpStatus: 200,
             body: { ok: true, job_id: job.id, status: job.status, retry: status === 'failed' ? computeRetryInfo(job.attempt) : null },
           },
+          sideEffect: replayable ? { job, outcome: job.status, anchor: new Date() } : null,
         };
       }
       return { result: { httpStatus: 409, body: { error: `job already acked as '${job.status}', cannot re-ack as '${status}'` } } };
@@ -543,8 +560,19 @@ async function advanceEnrollment(client, companyId, { enrollment, anchor }) {
 // and its own pooled client, and NEVER throws — by the time it runs, the
 // outcome it is reacting to is already committed.
 async function runStepSideEffects(companyId, { job, outcome, anchor }) {
-  const client = await getClient();
+  // getClient() is acquired INSIDE the try. It was outside, which made the
+  // "never throws" contract above a lie in exactly the condition the pool is
+  // most likely to be under: DB_POOL_MAX is a small shared budget, so a
+  // saturated pool made getClient() reject, and that rejection propagated out
+  // through ackJob() into the route — turning an ack whose send was ALREADY
+  // COMMITTED into an HTTP 500. An executor told "your ack failed" for a
+  // message that physically went out is precisely the input that produces a
+  // duplicate send. Same hazard in claimJobs(), which calls this after its own
+  // COMMIT: a throw there discards the list of claimed job ids that the
+  // executor never receives, orphaning committed claims for CLAIM_TIMEOUT_MS.
+  let client = null;
   try {
+    client = await getClient();
     await client.query('BEGIN');
 
     // Lock the enrollment so two side-effect runs for the same enrollment
@@ -598,7 +626,9 @@ async function runStepSideEffects(companyId, { job, outcome, anchor }) {
     await advanceEnrollment(client, companyId, { enrollment, anchor: anchor || new Date() });
     await client.query('COMMIT');
   } catch (err) {
-    await client.query('ROLLBACK').catch(() => {});
+    // client is null when getClient() itself failed — there is no transaction
+    // to roll back in that case, only a failure to record.
+    if (client) await client.query('ROLLBACK').catch(() => {});
     // D3: the send is already committed. A side-effect failure is loud in the
     // log and visible on the timeline, but it never becomes a failed ack and
     // never re-sends the message.
@@ -615,7 +645,7 @@ async function runStepSideEffects(companyId, { job, outcome, anchor }) {
       console.error(`[CRM][cp2] could not record side-effect failure: ${activityErr.message}`);
     }
   } finally {
-    client.release();
+    if (client) client.release();
   }
 }
 
