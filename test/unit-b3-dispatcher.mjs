@@ -43,7 +43,11 @@ async function req(method, path, body) {
 async function makeEnrolledJob(overrides = {}) {
   const contact = await contactDb.create({ name: 'B3 Contact', email: `b3-${Math.random()}-${RUN}@example.com`, company_id: CO });
   const seq = await seqDb.createSequence({ companyId: CO, name: 'B3 Seq ' + Math.random(), pipelineKey: 'marketing', triggerStage: 'segmented' });
-  const step = await seqDb.addStep(seq.id, CO, { stepOrder: 1, channel: overrides.channel || 'email', templateRef: overrides.templateRef || 'welcome' });
+  // CP4a-0: a step must carry real content or its job is never handed out at
+  // the claim door (dispatch.js) — a job with nothing to send must not reach an
+  // executor. These fixtures pre-date the content store, so they now supply it.
+  const step = await seqDb.addStep(seq.id, CO, { stepOrder: 1, channel: overrides.channel || 'email', templateRef: overrides.templateRef || 'welcome',
+    subject: 'B3 fixture subject', body: 'B3 fixture body.' });
   const enrollment = await seqDb.enroll(CO, { sequenceId: seq.id, contactId: contact.id });
   const action = await seqDb.scheduleAction(CO, {
     enrollmentId: enrollment.id, stepId: step.id,
@@ -163,7 +167,14 @@ async function main() {
   // ── quiet hours: nothing claimable while configured window covers "now" ──
   const { action: quietAction } = await makeEnrolledJob();
   const nowHour = new Date().getUTCHours();
-  await limitsDb.setChannelLimits(CO, 'email', { quietHoursStart: 0, quietHoursEnd: (nowHour + 1) % 24, timezone: 'UTC' });
+  // Window is [nowHour, nowHour+1), which covers "now" in every hour AND can
+  // never have start === end. The previous form pinned start to 0 and computed
+  // end as (nowHour + 1) % 24, so between 23:00 and 00:00 UTC end became 0 too
+  // and migration 016's chk_tenant_channel_limits_quiet_hours_distinct rejected
+  // the row — crashing this suite for one hour every day. isQuietHours handles
+  // the midnight wrap (limits.js: start > end ⇒ hour >= start || hour < end),
+  // so start=23,end=0 still covers 23:xx correctly.
+  await limitsDb.setChannelLimits(CO, 'email', { quietHoursStart: nowHour, quietHoursEnd: (nowHour + 1) % 24, timezone: 'UTC' });
   const claimDuringQuiet = await req('POST', '/api/crm/channel-jobs/claim', { channel: 'email', limit: 100, claimed_by: 'quiet-test' });
   check('claim returns nothing while quiet hours cover the current time', claimDuringQuiet.json.jobs.length === 0, JSON.stringify(claimDuringQuiet.json));
   await limitsDb.setChannelLimits(CO, 'email', { quietHoursStart: null, quietHoursEnd: null });

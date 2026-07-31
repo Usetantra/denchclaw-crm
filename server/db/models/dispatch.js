@@ -99,6 +99,21 @@ async function claimJobs(companyId, channel, limit, claimedBy) {
           AND (SELECT s.status
                  FROM sequence_steps ss JOIN sequences s ON s.id = ss.sequence_id
                 WHERE ss.id = sa.step_id) = 'active'
+          -- CP4a-0: A JOB WITH NO CONTENT IS NEVER HANDED OUT.
+          -- This is the enforcement point for the content contract. Before it,
+          -- "the executor refuses unresolved jobs" lived only in comments and in
+          -- an executor that had not been written — so the claim door served a
+          -- blank-bodied job indistinguishably from a real one, and any executor
+          -- coded against the OpenAPI contract alone would have mailed it.
+          -- COALESCE(..., false) is deliberate: a row whose payload predates the
+          -- content store has NO content_resolved key, and "absent" must read as
+          -- "not safe to send", never as "fine".
+          -- Unresolved jobs are LEFT PENDING rather than marked 'skipped',
+          -- because a skipped ack ADVANCES the ladder — mass-skipping missing
+          -- copy would fire "step 2" at people who never received step 1. They
+          -- stay put, invisible to the executor, and become claimable the moment
+          -- their copy is authored.
+          AND COALESCE((sa.payload->>'content_resolved')::boolean, false) = true
         ORDER BY sa.scheduled_for ASC
         FOR UPDATE OF sa SKIP LOCKED
         LIMIT $4`,

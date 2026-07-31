@@ -12,6 +12,7 @@
 // still build on top of this file. No HTTP routes of its own.
 const { query, getClient } = require('../index');
 const contactDb = require('./contacts');
+const templatesDb = require('./templates');
 
 // ─── sequences ─────────────────────────────────────────────────────────────
 
@@ -148,17 +149,21 @@ async function updateSequenceStatus(id, companyId, status) {
 // and a future direct query against this table that forgets to join through
 // sequences would otherwise have no defense-in-depth layer at all.
 
-async function addStep(sequenceId, companyId, { stepOrder, channel, delaySeconds = 0, templateRef = null, entryConditions = {}, exitConditions = {}, stageWriteback = null }) {
+async function addStep(sequenceId, companyId, { stepOrder, channel, delaySeconds = 0, templateRef = null, entryConditions = {}, exitConditions = {}, stageWriteback = null, subject = null, body = null }) {
   if (!companyId) throw new Error('sequences.addStep requires companyId');
   const owned = await getSequenceById(sequenceId, companyId);
   if (!owned) return null;
   // stage_writeback (CP2 D4, migration 019) is the reporting stage this step
   // mirrors onto the pipeline when it is acked 'sent'. NULL — the default and
   // every pre-CP2 step — means "write nothing back".
+  // CP4a-0: `subject`/`body` are OPTIONAL inline content for a one-off step and
+  // take precedence over `template_ref` (see db/models/templates.js, which owns
+  // that precedence). NULL on every pre-existing step, so nothing changes for
+  // steps that already resolve through a template.
   const result = await query(
-    `INSERT INTO sequence_steps (company_id, sequence_id, step_order, channel, delay_seconds, template_ref, entry_conditions, exit_conditions, stage_writeback)
-     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9) RETURNING *`,
-    [companyId, sequenceId, stepOrder, channel, delaySeconds, templateRef, JSON.stringify(entryConditions), JSON.stringify(exitConditions), stageWriteback]
+    `INSERT INTO sequence_steps (company_id, sequence_id, step_order, channel, delay_seconds, template_ref, entry_conditions, exit_conditions, stage_writeback, subject, body)
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11) RETURNING *`,
+    [companyId, sequenceId, stepOrder, channel, delaySeconds, templateRef, JSON.stringify(entryConditions), JSON.stringify(exitConditions), stageWriteback, subject, body]
   );
   return result.rows[0];
 }
@@ -300,16 +305,38 @@ async function materializeNextStep(companyId, enrollmentId, { client = null, aft
   const step = st.rows[0];
   if (!step) return null;
 
+  // CP4a-0: freeze the RESOLVED message content into the job.
+  //
+  // The payload used to be literally '{}'::jsonb, so the queue said WHEN and TO
+  // WHOM but never WHAT — an executor reading it would have called the provider
+  // with an empty subject and body. Resolving here means the executor reads one
+  // row and never has to reach around the claim/ack contract to find out what to
+  // send, and it means the copy is resolved against the contact as they are when
+  // the message is actually scheduled (step 5 of a ladder resolves 16 days after
+  // enrolment, not at enrolment).
+  //
+  // Unresolvable content does NOT block the enrolment — it is frozen in as
+  // `content_resolved: false` with the reason. The ladder still advances and the
+  // gap is visible on the readiness surface, while the executor refuses to send
+  // it. Throwing here would instead strand a contact mid-ladder for a copy
+  // mistake, and swallowing it would mail a blank.
+  const ct = await run(
+    'SELECT id, name, email, company_name, marketing_stage, deal_stage FROM contacts WHERE id = $1 AND company_id = $2',
+    [enrollment.contact_id, companyId]
+  );
+  const content = await templatesDb.resolveStepContent(companyId, step, ct.rows[0] || null, { client });
+
   // channel/template_ref/contact_id are derived from the enrollment+step, never
   // from a caller — the same property scheduleAction() established and which
   // stops a caller scheduling a job whose channel lies about the step's own.
   const inserted = await run(
     `INSERT INTO scheduled_actions (company_id, enrollment_id, step_id, contact_id, channel, template_ref, payload, scheduled_for)
-     VALUES ($1,$2,$3,$4,$5,$6,'{}'::jsonb, $7::timestamptz + ($8 || ' seconds')::interval)
+     VALUES ($1,$2,$3,$4,$5,$6,$9::jsonb, $7::timestamptz + ($8 || ' seconds')::interval)
      ON CONFLICT (enrollment_id, step_id) DO NOTHING
      RETURNING *`,
     [companyId, enrollment.id, step.id, enrollment.contact_id, step.channel, step.template_ref,
-     after instanceof Date ? after.toISOString() : after, String(step.delay_seconds)]
+     after instanceof Date ? after.toISOString() : after, String(step.delay_seconds),
+     JSON.stringify(templatesDb.contentPayload(content, { step_order: step.step_order }))]
   );
   return inserted.rows[0] || null;
 }
@@ -427,6 +454,21 @@ async function scheduleAction(companyId, { enrollmentId, stepId, payload = {}, s
   // already-queued step re-times it instead of raising 23505 or creating the
   // duplicate the constraint exists to forbid. `status` is deliberately NOT
   // reset: re-timing a row must never resurrect one that already sent.
+  // CP4a-0: the same content freeze materializeNextStep does. A caller-supplied
+  // `payload` is merged UNDER the resolved content, never over it — otherwise a
+  // caller could hand-write `{subject, body}` and bypass the template store,
+  // which is exactly the "reach around the contract" the content freeze exists
+  // to prevent. Caller payload keeps its use for scheduling metadata.
+  const ct = await query(
+    'SELECT id, name, email, company_name, marketing_stage, deal_stage FROM contacts WHERE id = $1 AND company_id = $2',
+    [enrollment.contact_id, companyId]
+  );
+  const content = await templatesDb.resolveStepContent(companyId, step.rows[0], ct.rows[0] || null);
+  const merged = templatesDb.contentPayload(content, {
+    ...(payload && typeof payload === 'object' ? payload : {}),
+    step_order: step.rows[0].step_order,
+  });
+
   const result = await query(
     `INSERT INTO scheduled_actions (company_id, enrollment_id, step_id, contact_id, channel, template_ref, payload, scheduled_for)
      VALUES ($1,$2,$3,$4,$5,$6,$7,$8)
@@ -435,7 +477,7 @@ async function scheduleAction(companyId, { enrollmentId, stepId, payload = {}, s
            payload = EXCLUDED.payload,
            updated_at = now()
      RETURNING *`,
-    [companyId, enrollmentId, stepId, enrollment.contact_id, step.rows[0].channel, step.rows[0].template_ref, JSON.stringify(payload), scheduledFor]
+    [companyId, enrollmentId, stepId, enrollment.contact_id, step.rows[0].channel, step.rows[0].template_ref, JSON.stringify(merged), scheduledFor]
   );
   return result.rows[0];
 }

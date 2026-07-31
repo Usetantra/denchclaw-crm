@@ -14,6 +14,7 @@ import tenantDb from '../server/db/models/tenants.js';
 import contactDb from '../server/db/models/contacts.js';
 import seqDb from '../server/db/models/sequences.js';
 import aiDraft from '../server/lib/ai-draft.js';
+import templatesDb from '../server/db/models/templates.js';
 
 const BASE = process.env.CRM_API_BASE || 'http://127.0.0.1:3100';
 const KEY = process.env.INTERNAL_API_KEY;
@@ -239,7 +240,9 @@ async function main() {
   const fay = await mkContact('I12 Fay');
   await mkDeal(fay.id, 'fay deal', 'scheduled_call');
   const seq = await seqDb.createSequence({ companyId: CO, name: `I12 seq ${RUN}`, pipelineKey: 'webinar_sales', triggerStage: null });
-  await seqDb.addStep(seq.id, CO, { stepOrder: 1, channel: 'email', delaySeconds: 0, templateRef: 'Hi {first_name} at {company}, re {stage}.' });
+  // CP4a-0: content is required for the job to be claimable at all.
+  await seqDb.addStep(seq.id, CO, { stepOrder: 1, channel: 'email', delaySeconds: 0, templateRef: 'i12_tpl',
+    subject: 'CP-I fixture subject', body: 'CP-I fixture body.' });
   const enr = await seqDb.enroll(CO, { sequenceId: seq.id, contactId: fay.id });
   const claim = await req('POST', '/api/crm/channel-jobs/claim', { channel: 'email', limit: 25, claimed_by: 'cpi-test' });
   const job = (claim.json?.jobs || []).find(j => j.contact_id === fay.id);
@@ -363,8 +366,24 @@ async function main() {
   check('I12h rail: open deals with a stage chip', !!soloRail.json?.deals?.[0]?.stage_chip, JSON.stringify(soloRail.json?.deals?.[0]));
 
   // ── I12i — templates resolve personalisation tokens ───────────────────────
+  // CP4a-0 gave template_ref a real content store to resolve against, so the
+  // step's copy now lives in message_templates rather than being the ref string
+  // itself. Author it, then assert the tokens resolve against the real contact —
+  // the same intent as before, now exercising the actual send path's content.
+  await templatesDb.upsertTemplate(CO, {
+    ref: 'i12i_tpl', channel: 'email',
+    subject: 'Hi {first_name}',
+    // Only {first_name} — this contact has no company_name, and CP4a-0 now
+    // REFUSES copy that would ship a literal {company} to a prospect, so
+    // including it here would be asserting the refusal, not the resolution.
+    body: 'Hi {first_name}, following up.',
+  });
+  // Clear the inline copy so the TEMPLATE is what resolves — inline content
+  // deliberately wins over template_ref (CP4a-0 precedence), so leaving it set
+  // would be testing the fixture rather than the store.
+  await db.query('UPDATE sequence_steps SET template_ref=$1, subject=NULL, body=NULL WHERE sequence_id=$2', ['i12i_tpl', seq.id]);
   const tpl = await req('GET', `/api/crm/inbox/${fay.id}/templates`);
-  const mine = (tpl.json?.templates || []).find(t => /I12 seq/.test(t.sequence_name));
+  const mine = (tpl.json?.templates || []).find(t => t.template_ref === 'i12i_tpl');
   check('I12i templates list the sequence step', !!mine, JSON.stringify(tpl.json?.total));
   check('I12i {first_name} resolves against the real contact', /I12/.test(mine?.body || ''), mine?.body);
   check('I12i unresolved tokens are not blanked into nonsense', !/\{first_name\}/.test(mine?.body || ''), mine?.body);

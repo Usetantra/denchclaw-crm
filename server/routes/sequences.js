@@ -8,6 +8,8 @@ const express = require('express');
 const router = express.Router();
 const seqDb = require('../db/models/sequences');
 const { getPipelineConfig } = require('../db/pipeline');
+const templatesDb = require('../db/models/templates');
+const contactDb = require('../db/models/contacts');
 const { requireAuth, getUserCompanyId } = require('../middleware/auth');
 
 router.use(requireAuth);
@@ -168,7 +170,7 @@ router.post('/:id/steps', async (req, res) => {
   try {
     const companyId = getUserCompanyId(req);
     if (!companyId) return res.status(401).json({ error: 'Authentication required' });
-    const { step_order, channel, delay_seconds, template_ref, entry_conditions, exit_conditions, stage_writeback } = req.body || {};
+    const { step_order, channel, delay_seconds, template_ref, entry_conditions, exit_conditions, stage_writeback, subject, body } = req.body || {};
     if (!Number.isInteger(step_order) || step_order < 1) {
       return res.status(400).json({ error: 'step_order must be a positive integer' });
     }
@@ -203,6 +205,11 @@ router.post('/:id/steps', async (req, res) => {
         stepOrder: step_order, channel, delaySeconds: delay_seconds || 0,
         templateRef: template_ref || null, entryConditions: entry_conditions || {}, exitConditions: exit_conditions || {},
         stageWriteback: stage_writeback === undefined ? null : stage_writeback,
+        // CP4a-0: optional inline content. A blank string is refused rather than
+        // stored, because "" is indistinguishable from "no content" downstream
+        // and that ambiguity is exactly what mails a blank.
+        subject: subject === undefined ? null : subject,
+        body: body === undefined || body === null || !String(body).trim() ? null : String(body),
       });
     } catch (dbErr) {
       // sequence_steps has UNIQUE(sequence_id, step_order) with no
@@ -261,6 +268,32 @@ router.get('/:id/queue', async (req, res) => {
   } catch (err) {
     console.error('[CRM] GET /sequences/:id/queue error:', err.message);
     res.status(500).json({ error: 'failed to load sequence queue' });
+  }
+});
+
+// GET /api/crm/sequences/:id/content — CP4a-0 readiness.
+// "Would this sequence send blank messages?" answered BEFORE it is switched on.
+// `sendable` is the single line an operator needs; `steps[]` says which rung is
+// missing copy and why.
+router.get('/:id/content', async (req, res) => {
+  try {
+    const companyId = getUserCompanyId(req);
+    if (!companyId) return res.status(401).json({ error: 'Authentication required' });
+    const sequence = await seqDb.getSequenceById(req.params.id, companyId);
+    if (!sequence) return res.status(404).json({ error: 'sequence not found' });
+    // Render against a real enrolled contact when there is one, so the preview
+    // shows the words a prospect would actually receive rather than raw tokens.
+    const enrolled = await seqDb.listEnrollments(companyId, { sequenceId: req.params.id });
+    let sample = null;
+    if (enrolled.length) {
+      const c = await contactDb.getById(enrolled[0].contact_id, companyId);
+      sample = c || null;
+    }
+    const readiness = await templatesDb.sequenceContentReadiness(companyId, req.params.id, { sampleContact: sample });
+    res.json({ ...readiness, sequence_status: sequence.status, previewed_against_contact: sample ? sample.id : null });
+  } catch (err) {
+    console.error('[CRM] GET /sequences/:id/content error:', err.message);
+    res.status(500).json({ error: 'failed to check sequence content' });
   }
 });
 

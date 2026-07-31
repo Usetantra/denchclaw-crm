@@ -41,6 +41,7 @@ const channelJobsRouter = require('./routes/channel-jobs');
 const sequencesRouter = require('./routes/sequences');
 const apiKeysRouter = require('./routes/api-keys');
 const inboxRouter = require('./routes/inbox');
+const templatesRouter = require('./routes/templates');
 const webhooksRouter = require('./routes/webhooks');
 
 // CP-M union: this block conflicted because main added the /webhooks mount
@@ -56,6 +57,7 @@ app.use('/api/crm/channel-jobs', channelJobsRouter);
 app.use('/api/crm/sequences', sequencesRouter);
 app.use('/api/crm/api-keys', apiKeysRouter);
 app.use('/api/crm/inbox', inboxRouter);
+app.use('/api/crm/templates', templatesRouter);
 app.use('/api/crm', conversationsRouter);
 app.use('/api/crm', analyticsRouter);
 app.use('/api/crm', crmRouter);

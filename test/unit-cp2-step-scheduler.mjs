@@ -67,6 +67,10 @@ async function mkSequence({ company = CO, name, pipelineKey = 'webinar_sales', t
     made.push(await seqDb.addStep(seq.id, company, {
       stepOrder: i + 1, channel: steps[i].channel || 'email', delaySeconds: steps[i].delay || 0,
       templateRef: steps[i].template || `tpl_${i + 1}`, stageWriteback: steps[i].writeback || null,
+      // CP4a-0: without content the job is not claimable — the claim door
+      // refuses to hand an executor a message with nothing in it. These
+      // fixtures pre-date the content store, so they now carry inline copy.
+      subject: `CP2 step ${i + 1}`, body: `CP2 fixture body for step ${i + 1}.`,
     }));
   }
   return { seq, steps: made };

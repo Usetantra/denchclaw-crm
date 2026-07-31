@@ -18,6 +18,7 @@ const contactDb = require('../db/models/contacts');
 const limitsDb = require('../db/models/limits');
 const resendEmail = require('../lib/email-resend');
 const aiDraft = require('../lib/ai-draft');
+const templatesDb = require('../db/models/templates');
 const { getPipelineConfig, getPipelineTransitions } = require('../db/pipeline');
 const { requireAuth, getUserCompanyId } = require('../middleware/auth');
 
@@ -452,10 +453,11 @@ router.post('/:contactId/draft', async (req, res) => {
 });
 
 // ── GET /api/crm/inbox/:contactId/templates ──────────────────────────────────
-// Sequence step templates with {first_name}/{company}/{stage} resolved against
-// this contact. NOTE: there is no template-body store in the schema — a step
-// carries only `template_ref` — so the ref itself is what gets resolved and
-// inserted. A real body store is a follow-up, recorded in the receipt.
+// Real message content with {first_name}/{company}/{stage} resolved against this
+// contact. CP4a-0 replaced the placeholder here: there IS a content store now
+// (message_templates + inline step content), so this returns the actual words a
+// prospect would receive instead of the bare `template_ref` label, which is all
+// the schema could offer before.
 router.get('/:contactId/templates', async (req, res) => {
   try {
     const companyId = getUserCompanyId(req);
@@ -466,21 +468,44 @@ router.get('/:contactId/templates', async (req, res) => {
     const deals = await inboxDb.listOpenDeals(companyId, contact.id);
     const stageLabel = deals[0]?.stage_label || null;
     const steps = await query(
-      `SELECT ss.id, ss.step_order, ss.channel, ss.template_ref, s.name AS sequence_name
+      `SELECT ss.id, ss.step_order, ss.channel, ss.template_ref, ss.subject, ss.body,
+              s.name AS sequence_name
          FROM sequence_steps ss
          JOIN sequences s ON s.id = ss.sequence_id AND s.company_id = ss.company_id
-        WHERE ss.company_id = $1 AND ss.template_ref IS NOT NULL
+        WHERE ss.company_id = $1 AND (ss.template_ref IS NOT NULL OR ss.body IS NOT NULL)
         ORDER BY s.name ASC, ss.step_order ASC
         LIMIT 100`,
       [companyId]
     );
-    res.json({
-      total: steps.rows.length,
-      templates: steps.rows.map(t => ({
-        ...t,
-        body: aiDraft.resolveTokens(t.template_ref, { contact, stageLabel }),
-      })),
-    });
+    const out = [];
+    for (const t of steps.rows) {
+      const resolved = await templatesDb.resolveStepContent(companyId, t, contact, { stageLabel });
+      // A step whose content does not resolve is still listed, flagged — the
+      // operator needs to see that a rung of their ladder has no copy, not have
+      // it quietly disappear from the picker.
+      out.push({
+        id: t.id, step_order: t.step_order, channel: t.channel, template_ref: t.template_ref,
+        sequence_name: t.sequence_name,
+        subject: resolved.subject,
+        body: resolved.body,
+        resolved: resolved.resolved,
+        reason: resolved.reason,
+      });
+    }
+    // Standalone templates the operator authored that no step references yet.
+    const standalone = await templatesDb.listTemplates(companyId);
+    for (const tpl of standalone) {
+      if (out.some(o => o.template_ref === tpl.ref)) continue;
+      const resolved = await templatesDb.resolveStepContent(
+        companyId, { channel: tpl.channel || 'email', template_ref: tpl.ref }, contact, { stageLabel });
+      out.push({
+        id: tpl.id, step_order: null, channel: tpl.channel, template_ref: tpl.ref,
+        sequence_name: '(standalone template)',
+        subject: resolved.subject, body: resolved.body,
+        resolved: resolved.resolved, reason: resolved.reason,
+      });
+    }
+    res.json({ total: out.length, templates: out });
   } catch (err) {
     console.error('[CRM] GET /inbox/:contactId/templates error:', err.message);
     res.status(500).json({ error: 'failed to load templates' });
