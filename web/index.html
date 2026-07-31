@@ -1112,6 +1112,8 @@ function renderStageRows(){
   $("#stage-rows").innerHTML=editStages.map((s,i)=>`<div class="stage-row" draggable="true" data-idx="${i}">
     <span class="handle">⠿</span><input class="scolor" type="color" value="${esc(s.color||"#667085")}" data-idx="${i}">
     <input class="sname" value="${esc(s.name)}" data-idx="${i}" placeholder="Stage name">
+    ${s.mode==="manual"?`<span class="tag" title="Only a human may set this stage — the CRM never auto-advances into it">manual</span>`:""}
+    ${s.terminal?`<span class="tag" title="Entering this stage closes the deal">terminal</span>`:""}
     <button class="del" data-idx="${i}">×</button></div>`).join("");
 }
 $("#pipe-editor").addEventListener("input",e=>{const i=e.target.dataset.idx;if(i==null)return;
@@ -1201,11 +1203,16 @@ function openAddStepModal(s){
     try{await post(`sequences/${s.id}/steps`,body);closeModal();toast("Step added");loadSequencesTab();}
     catch(e){toast(e.message,true);}};
 }
-$("#new-sequence").onclick=()=>{
+$("#new-sequence").onclick=async()=>{
+  // Pipeline options come from the real list (incl. funnel-typed webinar
+  // pipelines) — the server validates pipeline_key+trigger_stage anyway.
+  let seqPipes=[];try{seqPipes=((await get("pipelines")).pipelines||[]);}catch(_){}
+  const pipeOpts=[{value:"",label:"Manual only (no auto-enroll)"}]
+    .concat(seqPipes.map(p=>({value:p.key,label:p.name||p.key})));
   openModal("New sequence",
     field("Name","name",{placeholder:"e.g. Segmented Welcome"})+
-    field("Auto-enroll on pipeline","pipeline_key",{type:"select",options:[{value:"",label:"Manual only (no auto-enroll)"},{value:"marketing",label:"Marketing"},{value:"sales",label:"Sales"}]})+
-    field("...reaching stage","trigger_stage",{placeholder:"e.g. segmented, contacted"}),
+    field("Auto-enroll on pipeline","pipeline_key",{type:"select",options:pipeOpts})+
+    field("...reaching stage","trigger_stage",{placeholder:"e.g. segmented, no_show_followup_1"}),
     `<button class="btn" onclick="closeModal()">Cancel</button><button class="btn primary" id="save-seq">Create</button>`);
   $("#save-seq").onclick=async()=>{const v=formValues();if(!v.name)return toast("Name required",true);
     const body={name:v.name};

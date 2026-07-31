@@ -6,8 +6,13 @@ const contactDb = require('../db/models/contacts');
 const companyDb = require('../db/models/companies');
 const tenantDb = require('../db/models/tenants');
 const sequenceDb = require('../db/models/sequences');
+const limitDb = require('../db/models/limits');
 const { query } = require('../db/index');
-const { getPipelineConfig, getPipelineTransitions } = require('../db/pipeline');
+const {
+  getPipelineConfig, getPipelineTransitions,
+  isManualStage, isTerminalStage, terminalStageKeys,
+  findFunnelContactPipelineForStage, onPipelineCacheInvalidate,
+} = require('../db/pipeline');
 
 const { requireAuth, getUserCompanyId } = require('../middleware/auth');
 
@@ -92,6 +97,9 @@ async function resolveDealStageTransitions(companyId, fromStage) {
 
 const _pipelineCache = new Map();
 const PIPELINE_TTL_MS = 60 * 1000;
+// A pipeline-config write (pipelines.js) clears this cache too, so
+// GET /pipeline/transitions reflects an override immediately.
+onPipelineCacheInvalidate(companyId => _pipelineCache.delete(companyId));
 
 async function getPipelineStages(companyId) {
   const cached = _pipelineCache.get(companyId);
@@ -167,6 +175,35 @@ async function loadDeals(companyId, { limit = 500 } = {}) {
 
 function broadcast(req, message) {
   // no-op — no WebSocket in standalone CRM
+}
+
+// CP1 decision 7: a funnel-typed deal sitting in a "terminal": true stage
+// (e.g. webinar_sales/disqualified) counts as CLOSED in stats — non-terminal
+// webinar stages counting as "open" is accepted for CP1. Returns
+// ['webinar_sales:disqualified', ...] for every funnel-typed deal pipeline
+// visible to this company (tenant override wins, same precedence as
+// getPipelineConfig). Empty on any DB error — stats then degrade to the
+// legacy won/lost-only closed set rather than failing the request.
+async function funnelTerminalPairs(companyId) {
+  try {
+    const r = await query(
+      `SELECT DISTINCT ON (key) key, stages FROM crm_pipeline_configs
+        WHERE funnel_type IS NOT NULL AND entity_type = 'deal'
+          AND (company_id = $1 OR company_id IS NULL)
+        ORDER BY key, (company_id IS NOT NULL) DESC, created_at ASC`,
+      [companyId]
+    );
+    const pairs = [];
+    for (const row of r.rows) {
+      const stages = Array.isArray(row.stages) ? row.stages : [];
+      for (const s of stages) {
+        if (s && s.terminal === true && s.key) pairs.push(`${row.key}:${s.key}`);
+      }
+    }
+    return pairs;
+  } catch (_e) {
+    return [];
+  }
 }
 
 async function triggerStageAutomation(contact, oldStage, newStage) {
@@ -531,6 +568,19 @@ router.patch('/contacts/:id', async (req, res) => {
       const oldStage = existing.deal_stage || 'lead';
       const newStage = updates.deal_stage;
 
+      // CP1 decision 10: while a contact sits in a funnel-typed CONTACT
+      // pipeline (its marketing_stage is one of that pipeline's stages),
+      // direct deal_stage writes are rejected — the legacy resolver below
+      // returns undefined for stages it doesn't know and would skip the gate
+      // entirely, letting free writes corrupt the funnel board via the
+      // deal_stage→marketing mirror relationship.
+      const funnelKey = await findFunnelContactPipelineForStage(companyId, existing.marketing_stage);
+      if (funnelKey) {
+        return res.status(400).json({
+          error: `contact is in the funnel pipeline '${funnelKey}' — use POST /contacts/:id/advance to change its stage`,
+        });
+      }
+
       // Config-driven check — same authority as POST /advance (E3.3).
       const allowedTransitions = await resolveDealStageTransitions(companyId, oldStage);
       if (allowedTransitions && !allowedTransitions.includes(newStage)) {
@@ -632,8 +682,21 @@ router.post('/contacts/:id/activity', validate(), async (req, res) => {
 // POST /api/crm/contacts/:id/advance
 // Advances a contact through a named pipeline. Validates against the pipeline's
 // allowed_transitions; rejects illegal jumps with 409. Idempotent if already at stage.
-// pipeline_key='marketing' → updates contacts.marketing_stage (mirrors to deal_stage)
-// pipeline_key='sales'     → updates the contact's active deals row
+// Contact-entity pipelines ('marketing', funnel-typed entity_type='contact') →
+//   updates contacts.marketing_stage (mirrors to deal_stage).
+// Deal-entity pipelines ('sales', funnel-typed entity_type='deal') → updates the
+//   contact's active deals row on that pipeline.
+// Untyped custom keys (migration 009) are NOT traversable here — 400, exactly
+// as before CP1 (their deals move freely via PATCH /deals/:id).
+//
+// CP1 mode gate: body flag `automated: true` marks a programmatic caller; a
+// funnel-typed stage with mode:'manual' then 403s (error_code 'manual_stage').
+// KNOWN LIMITATION (accepted in the CP1 ticket): the flag is honor-system —
+// engines and humans share the same API-key auth today, so a caller that
+// simply omits the flag is indistinguishable from a human. Principal-based
+// derivation needs A7's identity work (gated). This is a correctness seam for
+// well-behaved automation (CP2's scheduler must send it), not a security
+// boundary — do not treat it as one.
 router.post('/contacts/:id/advance', async (req, res) => {
   try {
     const companyId = getUserCompanyId(req);
@@ -641,6 +704,7 @@ router.post('/contacts/:id/advance', async (req, res) => {
 
     const { pipeline_key, stage, reason, actor } = req.body;
     if (!pipeline_key || !stage) return res.status(400).json({ error: 'pipeline_key and stage required' });
+    const automated = req.body.automated === true;
 
     const contact = await contactDb.getById(req.params.id, companyId);
     if (!contact) return res.status(404).json({ error: 'contact not found' });
@@ -648,15 +712,60 @@ router.post('/contacts/:id/advance', async (req, res) => {
     const pipeline = await getPipelineConfig(companyId, pipeline_key);
     if (!pipeline) return res.status(404).json({ error: `Pipeline '${pipeline_key}' not configured` });
 
-    if (pipeline_key === 'marketing') {
+    // Traversal is allowed only for the legacy builtins (exact pre-CP1
+    // behavior) and funnel-typed configs. An untyped custom key keeps its 400.
+    const isLegacyBuiltin = pipeline_key === 'marketing' || pipeline_key === 'sales';
+    if (!isLegacyBuiltin && !pipeline.funnel_type) {
+      return res.status(400).json({ error: `Unknown pipeline_key '${pipeline_key}' — use 'marketing' or 'sales'` });
+    }
+    const entityType = pipeline_key === 'marketing' ? 'contact'
+      : pipeline_key === 'sales' ? 'deal'
+      : pipeline.entity_type;
+
+    if (entityType === 'contact') {
       const currentStage = contact.marketing_stage || 'sourced';
       if (currentStage === stage) {
         return res.json({ contact_id: contact.id, pipeline_key, stage, previous: currentStage, changed: false });
       }
 
-      const allowed = getPipelineTransitions(pipeline, currentStage);
-      if (!allowed.includes(stage)) {
-        return res.status(409).json({ error: 'Illegal stage transition', current: currentStage, requested: stage, allowed });
+      // Mode gate before transition legality: "never auto-advance a manual
+      // stage" is the stronger invariant (see honor-system note above).
+      if (automated && isManualStage(pipeline, stage)) {
+        return res.status(403).json({
+          error: `Stage '${stage}' is manual — only a human may set it`,
+          error_code: 'manual_stage', pipeline_key, requested: stage,
+        });
+      }
+
+      const stageKeys = pipeline.stages.map(s => s.key);
+      if (stageKeys.includes(currentStage)) {
+        const allowed = getPipelineTransitions(pipeline, currentStage);
+        if (!allowed.includes(stage)) {
+          return res.status(409).json({ error: 'Illegal stage transition', current: currentStage, requested: stage, allowed });
+        }
+      } else {
+        // Entry rule (CP1 decision 5): a contact currently outside pipeline P
+        // may enter P only at its first stage. Refusals: a 'suppressed'
+        // contact, and an active all-channel suppression row (A5) — entering
+        // a new pipeline must not be a suppression escape.
+        if (currentStage === 'suppressed') {
+          return res.status(409).json({
+            error: `Contact is suppressed and may not enter pipeline '${pipeline_key}'`,
+            current: currentStage, requested: stage, allowed: [],
+          });
+        }
+        if (await limitDb.isSuppressed(companyId, contact.id, null)) {
+          return res.status(409).json({
+            error: `Contact has an active all-channel suppression and may not enter pipeline '${pipeline_key}'`,
+            current: currentStage, requested: stage, allowed: [],
+          });
+        }
+        if (stage !== stageKeys[0]) {
+          return res.status(409).json({
+            error: `Contact is not in pipeline '${pipeline_key}' — entry is only allowed at its first stage`,
+            current: currentStage, requested: stage, allowed: stageKeys.length ? [stageKeys[0]] : [],
+          });
+        }
       }
 
       // Update both marketing_stage and the legacy deal_stage mirror
@@ -667,7 +776,7 @@ router.post('/contacts/:id/advance', async (req, res) => {
 
       await addContactActivity(contact.id, companyId, {
         type: 'stage_change',
-        message: `Marketing stage: ${currentStage} → ${stage}${reason ? ' (' + reason + ')' : ''}`,
+        message: `${pipeline_key === 'marketing' ? 'Marketing stage' : `Stage (${pipeline_key})`}: ${currentStage} → ${stage}${reason ? ' (' + reason + ')' : ''}`,
         agent: actor || 'system',
         channel: null,
         data: { pipeline_key, from: currentStage, to: stage, reason: reason || null },
@@ -683,64 +792,92 @@ router.post('/contacts/:id/advance', async (req, res) => {
       });
     }
 
+    // Deal-entity pipelines. Legacy 'sales' owns deals with pipeline_key NULL
+    // or 'sales' and keeps its hardcoded won/lost active-filter (exact pre-CP1
+    // behavior — existing deals are never orphaned). A funnel-typed pipeline
+    // owns exactly the deals carrying its key, active = not in a terminal
+    // stage. A contact holding BOTH a legacy sales deal and e.g. a
+    // webinar_sales deal has each advanced independently by its own key.
+    let dealRes;
     if (pipeline_key === 'sales') {
-      // Built-in sales pipeline only — deals parked in a custom pipeline
-      // (migration 009) are not governed by the sales state machine.
-      const dealRes = await query(
+      dealRes = await query(
         `SELECT * FROM deals WHERE contact_id=$1 AND company_id=$2 AND stage NOT IN ('won','lost')
            AND (pipeline_key IS NULL OR pipeline_key='sales')
          ORDER BY created_at DESC LIMIT 1`,
         [contact.id, companyId]
       );
-      const deal = dealRes.rows[0];
-      if (!deal) return res.status(404).json({ error: 'No active sales deal found for this contact' });
-
-      const currentStage = deal.stage;
-      if (currentStage === stage) {
-        return res.json({ contact_id: contact.id, deal_id: deal.id, pipeline_key, stage, previous: currentStage, changed: false });
-      }
-
-      const allowed = getPipelineTransitions(pipeline, currentStage);
-      if (!allowed.includes(stage)) {
-        return res.status(409).json({ error: 'Illegal stage transition', current: currentStage, requested: stage, allowed });
-      }
-
-      const meta = (typeof deal.metadata === 'string' ? JSON.parse(deal.metadata) : deal.metadata) || {};
-      const activity = meta.activity || [];
-      activity.push({ type: 'stage_change', message: `Stage: ${currentStage} → ${stage}`, timestamp: new Date().toISOString(), actor: actor || 'system' });
-      if (['won', 'lost'].includes(stage)) meta.closed_at = new Date().toISOString();
-
-      await query(
-        `UPDATE deals SET stage=$1, metadata=$2, updated_at=now() WHERE id=$3 AND company_id=$4`,
-        [stage, JSON.stringify({ ...meta, activity }), deal.id, companyId]
+    } else {
+      dealRes = await query(
+        `SELECT * FROM deals WHERE contact_id=$1 AND company_id=$2 AND pipeline_key=$3
+           AND NOT (stage = ANY($4::text[]))
+         ORDER BY created_at DESC LIMIT 1`,
+        [contact.id, companyId, pipeline_key, terminalStageKeys(pipeline)]
       );
-
-      await addContactActivity(contact.id, companyId, {
-        type: 'stage_change',
-        message: `Sales stage: ${currentStage} → ${stage}${reason ? ' (' + reason + ')' : ''}`,
-        agent: actor || 'system',
-        channel: null,
-        data: { pipeline_key, deal_id: deal.id, from: currentStage, to: stage, reason: reason || null },
-      });
-
-      // Sales nurture off-ramp → recycle the contact to marketing's nurture queue.
-      let marketing_recycled;
-      if (stage === 'nurture') {
-        marketing_recycled = await recycleContactToMarketingNurture(contact.id, companyId, { dealId: deal.id, actor: actor || 'system' });
-      }
-
-      // GOAL B2: a real (non-idempotent) stage transition auto-enrolls the
-      // contact into any active sequence configured to trigger on this stage.
-      const sequenceEnrollments = await sequenceDb.enrollForTriggerStage(companyId, contact.id, pipeline_key, stage);
-
-      return res.json({
-        contact_id: contact.id, deal_id: deal.id, pipeline_key, stage, previous: currentStage, changed: true,
-        ...(marketing_recycled !== undefined ? { marketing_recycled } : {}),
-        ...(sequenceEnrollments.length ? { sequence_enrollments: sequenceEnrollments } : {}),
+    }
+    const deal = dealRes.rows[0];
+    if (!deal) {
+      return res.status(404).json({
+        error: pipeline_key === 'sales'
+          ? 'No active sales deal found for this contact'
+          : `No active ${pipeline_key} deal found for this contact`,
       });
     }
 
-    return res.status(400).json({ error: `Unknown pipeline_key '${pipeline_key}' — use 'marketing' or 'sales'` });
+    const currentStage = deal.stage;
+    if (currentStage === stage) {
+      return res.json({ contact_id: contact.id, deal_id: deal.id, pipeline_key, stage, previous: currentStage, changed: false });
+    }
+
+    if (automated && isManualStage(pipeline, stage)) {
+      return res.status(403).json({
+        error: `Stage '${stage}' is manual — only a human may set it`,
+        error_code: 'manual_stage', pipeline_key, requested: stage,
+      });
+    }
+
+    const allowed = getPipelineTransitions(pipeline, currentStage);
+    if (!allowed.includes(stage)) {
+      return res.status(409).json({ error: 'Illegal stage transition', current: currentStage, requested: stage, allowed });
+    }
+
+    const meta = (typeof deal.metadata === 'string' ? JSON.parse(deal.metadata) : deal.metadata) || {};
+    const activity = meta.activity || [];
+    activity.push({ type: 'stage_change', message: `Stage: ${currentStage} → ${stage}`, timestamp: new Date().toISOString(), actor: actor || 'system' });
+    // Terminal semantics: won/lost (legacy) and any "terminal": true funnel
+    // stage close the deal.
+    if (['won', 'lost'].includes(stage) || isTerminalStage(pipeline, stage)) meta.closed_at = new Date().toISOString();
+
+    await query(
+      `UPDATE deals SET stage=$1, metadata=$2, updated_at=now() WHERE id=$3 AND company_id=$4`,
+      [stage, JSON.stringify({ ...meta, activity }), deal.id, companyId]
+    );
+
+    await addContactActivity(contact.id, companyId, {
+      type: 'stage_change',
+      message: `${pipeline_key === 'sales' ? 'Sales stage' : `Stage (${pipeline_key})`}: ${currentStage} → ${stage}${reason ? ' (' + reason + ')' : ''}`,
+      agent: actor || 'system',
+      channel: null,
+      data: { pipeline_key, deal_id: deal.id, from: currentStage, to: stage, reason: reason || null },
+    });
+
+    // Sales nurture off-ramp → recycle the contact to marketing's nurture
+    // queue. Built-in sales ONLY — never generalized to other deal pipelines
+    // (CP1 decision 6): a funnel/custom pipeline may name a stage 'nurture'
+    // without marketing-recycle semantics.
+    let marketing_recycled;
+    if (pipeline_key === 'sales' && stage === 'nurture') {
+      marketing_recycled = await recycleContactToMarketingNurture(contact.id, companyId, { dealId: deal.id, actor: actor || 'system' });
+    }
+
+    // GOAL B2: a real (non-idempotent) stage transition auto-enrolls the
+    // contact into any active sequence configured to trigger on this stage.
+    const sequenceEnrollments = await sequenceDb.enrollForTriggerStage(companyId, contact.id, pipeline_key, stage);
+
+    return res.json({
+      contact_id: contact.id, deal_id: deal.id, pipeline_key, stage, previous: currentStage, changed: true,
+      ...(marketing_recycled !== undefined ? { marketing_recycled } : {}),
+      ...(sequenceEnrollments.length ? { sequence_enrollments: sequenceEnrollments } : {}),
+    });
   } catch (err) {
     console.error('[CRM] POST /contacts/:id/advance error:', err.message);
     res.status(500).json({ error: 'advance failed' });
@@ -769,7 +906,10 @@ router.get('/deals', async (req, res) => {
     const pipeline = {};
     DEAL_STAGES.forEach(s => { pipeline[s] = deals.filter(d => d.stage === s); });
 
-    const totalValue = deals.filter(d => d.stage !== 'lost').reduce((s, d) => s + (d.value || 0), 0);
+    // Terminal funnel stages count as closed alongside 'lost' (CP1 decision 7).
+    const terminalPairs = new Set(await funnelTerminalPairs(companyId));
+    const isTerminalDeal = d => terminalPairs.has(`${d.pipeline_key || ''}:${d.stage}`);
+    const totalValue = deals.filter(d => d.stage !== 'lost' && !isTerminalDeal(d)).reduce((s, d) => s + (d.value || 0), 0);
     const wonValue = deals.filter(d => d.stage === 'won').reduce((s, d) => s + (d.value || 0), 0);
 
     res.json({ total: filtered.length, deals: filtered, pipeline, stats: { totalValue, wonValue } });
@@ -792,7 +932,32 @@ router.post('/deals', validate(), async (req, res) => {
     if (pipelineKey) {
       const cfg = await getPipelineConfig(companyId, pipelineKey);
       const keys = cfg ? cfg.stages.map(s => s.key) : [];
-      initialStage = (stage && keys.includes(stage)) ? stage : (keys[0] || 'lead');
+      if (cfg && cfg.funnel_type) {
+        // CP1: funnel-typed pipelines validate explicitly — a non-member
+        // initial stage is a 400, not the silent stages[0] coercion the
+        // untyped path below does. Deals may only live in deal-entity
+        // pipelines (a webinar_marketing "deal" would be unreachable by
+        // every stage authority).
+        if (cfg.entity_type !== 'deal') {
+          return res.status(400).json({ error: `pipeline '${pipelineKey}' is a ${cfg.entity_type} pipeline — deals cannot be created in it` });
+        }
+        if (stage && !keys.includes(stage)) {
+          return res.status(400).json({ error: `stage '${stage}' is not a stage of pipeline '${pipelineKey}'`, allowed_stages: keys });
+        }
+        initialStage = stage || keys[0] || 'lead';
+        // Mode gate on CREATION too — otherwise `automated: true` could mint a
+        // fresh deal directly inside a manual stage (and that new deal would
+        // win the active-deal lookup), sidestepping /advance's 403. Same
+        // honor-system caveat as /advance (see the comment there).
+        if (req.body.automated === true && isManualStage(cfg, initialStage)) {
+          return res.status(403).json({
+            error: `Stage '${initialStage}' is manual — only a human may set it`,
+            error_code: 'manual_stage', pipeline_key: pipelineKey, requested: initialStage,
+          });
+        }
+      } else {
+        initialStage = (stage && keys.includes(stage)) ? stage : (keys[0] || 'lead');
+      }
     } else {
       initialStage = DEAL_STAGES.includes(stage) ? stage : 'lead';
     }
@@ -902,8 +1067,23 @@ router.patch('/deals/:id', async (req, res) => {
     if (updates.contact_id) deal.contact_id = updates.contact_id;
     if (updates.contact_name) deal.contact_name = updates.contact_name;
     // Move a deal to a different pipeline (null / 'sales' => built-in sales).
+    // CP1: re-keying is REFUSED whenever either side is funnel-typed — a
+    // rekey out of a funnel is an ungated exit from its state machine, and a
+    // rekey in plants the deal at a stage that was never membership- or
+    // mode-checked (a chain of rekeys would otherwise bypass every gate
+    // below). Untyped↔untyped/legacy rekeys keep their pre-CP1 behavior.
     if (updates.pipeline_key !== undefined) {
-      deal.pipeline_key = updates.pipeline_key && updates.pipeline_key !== 'sales' ? updates.pipeline_key : null;
+      const newKey = updates.pipeline_key && updates.pipeline_key !== 'sales' ? updates.pipeline_key : null;
+      if (newKey !== deal.pipeline_key) {
+        const oldCfg = deal.pipeline_key ? await getPipelineConfig(companyId, deal.pipeline_key) : null;
+        const newCfg = newKey ? await getPipelineConfig(companyId, newKey) : null;
+        if ((oldCfg && oldCfg.funnel_type) || (newCfg && newCfg.funnel_type)) {
+          return res.status(400).json({
+            error: 'deals cannot be re-keyed into or out of a funnel-typed pipeline — create a new deal in the target pipeline instead',
+          });
+        }
+      }
+      deal.pipeline_key = newKey;
     }
 
     let stageChangeForEnrollment = null; // set below, fired only after persistence
@@ -912,13 +1092,36 @@ router.patch('/deals/:id', async (req, res) => {
       const oldStage = deal.stage;
       const newStage = updates.stage;
 
-      // Only the built-in sales pipeline gates transitions (same source as
-      // /advance, preserving the automation contract). Custom pipelines move
-      // freely — the operator designed them.
+      // Only the built-in sales pipeline and funnel-typed pipelines gate
+      // transitions (same source as /advance, preserving the automation
+      // contract). Untyped custom pipelines (migration 009) move freely —
+      // the operator designed them.
+      let dealPipelineCfg = null;
       if (!deal.pipeline_key) {
         const salesPipeline = await getPipelineConfig(companyId, 'sales');
         if (salesPipeline) {
           const allowed = getPipelineTransitions(salesPipeline, oldStage);
+          if (!allowed.includes(newStage)) {
+            return res.status(409).json({
+              error: `Invalid stage transition: ${oldStage} → ${newStage}`,
+              allowed_transitions: allowed,
+              current_stage: oldStage,
+            });
+          }
+        }
+      } else {
+        dealPipelineCfg = await getPipelineConfig(companyId, deal.pipeline_key);
+        if (dealPipelineCfg && dealPipelineCfg.funnel_type) {
+          // CP1: funnel-typed deals are mode-gated (`automated: true` may not
+          // set a manual stage — honor-system flag, see the /advance comment
+          // for the accepted limitation) and transition-gated like /advance.
+          if (req.body.automated === true && isManualStage(dealPipelineCfg, newStage)) {
+            return res.status(403).json({
+              error: `Stage '${newStage}' is manual — only a human may set it`,
+              error_code: 'manual_stage', pipeline_key: deal.pipeline_key, requested: newStage,
+            });
+          }
+          const allowed = getPipelineTransitions(dealPipelineCfg, oldStage);
           if (!allowed.includes(newStage)) {
             return res.status(409).json({
               error: `Invalid stage transition: ${oldStage} → ${newStage}`,
@@ -935,7 +1138,8 @@ router.patch('/deals/:id', async (req, res) => {
         timestamp: new Date().toISOString()
       });
       deal.stage = newStage;
-      if (newStage === 'won' || newStage === 'lost') {
+      if (newStage === 'won' || newStage === 'lost'
+          || (dealPipelineCfg && dealPipelineCfg.funnel_type && isTerminalStage(dealPipelineCfg, newStage))) {
         deal.closed_at = new Date().toISOString();
       }
       if (deal.contact_id) {
@@ -1006,6 +1210,10 @@ router.get('/stats', async (req, res) => {
     const companyId = getUserCompanyId(req);
     if (!companyId) return res.status(401).json({ error: 'Authentication required' });
 
+    // Terminal funnel stages count as closed (CP1 decision 7): excluded from
+    // open/pipeline_value the same way won/lost are, while still in total.
+    const terminalPairs = await funnelTerminalPairs(companyId);
+
     const [contactSummary, contactBySource, contactByStage,
            dealSummary, dealByStage, campaignSummary] = await Promise.all([
       query(
@@ -1031,13 +1239,15 @@ router.get('/stats', async (req, res) => {
       query(
         `SELECT
            COUNT(*)::int                                                             AS total,
-           COUNT(*) FILTER (WHERE stage NOT IN ('won','lost'))::int                 AS open,
+           COUNT(*) FILTER (WHERE stage NOT IN ('won','lost')
+             AND NOT (COALESCE(pipeline_key,'') || ':' || stage = ANY($2::text[])))::int AS open,
            COUNT(*) FILTER (WHERE stage = 'won')::int                               AS won,
            COUNT(*) FILTER (WHERE stage = 'lost')::int                              AS lost,
-           COALESCE(SUM(value) FILTER (WHERE stage NOT IN ('won','lost')), 0)::numeric AS pipeline_value,
+           COALESCE(SUM(value) FILTER (WHERE stage NOT IN ('won','lost')
+             AND NOT (COALESCE(pipeline_key,'') || ':' || stage = ANY($2::text[]))), 0)::numeric AS pipeline_value,
            COALESCE(SUM(value) FILTER (WHERE stage = 'won'), 0)::numeric            AS won_value
          FROM deals WHERE company_id = $1`,
-        [companyId]
+        [companyId, terminalPairs]
       ),
       query(
         `SELECT stage, COUNT(*)::int AS count FROM deals

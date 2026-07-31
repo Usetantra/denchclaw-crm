@@ -112,3 +112,9 @@ CRM_API_BASE="http://127.0.0.1:${TEST_PORT}" \
 INTERNAL_API_KEY="$KEY" \
 DATABASE_URL="$DATABASE_URL_TEST" \
 node test/unit-a3-api-key-auth.mjs
+
+echo "[test] running CP1 funnel-pipelines verification (funnel_type + webinar stage machines)"
+CRM_API_BASE="http://127.0.0.1:${TEST_PORT}" \
+INTERNAL_API_KEY="$KEY" \
+DATABASE_URL="$DATABASE_URL_TEST" \
+node test/unit-cp1-funnel-pipelines.mjs

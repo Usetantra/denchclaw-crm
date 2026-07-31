@@ -7,7 +7,7 @@ const { query } = require('../db/index');
 const { requireAuth, getUserCompanyId } = require('../middleware/auth');
 const contactDb = require('../db/models/contacts');
 const sequenceDb = require('../db/models/sequences');
-const { getPipelineConfig, getPipelineTransitions } = require('../db/pipeline');
+const { getPipelineConfig, getPipelineTransitions, isManualStage } = require('../db/pipeline');
 
 router.use(requireAuth);
 
@@ -201,7 +201,13 @@ router.post('/conversations/:id/messages', async (req, res) => {
           if (pipeline) {
             const currentStage = contact.marketing_stage || 'sourced';
             const allowed = getPipelineTransitions(pipeline, currentStage);
-            if (allowed.includes('responded')) {
+            // CP1 mode gate: this auto-advance is programmatic by definition
+            // (it doesn't go through /advance, so the `automated` body flag
+            // never applies here) — a mode:'manual' target stage must never
+            // be set by it. Legacy marketing configs carry no mode, so this
+            // is a no-op today; it exists so a funnel-typed/overridden config
+            // that marks 'responded' manual is respected.
+            if (allowed.includes('responded') && !isManualStage(pipeline, 'responded')) {
               await query(
                 `UPDATE contacts SET marketing_stage = 'responded', deal_stage = 'responded',
                   updated_at = now() WHERE id = $1 AND company_id = $2`,

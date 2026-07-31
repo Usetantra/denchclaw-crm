@@ -7,6 +7,7 @@
 const express = require('express');
 const router = express.Router();
 const seqDb = require('../db/models/sequences');
+const { getPipelineConfig } = require('../db/pipeline');
 const { requireAuth, getUserCompanyId } = require('../middleware/auth');
 
 router.use(requireAuth);
@@ -37,8 +38,23 @@ router.post('/', async (req, res) => {
     if (!companyId) return res.status(401).json({ error: 'Authentication required' });
     const { name, pipeline_key, trigger_stage } = req.body || {};
     if (!name || !String(name).trim()) return res.status(400).json({ error: 'name required' });
-    if (pipeline_key && !['marketing', 'sales'].includes(pipeline_key)) {
-      return res.status(400).json({ error: "pipeline_key must be 'marketing' or 'sales'" });
+    // Config-driven (CP1 decision 9): any pipeline this tenant can resolve is
+    // a valid trigger source. getPipelineConfig's (company_id = $2 OR
+    // company_id IS NULL) scoping IS the tenant-isolation guarantee here —
+    // tenant A can never reference tenant B's company-scoped key.
+    // Known+accepted: the loader's 60s cache means a just-deleted pipeline
+    // still validates for up to a minute.
+    if (pipeline_key) {
+      const cfg = await getPipelineConfig(companyId, pipeline_key);
+      if (!cfg) return res.status(400).json({ error: `unknown pipeline_key '${pipeline_key}'` });
+      // A typo'd trigger_stage used to be accepted and then silently never
+      // fire — reject it against the pipeline's real stage keys instead.
+      if (trigger_stage && !cfg.stages.some(s => s && s.key === trigger_stage)) {
+        return res.status(400).json({
+          error: `trigger_stage '${trigger_stage}' is not a stage of pipeline '${pipeline_key}'`,
+          allowed_stages: cfg.stages.map(s => s.key),
+        });
+      }
     }
     const sequence = await seqDb.createSequence({
       companyId, name: String(name).trim(), pipelineKey: pipeline_key || null, triggerStage: trigger_stage || null,
