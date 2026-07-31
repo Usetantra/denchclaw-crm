@@ -309,6 +309,77 @@ async function main() {
   const msgsAfter = (await db.query('SELECT count(*)::int n FROM messages')).rows[0].n;
   check('C11 preview creates no messages rows', msgsBefore === msgsAfter, `${msgsBefore} -> ${msgsAfter}`);
 
+
+  // ── C15 — the legacy-queue interaction, end to end ────────────────────────
+  // The orchestrator's specific worry: jobs materialised BEFORE this migration
+  // carry payload '{}' with no content key at all, and they are the FIRST thing
+  // an executor meets. "Send blank mail" must not re-enter through the back door
+  // of the migration written to stop it. Proven WITHOUT calling any sender.
+  {
+    const lSeq = await seqDb.createSequence({ companyId: CO, name: `C15 legacy ${RUN}`, pipelineKey: 'webinar_sales' });
+    const lStep = await seqDb.addStep(lSeq.id, CO, { stepOrder: 1, channel: 'email', templateRef: 'ghost_ref_c15' });
+    const lContact = await mkContact('C15 OldProspect');
+    const lEnr = await seqDb.enroll(CO, { sequenceId: lSeq.id, contactId: lContact.id });
+    const lJob = (await jobsFor(lEnr.id))[0];
+    // Exactly the pre-021 shape: pending, DUE, payload '{}'.
+    await db.query(`UPDATE scheduled_actions SET payload='{}'::jsonb, status='pending',
+                    scheduled_for=now()-interval '1 hour' WHERE id=$1`, [lJob.id]);
+    const raw = payloadOf((await db.query('SELECT payload FROM scheduled_actions WHERE id=$1', [lJob.id])).rows[0]);
+    check('C15 the legacy job genuinely has NO content_resolved key (the third state)',
+      !Object.prototype.hasOwnProperty.call(raw, 'content_resolved'), JSON.stringify(raw));
+    // 1. Identifiable as content-less WITHOUT calling the sender.
+    const res = await templatesDb.resolveStepContent(CO, lStep, lContact);
+    check('C15 resolveStepContent has a DEFINED content-less outcome (not an exception)',
+      res.resolved === false && res.body === null && typeof res.reason === 'string', JSON.stringify(res));
+    check('C15 …naming the ref that resolves to nothing', /ghost_ref_c15/.test(res.reason), res.reason);
+    // 2. The claim door refuses it even though it is due.
+    const claimed = await req('POST', '/api/crm/channel-jobs/claim', { channel: 'email', limit: 100, claimed_by: 'c15' });
+    check('C15 a DUE legacy job is never handed to an executor',
+      !(claimed.json?.jobs || []).some(j => j.job_id === lJob.id), JSON.stringify(claimed.json?.jobs?.length));
+    const still = (await db.query('SELECT status FROM scheduled_actions WHERE id=$1', [lJob.id])).rows[0];
+    check('C15 …and stays PENDING, so the ladder is not advanced past a step nobody received',
+      still.status === 'pending', still.status);
+    // 3. The migration marks it, so "no third state" holds for pre-021 rows too.
+    await db.query(mig);
+    const marked = payloadOf((await db.query('SELECT payload FROM scheduled_actions WHERE id=$1', [lJob.id])).rows[0]);
+    check('C15 migration 021 marks the legacy job content_resolved=false',
+      marked.content_resolved === false && marked.body === null, JSON.stringify(marked));
+    // 4. Readiness reports it before anything fires.
+    const ready = await req('GET', `/api/crm/sequences/${lSeq.id}/content`);
+    check('C15 readiness reports the sequence NOT sendable, without touching a sender',
+      ready.json?.sendable === false && ready.json?.unresolved_steps === 1, JSON.stringify(ready.json?.sendable));
+  }
+
+  // ── C16 — a template pinned to another channel is a CONFIG-TIME 400 ───────
+  // CP2's stage_writeback precedent: catch an authoring error while the human is
+  // authoring, not when the ladder fires at a prospect.
+  {
+    const cSeq = await req('POST', '/api/crm/sequences', { name: `C16 ${RUN}`, pipeline_key: 'webinar_sales' });
+    await req('POST', '/api/crm/templates', { ref: 'sms_only', channel: 'sms', body: 'SMS copy.' });
+    const bad = await req('POST', `/api/crm/sequences/${cSeq.json.id}/steps`,
+      { step_order: 1, channel: 'email', template_ref: 'sms_only' });
+    check('C16 an email step using an SMS-pinned template is refused at config time (400)',
+      bad.status === 400, `${bad.status} ${JSON.stringify(bad.json)}`);
+    check('C16 …and the 400 names both channels', /sms/.test(bad.json?.error || '') && /email/.test(bad.json?.error || ''), bad.json?.error);
+    const good = await req('POST', `/api/crm/sequences/${cSeq.json.id}/steps`,
+      { step_order: 1, channel: 'sms', template_ref: 'sms_only' });
+    check('C16 the matching channel is accepted', good.status === 201, JSON.stringify(good.json));
+    // channel NULL means ANY channel — the decision, made explicit and tested.
+    await req('POST', '/api/crm/templates', { ref: 'any_channel', body: 'Works anywhere.' });
+    const anyEmail = await req('POST', `/api/crm/sequences/${cSeq.json.id}/steps`,
+      { step_order: 2, channel: 'email', template_ref: 'any_channel' });
+    check('C16 a template with channel NULL is usable on ANY channel', anyEmail.status === 201, JSON.stringify(anyEmail.json));
+    const anyWhatsapp = await req('POST', `/api/crm/sequences/${cSeq.json.id}/steps`,
+      { step_order: 3, channel: 'whatsapp', template_ref: 'any_channel' });
+    check('C16 …including a different one on the same sequence', anyWhatsapp.status === 201, JSON.stringify(anyWhatsapp.json));
+    // A ref that does not exist YET is not a config error — copy is often
+    // authored after the ladder is laid out; readiness is what reports that.
+    const later = await req('POST', `/api/crm/sequences/${cSeq.json.id}/steps`,
+      { step_order: 4, channel: 'email', template_ref: 'not_written_yet' });
+    check('C16 a not-yet-authored ref is ACCEPTED at config time (readiness reports it instead)',
+      later.status === 201, JSON.stringify(later.json));
+  }
+
   // ── C12 — model guards ────────────────────────────────────────────────────
   const throws = async fn => { try { await fn(); return false; } catch { return true; } };
   check('C12 unscoped listTemplates throws', await throws(() => templatesDb.listTemplates(null)));

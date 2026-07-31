@@ -42,6 +42,12 @@ CREATE TABLE IF NOT EXISTS message_templates (
   id          UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
   company_id  TEXT NOT NULL REFERENCES tenants(id) ON DELETE RESTRICT,
   ref         TEXT NOT NULL,
+  -- channel NULL means ANY CHANNEL — copy that is not channel-specific and may
+  -- be used by a step on any channel. A non-NULL channel pins the template to
+  -- that channel, and a step whose own channel disagrees is refused at
+  -- CONFIGURATION time (server/routes/sequences.js), following CP2's
+  -- stage_writeback precedent: catch it when the sequence is authored, not when
+  -- it fires at a prospect.
   channel     TEXT CHECK (channel IS NULL OR channel IN ('email','sms','whatsapp','ai_call','linkedin')),
   subject     TEXT,
   -- btrim() with no arg strips SPACES only, so a body of E'\n\t' would pass a

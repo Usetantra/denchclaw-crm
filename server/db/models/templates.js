@@ -30,6 +30,20 @@ const { resolveTokens } = require('../../lib/ai-draft');
 // subject is meaningless, so its absence must never count as "unresolved".
 const SUBJECT_CHANNELS = ['email'];
 
+// A template's `channel` is a PIN, not a filter: NULL means "usable on any
+// channel", and a non-NULL value means the copy was written for that channel
+// specifically. Resolution deliberately does NOT re-check the pin — by then the
+// job is already queued and refusing would strand a contact mid-ladder for a
+// config mistake. The pin is enforced at configuration time instead
+// (server/routes/sequences.js), which is CP2's stage_writeback lesson: a
+// mismatch is an authoring error, and the moment to say so is while the human
+// is authoring.
+function templateChannelMismatch(template, stepChannel) {
+  if (!template || !template.channel || !stepChannel) return null;
+  if (template.channel === stepChannel) return null;
+  return `template '${template.ref}' is written for '${template.channel}' but this step sends on '${stepChannel}'`;
+}
+
 // ─── template CRUD (tenant-scoped) ───────────────────────────────────────────
 
 async function upsertTemplate(companyId, { ref, channel = null, subject = null, body }) {
@@ -226,7 +240,7 @@ async function sequenceContentReadiness(companyId, sequenceId, { sampleContact =
 }
 
 module.exports = {
-  upsertTemplate, getTemplate, listTemplates, deleteTemplate,
+  upsertTemplate, getTemplate, listTemplates, deleteTemplate, templateChannelMismatch,
   resolveStepContent, contentPayload, sequenceContentReadiness,
   SUBJECT_CHANNELS,
 };

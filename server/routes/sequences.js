@@ -199,6 +199,25 @@ router.post('/:id/steps', async (req, res) => {
       if (invalid) return res.status(400).json(invalid);
     }
 
+    // CP4a-0: a template pinned to another channel is an authoring error, and
+    // CP2's stage_writeback precedent says catch those at CONFIGURATION time
+    // rather than letting the sequence fire and discover it at a prospect. A
+    // ref that does not resolve yet is NOT an error here — copy is routinely
+    // authored after the ladder is laid out, and the readiness endpoint
+    // (GET /sequences/:id/content) is what reports that gap before switch-on.
+    if (template_ref && String(template_ref).trim()) {
+      const tpl = await templatesDb.getTemplate(companyId, template_ref);
+      const mismatch = templatesDb.templateChannelMismatch(tpl, channel);
+      if (mismatch) {
+        return res.status(400).json({
+          error: mismatch,
+          template_channel: tpl.channel,
+          step_channel: channel,
+          hint: 'use a template written for this channel, or clear the template\'s channel to make it usable on any channel',
+        });
+      }
+    }
+
     let step;
     try {
       step = await seqDb.addStep(req.params.id, companyId, {
