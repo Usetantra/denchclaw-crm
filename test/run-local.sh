@@ -64,6 +64,7 @@ PORT="$TEST_PORT" \
 INTERNAL_API_KEY="$KEY" \
 INTERNAL_API_KEYS="{\"$KEY\":\"*\",\"$LIMITED\":[\"co_bound_only\"]}" \
 AUTOMATION_ENV_FILE=/nonexistent \
+  RESEND_API_KEY="" CLOUDFLARE_AI_TOKEN="" \
 node server/server.js &
 SERVER_PID=$!
 
@@ -124,3 +125,9 @@ CRM_API_BASE="http://127.0.0.1:${TEST_PORT}" \
 INTERNAL_API_KEY="$KEY" \
 DATABASE_URL="$DATABASE_URL_TEST" \
 node test/unit-cp2-step-scheduler.mjs
+
+echo "[test] running CP-I unified inbox verification (unification -> unread -> thread union -> stage chips)"
+CRM_API_BASE="http://127.0.0.1:${TEST_PORT}" \
+INTERNAL_API_KEY="$KEY" \
+DATABASE_URL="$DATABASE_URL_TEST" \
+node test/unit-cpi-inbox.mjs

@@ -40,6 +40,10 @@ const CHANNEL_SENDERS = (() => {
   linkedin: [{ identity: 'tantra-growth',       label: 'Tantra Growth (LinkedIn)',            default: true }],
 };
 router.get('/channel-senders', (req, res) => res.json({ senders: CHANNEL_SENDERS }));
+// Exposed so other routers resolve the SAME connected identity rather than
+// re-deriving it (CP-I's inbox composer needs the "From" too, and a second copy
+// of this env parsing would drift the moment one is edited).
+router.channelSenders = CHANNEL_SENDERS;
 
 // No-op validator — engines send well-formed data; validation at API boundary
 const validate = () => (req, res, next) => next();

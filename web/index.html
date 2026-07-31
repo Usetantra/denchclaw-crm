@@ -300,6 +300,56 @@
   .stage-row input.scolor{width:28px;height:28px;padding:0;border:1px solid var(--hair);border-radius:6px;cursor:pointer;background:none}
   .stage-row .del{border:none;background:none;color:var(--ink-4);cursor:pointer;font-size:17px;line-height:1}
   .stage-row .del:hover{color:var(--hot)}
+  /* ── CP-I: unified inbox ───────────────────────────────────────────────── */
+  /* Three panes: filters+list ‖ thread ‖ contact record. Every serious inbox
+     converges on this shell; the CRM-specific move is that the third column is
+     the contact record rather than an ad rail. */
+  .ib-wrap{display:grid;grid-template-columns:320px minmax(0,1fr) 300px;gap:0;
+    border:1px solid var(--hair);border-radius:var(--radius);overflow:hidden;height:calc(100vh - 230px);min-height:480px}
+  .ib-col{display:flex;flex-direction:column;min-width:0;overflow:hidden}
+  .ib-col+.ib-col{border-left:1px solid var(--hair)}
+  .ib-head{padding:10px 12px;border-bottom:1px solid var(--hair);background:var(--hair-2);flex:0 0 auto}
+  .ib-scroll{overflow-y:auto;flex:1 1 auto;min-height:0}
+  .ib-row{padding:10px 12px;border-bottom:1px solid var(--hair);cursor:pointer;display:block}
+  .ib-row:hover{background:var(--hair-2)}
+  .ib-row.sel{background:var(--hair-2);box-shadow:inset 3px 0 0 var(--ink)}
+  .ib-row.unread .ib-name{font-weight:700}
+  .ib-row.unread .ib-snip{color:var(--ink);font-weight:500}
+  .ib-name{font-size:13px}
+  .ib-snip{font-size:12px;color:var(--ink-4);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .ib-dot{width:7px;height:7px;border-radius:50%;background:#2e90fa;display:inline-block;flex:0 0 auto}
+  .ib-msg{padding:8px 12px;display:flex;flex-direction:column;gap:3px;max-width:78%}
+  .ib-msg.out{margin-left:auto;align-items:flex-end}
+  .ib-bub{padding:8px 11px;border-radius:10px;font-size:13px;white-space:pre-wrap;word-break:break-word;
+    border:1px solid var(--hair);background:#fff}
+  .ib-msg.out .ib-bub{background:var(--hair-2)}
+  .ib-meta{font-size:10px;color:var(--ink-4);display:flex;gap:6px;align-items:center;flex-wrap:wrap}
+  .ib-undeliv .ib-bub{border-style:dashed;border-color:#f79009}
+  /* Stage chip vs tag chip: same family, never confusable. A stage is
+     authoritative state governed by CP1's mode gate; a tag is an arbitrary
+     label. So a stage chip carries a pipeline glyph and has NO remove control,
+     and `manual` is outlined + a person glyph so CP1's invariant is visible. */
+  .chip{display:inline-flex;align-items:center;gap:4px;font-size:11px;font-weight:600;
+    padding:2px 8px;border-radius:999px;border:1px solid transparent;line-height:1.6;white-space:nowrap}
+  .chip-stage{cursor:pointer}
+  .chip-stage.inert{cursor:default}
+  .chip-stage.manual{background:transparent!important}
+  .chip-stage.terminal{opacity:.6}
+  .chip-tag{background:var(--hair-2);color:var(--ink-3);border-color:var(--hair)}
+  .chip-x{cursor:pointer;opacity:.5;font-weight:700}
+  .chip-x:hover{opacity:1}
+  .ib-menu{position:absolute;z-index:60;background:#fff;border:1px solid var(--hair);border-radius:var(--radius);
+    box-shadow:0 8px 24px rgba(0,0,0,.12);min-width:210px;overflow:hidden}
+  .ib-menu button{display:block;width:100%;text-align:left;border:none;background:none;padding:8px 12px;
+    font-family:var(--sans);font-size:12px;cursor:pointer}
+  .ib-menu button:hover{background:var(--hair-2)}
+  .ib-tabs{display:flex;gap:0;border:1px solid var(--hair);border-radius:var(--radius);overflow:hidden;width:fit-content}
+  .ib-tabs button{border:none;background:none;font-family:var(--sans);font-size:11px;font-weight:600;
+    padding:5px 12px;cursor:pointer;border-right:1px solid var(--hair)}
+  .ib-tabs button:last-child{border-right:none}
+  .ib-tabs button.active{background:var(--ink);color:#fff}
+  .ib-empty{padding:40px 20px;text-align:center;color:var(--ink-4);font-size:13px}
+  .ib-empty svg{opacity:.35;margin-bottom:10px}
 </style>
 </head>
 <body>
@@ -433,8 +483,47 @@
 
   <!-- ── INBOX ──────────────────────────────────────────────────────────── -->
   <div id="view-inbox" style="display:none">
-  <div class="sechead"><span class="eyebrow">Unified AI Inbox</span><span class="rule"></span></div>
-  <div class="filter-tabs" id="inbox-filters">
+  <!-- CP-I: the unified Inbox. Contact-centred, every channel in one thread.
+       Additive — main's per-channel conversation table is preserved below. -->
+  <div class="sechead"><span class="eyebrow">Inbox</span><span class="rule"></span></div>
+  <div class="ib-wrap">
+    <div class="ib-col">
+      <div class="ib-head">
+        <div class="ib-tabs" id="ib-filters" style="margin-bottom:8px">
+          <button data-f="all">All</button>
+          <button data-f="unread">Unread</button>
+          <button data-f="mine" class="active">Your turn</button>
+          <button data-f="theirs">Their turn</button>
+          <button data-f="starred">Starred</button>
+        </div>
+        <div style="display:flex;gap:6px">
+          <select id="ib-channel" style="flex:0 0 auto;font-size:11px;padding:4px 6px;border:1px solid var(--hair);border-radius:var(--radius)">
+            <option value="">All channels</option>
+            <option value="email">Email</option>
+            <option value="linkedin">LinkedIn</option>
+            <option value="whatsapp">WhatsApp</option>
+            <option value="sms">SMS</option>
+            <option value="ai_call">Call</option>
+          </select>
+          <input id="ib-q" placeholder="Search people & messages" style="flex:1 1 auto;min-width:0;font-size:12px;padding:4px 8px;border:1px solid var(--hair);border-radius:var(--radius)">
+        </div>
+      </div>
+      <div class="ib-scroll" id="ib-list"><div class="ib-empty">Loading…</div></div>
+    </div>
+    <div class="ib-col">
+      <div class="ib-head" id="ib-thread-head"><span class="muted" style="font-size:12px">Select a conversation</span></div>
+      <div class="ib-scroll" id="ib-thread"><div class="ib-empty">Nothing selected.</div></div>
+      <div id="ib-composer" style="flex:0 0 auto;border-top:1px solid var(--hair);padding:10px 12px;display:none"></div>
+    </div>
+    <div class="ib-col">
+      <div class="ib-head"><span class="eyebrow">Contact</span></div>
+      <div class="ib-scroll" id="ib-rail"><div class="ib-empty">—</div></div>
+    </div>
+  </div>
+
+  <details style="margin-top:22px">
+    <summary class="eyebrow" style="cursor:pointer">Conversations by channel (per-channel view)</summary>
+  <div class="filter-tabs" id="inbox-filters" style="margin-top:12px">
     <button data-f="open" class="active">Open</button>
     <button data-f="human">Needs Human</button>
     <button data-f="all">All</button>
@@ -444,6 +533,7 @@
     <thead><tr><th>Contact</th><th>Channel</th><th>Status</th><th>Assignee</th><th>Intent</th><th>Last activity</th><th>Actions</th></tr></thead>
     <tbody id="inbox-body"><tr><td colspan="7" class="muted">loading…</td></tr></tbody>
   </table>
+  </details>
   </div><!-- /view-inbox -->
 
   <!-- ── ANALYTICS ─────────────────────────────────────────────────────── -->
@@ -629,14 +719,17 @@ async function openContact(id){
       ["Marketing stage",nice(c.marketing_stage)],["Opportunity stage (legacy)",nice(c.deal_stage)],
       ["Lead score",`${c.lead_score||"—"} (${c.lead_score_numeric??0})`],
       ["Opportunity value",c.deal_value>0?`$${parseFloat(c.deal_value).toLocaleString()}`:"—"],
-      ["Tags",(c.tags||[]).join(", ")],
+      // CP-I D11: real tag CHIPS, not a comma-joined string. A tag chip is
+      // removable-looking and neutral; a stage chip (below) never is. ibTagChip
+      // escapes its own content, hence the raw flag.
+      ["Tags",(c.tags||[]).length?(c.tags||[]).map(ibTagChip).join(" "):"—",true],
       ["UTM source",c.utm_source],["UTM medium",c.utm_medium],["UTM campaign",c.utm_campaign],
       ["Last contacted",c.last_contacted?fmtDate(c.last_contacted):"—"],
       ["Next follow-up",c.next_follow_up?fmtDate(c.next_follow_up):"—"],
       ["Created",fmtDate(c.created_at)],["Contact ID",c.id],
     ];
-    $("#m-fields").innerHTML=fields.map(([l,v])=>`<div class="f"><div class="fl">${esc(l)}</div>
-      <div class="fv">${esc(v||"—")}</div></div>`).join("");
+    $("#m-fields").innerHTML=fields.map(([l,v,raw])=>`<div class="f"><div class="fl">${esc(l)}</div>
+      <div class="fv">${raw?v:esc(v||"—")}</div></div>`).join("");
     renderFeed(act.activity||[]);
   }catch(e){$("#m-name").textContent="Error";$("#m-sub").textContent=e.message;}
 }
@@ -818,6 +911,302 @@ $("#inbox-filters").addEventListener("click",e=>{
 $("#inbox-body").addEventListener("click",e=>{
   if(e.target.closest(".act-btn"))return;
   const tr=e.target.closest("tr[data-conv]");if(tr)openConversation(tr.dataset.conv);
+});
+
+// ── CP-I: unified inbox ──────────────────────────────────────────────────────
+// Contact-centred. One row per person, one thread across every channel, and the
+// third pane is the contact record. `esc()` on every interpolated value — a
+// contact name and a message body are both attacker-controllable via ingest.
+let ibFilter="mine",ibChannel="",ibQ="",ibSel=null,ibCtx=null,ibTab="reply",ibDeal=null,ibQT=null;
+// Whether the text currently in the composer came from Draft with AI. The
+// server records this on the message, so hardcoding it false — as the first
+// cut did — made every AI-assisted reply audit as purely human-authored and
+// the "AI-assisted" badge unreachable. Cleared the moment the human edits.
+let ibDraftUsed=false;
+const IB_CH_COLOR={email:"#2e90fa",linkedin:"#0a66c2",whatsapp:"#12b76a",sms:"#7a5af8",ai_call:"#f79009",call:"#f79009"};
+
+// Hue derives from the stage's INDEX in its pipeline, never hardcoded per key,
+// so the three webinar pipelines and any custom pipeline read consistently
+// left→right instead of drifting apart.
+function ibStageHue(chip){
+  const n=Math.max(1,chip.stage_count||1),i=Math.max(0,chip.index||0);
+  return Math.round(210 - (i/n)*190);
+}
+// A stage chip is authoritative state: no remove control, ever. `auto` is filled
+// (the CRM drives it), `manual` is outlined + a person glyph (a human must act).
+function ibStageChip(chip,{inert=false,dealId=null}={}){
+  if(!chip)return "";
+  const h=ibStageHue(chip),manual=chip.mode==="manual";
+  const style=manual
+    ? `color:hsl(${h},55%,32%);border-color:hsl(${h},50%,60%)`
+    : `background:hsl(${h},70%,94%);color:hsl(${h},60%,28%);border-color:hsl(${h},60%,82%)`;
+  const cls=`chip chip-stage${manual?" manual":""}${chip.terminal?" terminal":""}${(inert||chip.advanceable===false)?" inert":""}`;
+  // Inert unless the stage authority would act on THIS deal — otherwise a
+  // click would silently advance a different one.
+  const locked=!inert&&chip.advanceable===false;
+  const attrs=(inert||locked)?(locked?` title="${esc(chip.not_advanceable_reason||"")}"`:""):` data-stagechip="${esc(dealId||"")}"`;
+  return `<span class="${cls}" style="${style}"${attrs}
+    title="${esc(chip.pipeline_name||"")} · ${esc(chip.mode||"")}">◆ ${esc(chip.label)}${manual?" <span aria-label='manual'>&#128100;</span>":""}</span>`;
+}
+function ibTagChip(t){
+  return `<span class="chip chip-tag">${esc(t)}</span>`;
+}
+function ibChBadge(ch){
+  const c=(Object.prototype.hasOwnProperty.call(IB_CH_COLOR,ch)&&IB_CH_COLOR[ch])||"#667085";
+  return `<span class="chip" style="background:${c}18;color:${c};border-color:${c}40">${esc(nice(ch||"—"))}</span>`;
+}
+
+async function loadInboxUnified(){
+  const host=$("#ib-list");if(!host)return;
+  const qs=new URLSearchParams({filter:ibFilter});
+  if(ibChannel)qs.set("channel",ibChannel);
+  if(ibQ)qs.set("q",ibQ);
+  let d;try{d=await get(`inbox?${qs}`);}
+  catch(e){host.innerHTML=`<div class="ib-empty">${esc(e.message)}</div>`;return;}
+  if(!d.contacts.length){
+    host.innerHTML=`<div class="ib-empty">
+      <svg width="42" height="42" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.3">
+        <path d="M3 7l9 6 9-6"/><rect x="3" y="5" width="18" height="14" rx="2"/></svg>
+      <div>Nothing here.</div>
+      <div style="font-size:12px;margin-top:4px">${ibFilter==="mine"?"Nobody is waiting on you.":"Try another filter."}</div></div>`;
+    return;
+  }
+  host.innerHTML=d.contacts.map(c=>`
+    <div class="ib-row${c.is_unread?" unread":""}${ibSel===c.contact_id?" sel":""}" data-ib="${esc(c.contact_id)}">
+      <div style="display:flex;align-items:center;gap:6px">
+        ${c.is_unread?`<span class="ib-dot"></span>`:""}
+        <span class="ib-name" style="flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(c.name||c.email||"(unnamed)")}</span>
+        ${c.starred?`<span title="Starred">&#9733;</span>`:""}
+        <span class="muted" style="font-size:10px">${fmtDate(c.last_message_at)}</span>
+      </div>
+      <div class="ib-snip" style="margin-top:2px">${c.last_direction==="inbound"?"":"You: "}${esc(c.last_body||"No messages yet")}</div>
+      <div style="display:flex;gap:4px;margin-top:5px;flex-wrap:wrap;align-items:center">
+        ${(c.channels||[]).map(ibChBadge).join("")}
+        ${c.stage?ibStageChip(c.stage,{inert:true}):""}
+        ${c.open_deal_count>1?`<span class="muted" style="font-size:10px">${c.open_deal_count} deals</span>`:""}
+      </div></div>`).join("");
+}
+
+async function openIbContact(id){
+  ibSel=id;ibDeal=null;ibTab="reply";
+  document.querySelectorAll("#ib-list .ib-row").forEach(r=>r.classList.toggle("sel",r.dataset.ib===id));
+  $("#ib-thread").innerHTML=`<div class="ib-empty">Loading…</div>`;
+  let d;try{d=await get(`inbox/${id}/thread`);}
+  catch(e){$("#ib-thread").innerHTML=`<div class="ib-empty">${esc(e.message)}</div>`;return;}
+  ibCtx=d;
+  // Exactly one open deal ⇒ it is the context. Two or more ⇒ the human must
+  // pick; we never guess, because guessing corrupts deal history.
+  ibDeal=(d.deals||[]).length===1?d.deals[0].id:null;
+  renderIbThread(d);renderIbRail(d);renderIbComposer(d);
+  // Read state is stamped to the newest message ACTUALLY RETURNED — never
+  // now() — so anything arriving after this fetch stays unread by construction.
+  // read_through_exact is the microsecond-precision value; the rounded
+  // millisecond one would land just behind the newest message and never clear.
+  const rt=d.read_through_exact||d.read_through;
+  if(rt){ try{await post(`inbox/${id}/read`,{through:rt});}catch{} }
+  loadInboxUnified();
+}
+
+function renderIbThread(d){
+  const c=d.contact||{};
+  $("#ib-thread-head").innerHTML=`
+    <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap">
+      <b style="font-size:13px">${esc(c.name||c.email||"(unnamed)")}</b>
+      <span class="muted" style="font-size:11px">${esc(c.email||"")}</span>
+      <span style="flex:1"></span>
+      <button class="btn sm" id="ib-star">${(d.conversations||[]).some(x=>x.starred)?"★ Starred":"☆ Star"}</button>
+    </div>
+    ${(d.deals||[]).length?`<div style="margin-top:6px;display:flex;gap:5px;flex-wrap:wrap;align-items:center">
+      ${d.deals.map(x=>`${ibStageChip(x.stage_chip,{dealId:x.id})} <span class="muted" style="font-size:10px">${esc(x.title||"")}</span>`).join(" ")}
+    </div>`:""}`;
+  const rows=(d.thread||[]).map(m=>{
+    const out=m.direction==="outbound";
+    const badges=[
+      ibChBadge(m.channel),
+      // "Sequence" = the CRM sent it autonomously (a CP2 scheduled_action).
+      // "AI-assisted" = a human reviewed an AI draft and clicked Send.
+      // Different facts — never conflate them.
+      m.automated?`<span class="chip" style="background:#f791091f;color:#b54708;border-color:#f7900940">Sequence</span>`:"",
+      m.ai_generated?`<span class="chip" style="background:#7a5af81f;color:#5925dc;border-color:#7a5af840">AI-assisted</span>`:"",
+    ].filter(Boolean).join(" ");
+    return `<div class="ib-msg ${out?"out":"in"}${m.delivered===false?" ib-undeliv":""}">
+      <div class="ib-bub">${esc(m.body||"")}</div>
+      <div class="ib-meta">${badges}<span>${esc(new Date(m.created_at).toLocaleString())}</span>
+      ${m.delivered===false?`<span style="color:#b54708">${esc(m.delivery_note||"Logged — not delivered")}</span>`:""}</div>
+    </div>`;}).join("")||`<div class="ib-empty">No messages yet.</div>`;
+  $("#ib-thread").innerHTML=`<div style="padding:8px 0">${rows}</div>`;
+  $("#ib-thread").scrollTop=$("#ib-thread").scrollHeight;
+  const star=$("#ib-star");
+  if(star)star.onclick=async()=>{
+    try{await patch(`inbox/${ibSel}/star`,{starred:!(d.conversations||[]).some(x=>x.starred)});openIbContact(ibSel);}
+    catch(e){toast(e.message,true);}
+  };
+}
+
+function renderIbRail(d){
+  const c=d.contact||{};
+  const sc=(Object.prototype.hasOwnProperty.call(SCORE_COLORS,c.lead_score)&&SCORE_COLORS[c.lead_score])||"#98a2b3";
+  $("#ib-rail").innerHTML=`
+    <div style="padding:12px">
+      <div style="font-weight:700;font-size:14px">${esc(c.name||"(unnamed)")}</div>
+      <div class="muted" style="font-size:12px">${esc([c.title,c.company_name].filter(Boolean).join(" · ")||"—")}</div>
+      <div class="muted" style="font-size:12px;margin-top:2px">${esc(c.email||"")}</div>
+      <div style="margin-top:10px;display:flex;gap:5px;align-items:center;flex-wrap:wrap">
+        <span class="chip" style="background:${sc}1a;color:${sc};border-color:${sc}40">${esc(c.lead_score||"—")}</span>
+        <span class="muted" style="font-size:11px">score ${esc(String(c.lead_score_numeric??0))}</span>
+      </div>
+      ${d.suppressed_globally?`<div style="margin-top:10px;font-size:11px;color:#b42318;border:1px solid #f0443840;background:#f044381a;padding:6px 8px;border-radius:6px">
+        Suppressed on all channels${d.suppressed_reason?` — ${esc(d.suppressed_reason)}`:""}</div>`:""}
+      <div class="eyebrow" style="margin:14px 0 6px">Stage</div>
+      ${(d.deals||[]).length
+        ? d.deals.map(x=>`<div style="margin-bottom:6px">${ibStageChip(x.stage_chip,{dealId:x.id})}
+            <div class="muted" style="font-size:11px;margin-top:2px">${esc(x.title||"")}${x.stage_chip&&x.stage_chip.funnel_type?` · ${esc(x.stage_chip.funnel_type)}`:""}</div></div>`).join("")
+        : `<div class="muted" style="font-size:12px">No open deals.</div>`}
+      <div class="eyebrow" style="margin:14px 0 6px">Tags</div>
+      <div style="display:flex;gap:4px;flex-wrap:wrap">
+        ${(c.tags||[]).length?(c.tags||[]).map(ibTagChip).join(""):`<span class="muted" style="font-size:12px">None.</span>`}
+      </div>
+      <div class="eyebrow" style="margin:14px 0 6px">Activity</div>
+      ${(d.activity||[]).slice(0,12).map(a=>`<div style="border-left:2px solid var(--hair);padding:2px 0 8px 8px;margin-bottom:2px">
+        <div style="font-size:11px;font-weight:600">${esc(nice(a.type))}</div>
+        <div class="muted" style="font-size:11px">${esc(String(a.message||"").slice(0,120))}</div>
+        <div class="muted" style="font-size:10px">${esc(new Date(a.created_at).toLocaleString())}</div>
+      </div>`).join("")||`<span class="muted" style="font-size:12px">No activity.</span>`}
+    </div>`;
+}
+
+function renderIbComposer(d){
+  const host=$("#ib-composer");host.style.display="";
+  const chans=["email","linkedin","whatsapp","sms"];
+  const blocked=new Set(d.suppressed_channels||[]);
+  const globalBlock=!!d.suppressed_globally;
+  const multi=(d.deals||[]).length>1;
+  host.innerHTML=`
+    <div style="display:flex;gap:8px;align-items:center;margin-bottom:8px;flex-wrap:wrap">
+      <div class="ib-tabs" id="ib-ctabs">
+        <button data-t="reply" class="${ibTab==="reply"?"active":""}">Reply</button>
+        <button data-t="note" class="${ibTab==="note"?"active":""}">Note</button>
+        <button data-t="templates" class="${ibTab==="templates"?"active":""}">Templates</button>
+      </div>
+      ${ibTab==="reply"?`<select id="ib-chan" style="font-size:11px;padding:4px 6px;border:1px solid var(--hair);border-radius:var(--radius)">
+        ${chans.map(ch=>`<option value="${esc(ch)}"${blocked.has(ch)?" disabled":""}>${esc(nice(ch))}${blocked.has(ch)?" (suppressed)":""}${(d.deliverable_channels||[]).includes(ch)?"":" — logs only"}</option>`).join("")}
+      </select>`:""}
+      ${multi?`<select id="ib-deal" style="font-size:11px;padding:4px 6px;border:1px solid var(--hair);border-radius:var(--radius)">
+        <option value="">No deal selected</option>
+        ${d.deals.map(x=>`<option value="${esc(x.id)}"${ibDeal===x.id?" selected":""}>${esc(x.title||x.id)}</option>`).join("")}
+      </select>`:(d.deals||[]).length===1?`<span class="muted" style="font-size:11px">Deal: ${esc(d.deals[0].title||"")}</span>`:""}
+      <span style="flex:1"></span>
+      ${ibTab==="reply"?`<button class="btn sm" id="ib-draft">Draft with AI</button>`:""}
+    </div>
+    ${ibTab==="templates"
+      ? `<div id="ib-tpl"><span class="muted" style="font-size:12px">Loading templates…</span></div>`
+      : `<textarea id="ib-body" rows="3" placeholder="${ibTab==="note"?"Internal note — never sent":"Write a reply…"}"
+           style="width:100%;font-family:var(--sans);font-size:13px;padding:8px;border:1px solid var(--hair);border-radius:var(--radius);resize:vertical"></textarea>
+         <div style="display:flex;align-items:center;gap:8px;margin-top:6px">
+           <span class="muted" style="font-size:11px" id="ib-hint">${
+             ibTab==="note"?"A note never sends. It lands on the contact"+(multi?" and the selected deal.":(d.deals||[]).length===1?" and the deal.":".")
+             :globalBlock?"Send disabled — this contact is suppressed on all channels.":""}</span>
+           <span style="flex:1"></span>
+           <button class="btn primary sm" id="ib-send"${ibTab==="reply"&&globalBlock?" disabled":""}>${ibTab==="note"?"Save note":"Send"}</button>
+         </div>`}`;
+  if(ibTab==="templates")loadIbTemplates();
+  const dealSel=$("#ib-deal");if(dealSel)dealSel.onchange=()=>{ibDeal=dealSel.value||null;};
+  const draft=$("#ib-draft");
+  if(draft)draft.onclick=async()=>{
+    draft.disabled=true;draft.textContent="Drafting…";
+    try{
+      const r=await post(`inbox/${ibSel}/draft`,{channel:$("#ib-chan")?.value||"email",deal_id:ibDeal});
+      // The draft is TEXT. It lands in the composer and nothing is sent until a
+      // human clicks Send — and nothing in it is ever parsed as an instruction.
+      $("#ib-body").value=r.draft;ibDraftUsed=true;
+      $("#ib-body").addEventListener("input",()=>{ibDraftUsed=false;},{once:true});
+      toast("Draft ready — review before sending");
+    }catch(e){toast(e.message,true);}
+    finally{draft.disabled=false;draft.textContent="Draft with AI";}
+  };
+  const send=$("#ib-send");
+  if(send)send.onclick=async()=>{
+    const body=($("#ib-body")?.value||"").trim();
+    if(!body){toast("Nothing to send",true);return;}
+    send.disabled=true;
+    try{
+      if(ibTab==="note"){
+        await post(`inbox/${ibSel}/note`,{body,deal_id:ibDeal});
+        toast("Note saved (not sent)");
+      }else{
+        const r=await post(`inbox/${ibSel}/reply`,{channel:$("#ib-chan").value,body,deal_id:ibDeal,
+          ai_generated:ibDraftUsed});
+        toast(r.delivered?"Sent":r.delivery_note||"Logged — not delivered");
+      }
+      ibDraftUsed=false;openIbContact(ibSel);
+    }catch(e){toast(e.message,true);}
+    finally{send.disabled=false;}
+  };
+}
+
+async function loadIbTemplates(){
+  const host=$("#ib-tpl");if(!host)return;
+  try{
+    const d=await get(`inbox/${ibSel}/templates`);
+    host.innerHTML=d.templates.length?d.templates.map(t=>`
+      <div class="ib-row" data-tpl="${esc(t.body)}" style="border:1px solid var(--hair);border-radius:6px;margin-bottom:6px">
+        <div style="font-size:11px;font-weight:600">${esc(t.sequence_name)} · step ${esc(String(t.step_order))} · ${esc(t.channel)}</div>
+        <div class="muted" style="font-size:12px">${esc(t.body)}</div>
+      </div>`).join(""):`<span class="muted" style="font-size:12px">No sequence templates yet.</span>`;
+    host.querySelectorAll("[data-tpl]").forEach(el=>el.onclick=()=>{
+      ibTab="reply";renderIbComposer(ibCtx);
+      const ta=$("#ib-body");if(ta){ta.value=el.dataset.tpl;ta.focus();}
+    });
+  }catch(e){host.innerHTML=`<span class="muted" style="font-size:12px">${esc(e.message)}</span>`;}
+}
+
+// Stage-chip transition menu. Built from the server's `transitions` list, which
+// is getPipelineTransitions() — illegal targets are ABSENT, not greyed, and the
+// chosen target posts to the EXISTING /advance authority. No new transition
+// path: if /advance refuses, the server's reason is what the operator sees.
+function ibCloseMenu(){document.querySelectorAll(".ib-menu").forEach(m=>m.remove());}
+document.addEventListener("click",e=>{if(!e.target.closest(".ib-menu"))ibCloseMenu();});
+function ibOpenStageMenu(chipEl,dealId){
+  ibCloseMenu();
+  const deal=(ibCtx?.deals||[]).find(d=>d.id===dealId);
+  const chip=deal&&deal.stage_chip;if(!chip)return;
+  const m=document.createElement("div");m.className="ib-menu";
+  m.innerHTML=chip.transitions.length
+    ? chip.transitions.map(t=>`<button data-to="${esc(t.key)}">${esc(t.label)}${t.mode==="manual"?" &#128100;":""}</button>`).join("")
+    : `<div style="padding:8px 12px;font-size:12px" class="muted">No legal transitions.</div>`;
+  document.body.appendChild(m);
+  const r=chipEl.getBoundingClientRect();
+  m.style.top=`${window.scrollY+r.bottom+4}px`;m.style.left=`${window.scrollX+r.left}px`;
+  m.querySelectorAll("button[data-to]").forEach(b=>b.onclick=async()=>{
+    ibCloseMenu();
+    try{
+      // A human is clicking, so this is NOT sent with the `automated` flag —
+      // CP1's authority records it as a human action, and a manual target is
+      // therefore legitimately allowed.
+      await post(`contacts/${ibSel}/advance`,{pipeline_key:chip.pipeline_key,stage:b.dataset.to});
+      toast(`Stage → ${b.textContent.trim()}`);
+      openIbContact(ibSel);
+    }catch(err){toast(err.message,true);}
+  });
+}
+document.addEventListener("click",e=>{
+  const chip=e.target.closest("[data-stagechip]");
+  if(chip&&chip.dataset.stagechip)ibOpenStageMenu(chip,chip.dataset.stagechip);
+});
+$("#ib-filters")?.addEventListener("click",e=>{
+  const b=e.target.closest("button[data-f]");if(!b)return;
+  ibFilter=b.dataset.f;
+  document.querySelectorAll("#ib-filters button").forEach(x=>x.classList.toggle("active",x.dataset.f===ibFilter));
+  loadInboxUnified();
+});
+$("#ib-list")?.addEventListener("click",e=>{
+  const row=e.target.closest("[data-ib]");if(row)openIbContact(row.dataset.ib);
+});
+$("#ib-channel")?.addEventListener("change",e=>{ibChannel=e.target.value;loadInboxUnified();});
+$("#ib-q")?.addEventListener("input",e=>{clearTimeout(ibQT);const v=e.target.value;ibQT=setTimeout(()=>{ibQ=v;loadInboxUnified();},250);});
+$("#ib-composer")?.addEventListener("click",e=>{
+  const b=e.target.closest("#ib-ctabs button[data-t]");if(!b||!ibCtx)return;
+  ibTab=b.dataset.t;renderIbComposer(ibCtx);
 });
 
 // ── Conversation thread drawer ────────────────────────────────────────────────
@@ -1112,7 +1501,7 @@ function setTab(tab){
   // Every tab refetches on entry so numbers are always live (get() is no-store).
   // Previously analytics/inbox loaded once, so stage moves never reflected here.
   if(tab==="dashboard")load();
-  if(tab==="inbox")loadInbox();
+  if(tab==="inbox"){loadInboxUnified();loadInbox();}
   if(tab==="analytics")loadAnalytics();
   if(tab==="contacts")loadContacts();
   if(tab==="companies")loadCompanies();
