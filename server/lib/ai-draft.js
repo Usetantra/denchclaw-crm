@@ -46,7 +46,27 @@ function isConfigured() {
 // mistaken for a broken merge field. A guard that blocked every brace-shaped
 // thing would refuse perfectly good marketing copy, and an operator who cannot
 // work out why a good email will not send turns the executor off.
-const KNOWN_TOKENS = ['first_name', 'company', 'stage'];
+// ─── the token model ─────────────────────────────────────────────────────────
+// Two classes, because they resolve from different places and fail differently.
+//
+// CONTACT tokens come from the contact row. An unresolved one means we do not
+// know that person's name — bad, but per-recipient.
+const CONTACT_TOKENS = ['first_name', 'company', 'stage'];
+//
+// CP-D: CONTEXT tokens come from the tenant (crm_merge_defaults). They exist
+// because the ladders borrowed from the outreach/nurturing engines are built on
+// them — `{book_url}` is in almost every closing line upstream writes. An
+// unresolved one means the TENANT is unconfigured, so it is wrong for everybody
+// at once, which is the more dangerous of the two.
+//
+// Both are in KNOWN_TOKENS, and that word is load-bearing: `unresolvedTokensIn`
+// only refuses tokens it KNOWS. Before CP-D `{book_url}` was unknown, so the
+// guard returned nothing for it, the claim door passed, and the executor would
+// have sent "grab a time here: {book_url}" to a real prospect. A token the
+// system has never heard of does not fail loudly — it fails silently.
+const CONTEXT_TOKENS = ['book_url', 'join_url', 'unsubscribe_url',
+  'webinar_date', 'webinar_time', 'sender_name'];
+const KNOWN_TOKENS = [...CONTACT_TOKENS, ...CONTEXT_TOKENS];
 
 // Escape hatch: {{first_name}} renders as the literal text {first_name}. Without
 // one there is no way to write about a merge field in the copy itself.
@@ -58,7 +78,7 @@ const ESC_CLOSE = '\u0000CPI_RB\u0000';
 // can tell a deliberate literal from a merge that failed. So resolution
 // validates FIRST (sentinels intact) and restores LAST — see
 // db/models/templates.js.
-function resolveTokens(text, { contact = {}, stageLabel = null, restore = true } = {}) {
+function resolveTokens(text, { contact = {}, stageLabel = null, restore = true, merge = {} } = {}) {
   if (!text) return '';
   const first = String(contact.name || '').trim().split(/\s+/)[0] || '';
   const map = {
@@ -66,6 +86,12 @@ function resolveTokens(text, { contact = {}, stageLabel = null, restore = true }
     company: contact.company_name || '',
     stage: stageLabel || contact.deal_stage || contact.marketing_stage || '',
   };
+  // Tenant context values. Deliberately layered UNDER nothing — a contact token
+  // and a context token can never collide, because the two lists are disjoint
+  // and this asserts it rather than assuming it.
+  for (const t of CONTEXT_TOKENS) {
+    if (merge && merge[t] != null && String(merge[t]).trim()) map[t] = String(merge[t]);
+  }
   return String(text)
     // Protect {{...}} before substitution…
     .replace(/\{\{/g, ESC_OPEN).replace(/\}\}/g, ESC_CLOSE)
@@ -206,5 +232,7 @@ async function draftReply({ contact, channel = 'email', thread = [], dealTitle =
   }
 }
 
-module.exports = { draftReply, resolveTokens, templateDraft, isConfigured, sanitize,
-  KNOWN_TOKENS, unresolvedTokensIn, suspiciousBracesIn, restoreEscapes };
+module.exports = {
+  KNOWN_TOKENS, CONTACT_TOKENS, CONTEXT_TOKENS,
+  draftReply, resolveTokens, templateDraft, isConfigured, sanitize,
+  unresolvedTokensIn, suspiciousBracesIn, restoreEscapes };

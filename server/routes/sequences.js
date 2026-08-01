@@ -170,7 +170,7 @@ router.post('/:id/steps', async (req, res) => {
   try {
     const companyId = getUserCompanyId(req);
     if (!companyId) return res.status(401).json({ error: 'Authentication required' });
-    const { step_order, channel, delay_seconds, template_ref, entry_conditions, exit_conditions, stage_writeback, subject, body } = req.body || {};
+    const { step_order, channel, delay_seconds, template_ref, entry_conditions, exit_conditions, stage_writeback, subject, body, linkedin_action } = req.body || {};
     if (!Number.isInteger(step_order) || step_order < 1) {
       return res.status(400).json({ error: 'step_order must be a positive integer' });
     }
@@ -218,6 +218,15 @@ router.post('/:id/steps', async (req, res) => {
       }
     }
 
+    if (linkedin_action !== undefined && linkedin_action !== null) {
+      if (channel !== 'linkedin') {
+        return res.status(400).json({ error: `linkedin_action is only meaningful on a 'linkedin' step (this step is '${channel}')` });
+      }
+      if (!['invite', 'message', 'inmail'].includes(linkedin_action)) {
+        return res.status(400).json({ error: "linkedin_action must be 'invite', 'message' or 'inmail'", got: linkedin_action });
+      }
+    }
+
     let step;
     try {
       step = await seqDb.addStep(req.params.id, companyId, {
@@ -229,6 +238,12 @@ router.post('/:id/steps', async (req, res) => {
         // and that ambiguity is exactly what mails a blank.
         subject: subject === undefined ? null : subject,
         body: body === undefined || body === null || !String(body).trim() ? null : String(body),
+        // CP-D: which LinkedIn action this rung performs. Without this the API
+        // could only ever author NULL — which the CP-C2 gate reads as 'message',
+        // and a message with no connection evidence is held forever. An operator
+        // building a LinkedIn ladder through the API got a silent stall and no
+        // way to say "this rung is the invite".
+        linkedinAction: linkedin_action || null,
       });
     } catch (dbErr) {
       // sequence_steps has UNIQUE(sequence_id, step_order) with no

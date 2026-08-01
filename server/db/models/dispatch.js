@@ -19,6 +19,13 @@ const analyticsRouter = require('../../routes/analytics');
 // LinkedIn restricts ACCOUNTS rather than messages, so its limits have to be
 // enforced where jobs are handed out rather than where they are sent.
 const CHANNEL_GATES = { linkedin: require('../../lib/linkedin-gate') };
+// F-CP4a-1, outstanding since CP4a and closed by CP-D: this pattern used to be a
+// hardcoded '\{(first_name|company|stage)\}' literal, a second copy of
+// KNOWN_TOKENS that nothing kept in step. CP-D added six context tokens, and the
+// stale copy would have let `{book_url}` straight through the door — the precise
+// bug the guard exists to prevent, reintroduced by duplication. It is now
+// generated ONCE, in templates.js, and imported by both readers.
+const { UNRESOLVED_TOKEN_RE } = require('./templates');
 
 const CLAIM_TIMEOUT_MS = parseInt(process.env.CHANNEL_JOB_CLAIM_TIMEOUT_MS, 10) || 300_000;
 const MAX_ATTEMPTS = parseInt(process.env.CHANNEL_JOB_MAX_ATTEMPTS, 10) || 3;
@@ -168,8 +175,8 @@ async function claimJobs(companyId, channel, limit, claimedBy) {
           -- braces from an {{escaped}} token, which after restoration is
           -- byte-identical to a failed merge.
           AND (COALESCE(sa.payload->>'content_literal_braces', 'false') = 'true' OR (
-                COALESCE(sa.payload->>'body', '') !~ '\{(first_name|company|stage)\}'
-            AND COALESCE(sa.payload->>'subject', '') !~ '\{(first_name|company|stage)\}'
+                COALESCE(sa.payload->>'body', '')    !~ $5
+            AND COALESCE(sa.payload->>'subject', '') !~ $5
           ))
           -- CP4a: A ROW WHOSE PHYSICAL SEND ALREADY LEFT IS NEVER RE-SERVED.
           -- send_started_at is committed immediately before the provider call,
@@ -189,7 +196,8 @@ async function claimJobs(companyId, channel, limit, claimedBy) {
         ORDER BY sa.scheduled_for ASC
         FOR UPDATE OF sa SKIP LOCKED
         LIMIT $4`,
-      [companyId, channel, String(CLAIM_TIMEOUT_MS), Math.ceil(effectiveLimit * OVERFETCH_FACTOR)]
+      [companyId, channel, String(CLAIM_TIMEOUT_MS), Math.ceil(effectiveLimit * OVERFETCH_FACTOR),
+       UNRESOLVED_TOKEN_RE]
     );
 
     const claimed = [];

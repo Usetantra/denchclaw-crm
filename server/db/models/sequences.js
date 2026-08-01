@@ -149,7 +149,7 @@ async function updateSequenceStatus(id, companyId, status) {
 // and a future direct query against this table that forgets to join through
 // sequences would otherwise have no defense-in-depth layer at all.
 
-async function addStep(sequenceId, companyId, { stepOrder, channel, delaySeconds = 0, templateRef = null, entryConditions = {}, exitConditions = {}, stageWriteback = null, subject = null, body = null }) {
+async function addStep(sequenceId, companyId, { stepOrder, channel, delaySeconds = 0, templateRef = null, entryConditions = {}, exitConditions = {}, stageWriteback = null, subject = null, body = null, linkedinAction = null }) {
   if (!companyId) throw new Error('sequences.addStep requires companyId');
   const owned = await getSequenceById(sequenceId, companyId);
   if (!owned) return null;
@@ -160,10 +160,15 @@ async function addStep(sequenceId, companyId, { stepOrder, channel, delaySeconds
   // take precedence over `template_ref` (see db/models/templates.js, which owns
   // that precedence). NULL on every pre-existing step, so nothing changes for
   // steps that already resolve through a template.
+  // CP-D: `linkedinAction` (migration 024) is which LinkedIn action this step
+  // performs — invite | message | inmail. NULL means 'message' at the gate, and
+  // that default falls the SAFE way: an unverified message is refused, whereas
+  // defaulting to 'invite' would fire connection requests nobody asked for.
   const result = await query(
-    `INSERT INTO sequence_steps (company_id, sequence_id, step_order, channel, delay_seconds, template_ref, entry_conditions, exit_conditions, stage_writeback, subject, body)
-     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11) RETURNING *`,
-    [companyId, sequenceId, stepOrder, channel, delaySeconds, templateRef, JSON.stringify(entryConditions), JSON.stringify(exitConditions), stageWriteback, subject, body]
+    `INSERT INTO sequence_steps (company_id, sequence_id, step_order, channel, delay_seconds, template_ref, entry_conditions, exit_conditions, stage_writeback, subject, body, linkedin_action)
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12) RETURNING *`,
+    [companyId, sequenceId, stepOrder, channel, delaySeconds, templateRef, JSON.stringify(entryConditions), JSON.stringify(exitConditions), stageWriteback, subject, body,
+     channel === 'linkedin' ? linkedinAction : null]
   );
   return result.rows[0];
 }

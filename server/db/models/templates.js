@@ -24,7 +24,41 @@
 // A subject follows its body's source — mixing a step's body with a template's
 // subject would be a third, invisible source of truth.
 const { query } = require('../index');
-const { resolveTokens, unresolvedTokensIn, suspiciousBracesIn, restoreEscapes } = require('../../lib/ai-draft');
+const { resolveTokens, unresolvedTokensIn, suspiciousBracesIn, restoreEscapes,
+  CONTEXT_TOKENS, KNOWN_TOKENS } = require('../../lib/ai-draft');
+
+// The one pattern both the claim door and the re-resolve pass compare against,
+// generated from KNOWN_TOKENS so the two can never drift (F-CP4a-1). Token names
+// are regex-escaped defensively: they are hardcoded identifiers today, but a
+// future token with a metacharacter in it would silently corrupt the pattern
+// rather than fail, and a corrupted send guard is the worst kind of quiet.
+const UNRESOLVED_TOKEN_RE =
+  `\\{(${KNOWN_TOKENS.map(t => t.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')).join('|')})\\}`;
+
+// ─── CP-D: per-tenant context values ─────────────────────────────────────────
+// `{book_url}` and friends are what the borrowed outreach/nurturing ladders are
+// built on. They resolve per TENANT, not per contact, so a missing one is wrong
+// for everybody at once — which is exactly why it now blocks the send rather
+// than shipping a literal brace to a prospect.
+async function mergeDefaults(companyId, run = query) {
+  const r = await run('SELECT key, value FROM crm_merge_defaults WHERE company_id = $1', [companyId]);
+  const out = {};
+  for (const row of r.rows) out[row.key] = row.value;
+  return out;
+}
+
+async function setMergeDefault(companyId, key, value) {
+  if (!companyId) throw new Error('templates.setMergeDefault requires companyId');
+  if (!CONTEXT_TOKENS.includes(key)) {
+    throw new Error(`'${key}' is not a context token — one of: ${CONTEXT_TOKENS.join(', ')}`);
+  }
+  if (!value || !String(value).trim()) throw new Error('a merge default needs a non-empty value');
+  const r = await query(
+    `INSERT INTO crm_merge_defaults (company_id, key, value) VALUES ($1,$2,$3)
+     ON CONFLICT (company_id, key) DO UPDATE SET value = EXCLUDED.value, updated_at = now()
+     RETURNING *`, [companyId, key, String(value).trim()]);
+  return r.rows[0];
+}
 
 // Channels where a subject is a real field. On the chat-shaped channels a
 // subject is meaningless, so its absence must never count as "unresolved".
@@ -145,7 +179,8 @@ async function resolveStepContent(companyId, step, contact, { stageLabel = null,
   // Validate with escapes still as sentinels, then restore at the very end:
   // after {{first_name}} becomes the literal {first_name}, nothing can tell a
   // deliberate literal from a merge that failed.
-  const tokenCtx = { contact: contact || {}, stageLabel, restore: false };
+  const tokenCtx = { contact: contact || {}, stageLabel, restore: false,
+    merge: await mergeDefaults(companyId, run) };
   const subjectV = rawSubject ? resolveTokens(rawSubject, tokenCtx) : null;
   const bodyV = resolveTokens(rawBody, tokenCtx);
   const subject = subjectV;
@@ -178,9 +213,18 @@ async function resolveStepContent(companyId, step, contact, { stageLabel = null,
   if (leftover.length) {
     return {
       resolved: false, source, template_ref: templateRef || null, subject: null, body: null,
-      reason: `content would ship unresolved ${leftover.map(t => '{' + t + '}').join(', ')} — this contact has no value for `
-        + `${leftover.join('/')}. Fill it in on the contact, remove the token from the copy, or write it as `
-        + `{{${leftover[0]}}} if you meant the literal text.`,
+      // The advice has to name the right place to fix it. A context token is a
+      // TENANT-level gap — telling an operator to "fill it in on the contact"
+      // for {book_url} sends them looking at the wrong screen entirely.
+      reason: `content would ship unresolved ${leftover.map(t => '{' + t + '}').join(', ')} — `
+        + (leftover.some(t => CONTEXT_TOKENS.includes(t))
+          ? `${leftover.filter(t => CONTEXT_TOKENS.includes(t)).join('/')} ${leftover.filter(t => CONTEXT_TOKENS.includes(t)).length > 1 ? 'are' : 'is'} `
+            + `a tenant setting, not a contact field: set it via PUT /api/crm/automations/merge-defaults. `
+          : '')
+        + (leftover.some(t => !CONTEXT_TOKENS.includes(t))
+          ? `this contact has no value for ${leftover.filter(t => !CONTEXT_TOKENS.includes(t)).join('/')}. `
+          : '')
+        + `Or remove the token from the copy, or write it as {{${leftover[0]}}} if you meant the literal text.`,
     };
   }
   if (wantsSubject && !cleanSubject) {
@@ -262,10 +306,23 @@ async function reresolveUnresolvedJobs(companyId, channel, { limit = 50 } = {}) 
       WHERE sa.company_id = $1 AND sa.channel = $2
         AND sa.status = 'pending'
         AND sa.scheduled_for <= now()
-        AND COALESCE((sa.payload->>'content_resolved')::boolean, false) = false
+        AND (
+          COALESCE((sa.payload->>'content_resolved')::boolean, false) = false
+          -- CP-D: …OR the payload SAYS it is resolved but still carries a token
+          -- the guard now knows about. The token set grew from three to nine,
+          -- and a job frozen before that — with a literal {join_url} that was
+          -- once merely "suspicious prose" and waved through — is refused by the
+          -- claim door FOREVER: it is not content_resolved=false, so nothing
+          -- retried it, and the ladder reported healthy while that rung silently
+          -- never sent. Widening the retry to "would the door refuse this?" is
+          -- what makes setting the tenant's merge defaults actually un-stick it.
+          OR (COALESCE(sa.payload->>'content_literal_braces', 'false') <> 'true'
+              AND (COALESCE(sa.payload->>'body', '') ~ $4
+                OR COALESCE(sa.payload->>'subject', '') ~ $4))
+        )
       ORDER BY sa.scheduled_for ASC
       LIMIT $3`,
-    [companyId, channel, Math.min(parseInt(limit, 10) || 50, 200)]
+    [companyId, channel, Math.min(parseInt(limit, 10) || 50, 200), UNRESOLVED_TOKEN_RE]
   );
   let fixed = 0;
   for (const row of due.rows) {
@@ -342,7 +399,9 @@ async function sequenceContentReadiness(companyId, sequenceId, { sampleContact =
 }
 
 module.exports = {
+  mergeDefaults, setMergeDefault,
   upsertTemplate, getTemplate, listTemplates, deleteTemplate, templateChannelMismatch,
   resolveStepContent, contentPayload, sequenceContentReadiness, reresolveUnresolvedJobs,
+  UNRESOLVED_TOKEN_RE,
   SUBJECT_CHANNELS,
 };
