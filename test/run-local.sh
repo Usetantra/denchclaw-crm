@@ -204,3 +204,9 @@ CRM_API_BASE="http://127.0.0.1:${TEST_PORT}" \
 INTERNAL_API_KEY="$KEY" \
 DATABASE_URL="$DATABASE_URL_TEST" \
 node test/unit-cpd-automations.mjs
+
+echo "[test] running CP-Y automation stage gate (a robot may only set a declared-auto stage)"
+CRM_API_BASE="http://127.0.0.1:${TEST_PORT}" \
+INTERNAL_API_KEY="$KEY" \
+DATABASE_URL="$DATABASE_URL_TEST" \
+node test/unit-cpy-automation-gate.mjs

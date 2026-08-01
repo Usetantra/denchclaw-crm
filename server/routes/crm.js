@@ -1102,14 +1102,27 @@ router.patch('/deals/:id', async (req, res) => {
         }
       } else {
         dealPipelineCfg = await getPipelineConfig(companyId, deal.pipeline_key);
-        if (dealPipelineCfg && dealPipelineCfg.funnel_type) {
-          // CP1: funnel-typed deals are mode-gated (`automated: true` may not
-          // set a manual stage — honor-system flag, see the /advance comment
-          // for the accepted limitation) and transition-gated like /advance.
+        // CP-Y: THE MODE GATE RUNS FOR EVERY PIPELINE, not only funnel-typed
+        // ones. It used to sit inside the `funnel_type` branch below — which is
+        // the HTTP twin of the write-back hole this checkpoint exists to close:
+        // the legacy `sales` pipeline has no funnel_type, so an
+        // `automated: true` PATCH could set `won` or `lost` on a legacy deal
+        // with nothing checking it at all. Closing the scheduler's path while
+        // leaving the HTTP path open would have fixed the reproduction and not
+        // the defect.
+        //
+        // The transition check stays where it was: legacy deals are governed by
+        // this file's own DEAL_TRANSITIONS map, not by the JSONB config, so
+        // hoisting that too would double-gate them against the wrong table.
+        if (dealPipelineCfg) {
           const patchRefusal = manualStageRefusal({
             pipeline: dealPipelineCfg, pipelineKey: deal.pipeline_key, stage: newStage,
             automated: req.body.automated === true });
           if (patchRefusal) return res.status(patchRefusal.status).json(patchRefusal.body);
+        }
+        if (dealPipelineCfg && dealPipelineCfg.funnel_type) {
+          // CP1: funnel-typed deals are additionally transition-gated against
+          // the JSONB config, like /advance.
           const allowed = getPipelineTransitions(dealPipelineCfg, oldStage);
           if (!allowed.includes(newStage)) {
             return res.status(409).json({

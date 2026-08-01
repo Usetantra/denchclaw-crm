@@ -39,7 +39,7 @@
 // fields a non-HTTP caller needs (`changed`, `previous`, `code`).
 
 const { query } = require('../db/index');
-const { getPipelineTransitions, isManualStage } = require('../db/pipeline');
+const { getPipelineTransitions, isManualStage, mayAutomationSetStage } = require('../db/pipeline');
 const sequenceDb = require('../db/models/sequences');
 const limitDb = require('../db/models/limits');
 
@@ -81,12 +81,26 @@ const limitDb = require('../db/models/limits');
  */
 function manualStageRefusal({ pipeline, pipelineKey, stage, automated }) {
   if (!automated) return null;              // a human may set anything legal
-  if (!isManualStage(pipeline, stage)) return null;
+  // CP-Y: the question is the POSITIVE one — "was this stage declared
+  // automatable?" — not "is it declared manual?". Asking it the other way
+  // returns false for a stage that declares nothing, and the legacy
+  // marketing/sales pipelines declare nothing on any stage, so the gate opened
+  // and a sequence step marked a real deal 'won'. Absent mode now means a human
+  // owns it.
+  if (mayAutomationSetStage(pipeline, stage)) return null;
+  // Two different problems, two different messages. "A human owns this" is a
+  // correct configuration; "nobody declared this automatable" is usually an
+  // unfinished one, and telling them apart is what keeps a frozen board
+  // diagnosable instead of mysterious.
+  const manual = isManualStage(pipeline, stage);
   return {
     status: 403,
     body: {
-      error: `Stage '${stage}' is manual — only a human may set it`,
-      error_code: 'manual_stage', pipeline_key: pipelineKey, requested: stage,
+      error: manual
+        ? `Stage '${stage}' is manual — only a human may set it`
+        : `Stage '${stage}' is not declared automatable on pipeline '${pipelineKey}' — only a human may set it`,
+      error_code: manual ? 'manual_stage' : 'stage_not_automatable',
+      pipeline_key: pipelineKey, requested: stage,
     },
   };
 }
@@ -113,7 +127,7 @@ async function advanceContactStage({
   const refusal = manualStageRefusal({ pipeline, pipelineKey, stage, automated });
   if (refusal) {
     return {
-      ok: false, changed: false, code: 'manual_stage', previous: currentStage, stage,
+      ok: false, changed: false, code: refusal.body.error_code, previous: currentStage, stage,
       status: refusal.status, body: refusal.body,
     };
   }

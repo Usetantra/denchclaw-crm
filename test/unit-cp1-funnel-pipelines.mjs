@@ -56,30 +56,36 @@ function canon(v) {
 
 // The legacy stage maps, verbatim, as amended through mig 007 (which added
 // no_show → booked on top of mig 006) — E2's byte-identity baseline.
+// CP-Y: these literals gained `mode` on every stage. Migration 026 declares it,
+// because the automation gate now asks "was this stage declared auto?" — and the
+// legacy pipelines declaring nothing at all is exactly how a sequence step
+// marked a real deal `won`. The byte-identity pin is deliberately KEPT rather
+// than loosened: it is what would catch the next silent change to the seeded
+// funnel, and updating it is the point at which someone has to justify one.
 const LEGACY_MARKETING = [
-  { key: 'sourced', label: 'Sourced', transitions: ['enriched', 'segmented', 'suppressed'] },
-  { key: 'enriched', label: 'Enriched', transitions: ['segmented', 'suppressed'] },
-  { key: 'segmented', label: 'Segmented', transitions: ['queued', 'nurture', 'suppressed'] },
-  { key: 'queued', label: 'Queued', transitions: ['engaged', 'nurture', 'suppressed'] },
-  { key: 'engaged', label: 'Engaged', transitions: ['responded', 'nurture', 'suppressed'] },
-  { key: 'responded', label: 'Responded', transitions: ['mql', 'nurture', 'suppressed'] },
-  { key: 'mql', label: 'MQL', transitions: ['nurture', 'suppressed'] },
-  { key: 'nurture', label: 'Nurture', transitions: ['segmented', 'suppressed'] },
-  { key: 'suppressed', label: 'Suppressed', transitions: [] },
+  { key: 'sourced', label: 'Sourced', mode: 'auto', transitions: ['enriched', 'segmented', 'suppressed'] },
+  { key: 'enriched', label: 'Enriched', mode: 'auto', transitions: ['segmented', 'suppressed'] },
+  { key: 'segmented', label: 'Segmented', mode: 'auto', transitions: ['queued', 'nurture', 'suppressed'] },
+  { key: 'queued', label: 'Queued', mode: 'auto', transitions: ['engaged', 'nurture', 'suppressed'] },
+  { key: 'engaged', label: 'Engaged', mode: 'auto', transitions: ['responded', 'nurture', 'suppressed'] },
+  { key: 'responded', label: 'Responded', mode: 'auto', transitions: ['mql', 'nurture', 'suppressed'] },
+  { key: 'mql', label: 'MQL', mode: 'auto', transitions: ['nurture', 'suppressed'] },
+  { key: 'nurture', label: 'Nurture', mode: 'auto', transitions: ['segmented', 'suppressed'] },
+  { key: 'suppressed', label: 'Suppressed', mode: 'auto', transitions: [] },
 ];
 const LEGACY_SALES = [
-  { key: 'accepted', label: 'Accepted', transitions: ['contacted', 'lost'] },
-  { key: 'contacted', label: 'Contacted', transitions: ['booked', 'unqualified', 'nurture', 'lost'] },
-  { key: 'booked', label: 'Booked', transitions: ['qualified', 'no_show', 'contacted'] },
-  { key: 'qualified', label: 'Qualified', transitions: ['proposal', 'unqualified', 'nurture', 'lost'] },
-  { key: 'proposal', label: 'Proposal', transitions: ['negotiation', 'nurture', 'lost'] },
-  { key: 'negotiation', label: 'Negotiation', transitions: ['onboarding', 'lost'] },
-  { key: 'onboarding', label: 'Onboarding', transitions: ['won', 'lost'] },
-  { key: 'won', label: 'Won', transitions: [] },
-  { key: 'lost', label: 'Lost', transitions: ['accepted'] },
-  { key: 'no_show', label: 'No Show', transitions: ['contacted', 'booked', 'lost'] },
-  { key: 'unqualified', label: 'Unqualified', transitions: ['nurture', 'lost'] },
-  { key: 'nurture', label: 'Nurture', transitions: ['contacted', 'lost'] },
+  { key: 'accepted', label: 'Accepted', mode: 'auto', transitions: ['contacted', 'lost'] },
+  { key: 'contacted', label: 'Contacted', mode: 'auto', transitions: ['booked', 'unqualified', 'nurture', 'lost'] },
+  { key: 'booked', label: 'Booked', mode: 'auto', transitions: ['qualified', 'no_show', 'contacted'] },
+  { key: 'qualified', label: 'Qualified', mode: 'auto', transitions: ['proposal', 'unqualified', 'nurture', 'lost'] },
+  { key: 'proposal', label: 'Proposal', mode: 'manual', transitions: ['negotiation', 'nurture', 'lost'] },
+  { key: 'negotiation', label: 'Negotiation', mode: 'manual', transitions: ['onboarding', 'lost'] },
+  { key: 'onboarding', label: 'Onboarding', mode: 'manual', transitions: ['won', 'lost'] },
+  { key: 'won', label: 'Won', mode: 'manual', transitions: [] },
+  { key: 'lost', label: 'Lost', mode: 'manual', transitions: ['accepted'] },
+  { key: 'no_show', label: 'No Show', mode: 'manual', transitions: ['contacted', 'booked', 'lost'] },
+  { key: 'unqualified', label: 'Unqualified', mode: 'auto', transitions: ['nurture', 'lost'] },
+  { key: 'nurture', label: 'Nurture', mode: 'auto', transitions: ['contacted', 'lost'] },
 ];
 
 // The CP1 ticket's seeded stage tables (key/mode/terminal/transitions).
@@ -178,9 +184,9 @@ async function main() {
   );
   const legacyMkt = legacy.rows.find(r => r.key === 'marketing');
   const legacySls = legacy.rows.find(r => r.key === 'sales');
-  check('E2: global marketing stages JSONB identical to the mig-006 literal',
+  check('E2: global marketing stages JSONB identical to the mig-006+026 literal (modes declared)',
     canon(legacyMkt?.stages) === canon(LEGACY_MARKETING), canon(legacyMkt?.stages));
-  check('E2: global sales stages JSONB identical to the mig-006+007 literal',
+  check('E2: global sales stages JSONB identical to the mig-006+007+026 literal (modes declared)',
     canon(legacySls?.stages) === canon(LEGACY_SALES), canon(legacySls?.stages));
   const backfilled = await db.query(
     `SELECT key, entity_type FROM crm_pipeline_configs WHERE company_id = $1 ORDER BY key`, [CO_MIG]

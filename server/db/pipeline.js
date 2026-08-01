@@ -69,6 +69,30 @@ function isManualStage(pipeline, stageKey) {
   return !!s && s.mode === 'manual';
 }
 
+// ─── CP-Y: what AUTOMATION may set, which is not the negation of manual ─────
+//
+// `isManualStage` answers "does a person own this?" and returns false when no
+// `mode` is declared. That reading is right for the UI glyph and wrong — badly
+// wrong — as an automation gate, because the legacy `marketing`/`sales`
+// pipelines declare no `mode` on any stage. So the gate opened, transition
+// legality was the only remaining guard, and `onboarding → won` is legal: a
+// sequence step marked a $50,000 deal **Won** with no human involved.
+//
+// This predicate is therefore NOT `!isManualStage`. It fails CLOSED and is
+// opt-in: automation may set a stage only when someone explicitly declared it
+// `auto`. Absent mode means a human owns it, because that is the safe reading
+// when nobody has said otherwise — and on the one invariant that outranks
+// everything in this system, the default has to be the safe one, not the
+// convenient one.
+//
+// Both predicates exist on purpose and mean different things. `isManualStage`
+// keeps its meaning for display; this one is the only thing an automated writer
+// may ask.
+function mayAutomationSetStage(pipeline, stageKey) {
+  const s = findStage(pipeline, stageKey);
+  return !!s && s.mode === 'auto';
+}
+
 // "terminal": true on a stage object = entering it closes the deal (sets
 // closed_at) and the deal stops counting as the contact's active deal on that
 // pipeline. Absent flag ⇒ false.
@@ -145,7 +169,7 @@ function invalidateCompanyPipelines(companyId) {
 
 module.exports = {
   getPipelineConfig, getPipelineTransitions, findStage,
-  isManualStage, isTerminalStage, terminalStageKeys,
+  isManualStage, mayAutomationSetStage, isTerminalStage, terminalStageKeys,
   findFunnelContactPipelineForStage,
   invalidateCompanyPipelines, onPipelineCacheInvalidate,
 };

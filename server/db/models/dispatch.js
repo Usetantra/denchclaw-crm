@@ -13,7 +13,7 @@ const { query, getClient } = require('../index');
 const limitsDb = require('./limits');
 const seqDb = require('./sequences');
 const templatesDb = require('./templates');
-const { getPipelineConfig, findStage, isManualStage, isTerminalStage, getPipelineTransitions } = require('../pipeline');
+const { getPipelineConfig, findStage, isManualStage, mayAutomationSetStage, isTerminalStage, getPipelineTransitions } = require('../pipeline');
 const analyticsRouter = require('../../routes/analytics');
 // CP-C2: per-channel claim-door gates. Only LinkedIn has one, and only because
 // LinkedIn restricts ACCOUNTS rather than messages, so its limits have to be
@@ -576,15 +576,30 @@ async function applyStageWriteback(client, companyId, { job, step, enrollment })
 
   if (currentStage === target) return { applied: false, reason: 'already_there' };
 
-  // THE CP1 INVARIANT. A manual stage is a human's to set, and this caller is
-  // by definition not a human.
-  if (isManualStage(pipeline, target)) {
+  // THE CP1 INVARIANT, and CP-Y's correction to how it was asked.
+  //
+  // This used to ask `isManualStage(...)`, i.e. "is this stage declared manual?"
+  // — which answers FALSE for a stage that declares nothing. The legacy
+  // `marketing`/`sales` pipelines declare no mode at all, so the gate opened and
+  // a sequence step moved a real deal to 'won'. The question an automated writer
+  // has to ask is the positive one: "was this stage declared automatable?"
+  //
+  // The two refusals are reported separately on purpose. "A human owns this" and
+  // "nobody ever said a robot could touch this" send an operator to different
+  // places, and a board that has quietly stopped advancing is only diagnosable
+  // if the timeline says which one it was (D4b.2).
+  if (!mayAutomationSetStage(pipeline, target)) {
+    const manual = isManualStage(pipeline, target);
+    const why = manual
+      ? `'${target}' is a manual stage — only a human may set it`
+      : `'${target}' is not declared automatable (no mode:'auto' on pipeline '${pipelineKey}'), so only a human may set it`;
     await noteActivity(client, companyId, job.contact_id, {
       type: 'stage_writeback_refused', channel: job.channel,
-      message: `Stage write-back refused: '${target}' is a manual stage — only a human may set it (stage left at '${currentStage}')`,
-      data: { pipeline_key: pipelineKey, wanted: target, found: currentStage, reason: 'manual_stage', scheduled_action_id: job.id },
+      message: `Stage write-back refused: ${why} (stage left at '${currentStage}')`,
+      data: { pipeline_key: pipelineKey, wanted: target, found: currentStage,
+        reason: manual ? 'manual_stage' : 'stage_not_automatable', scheduled_action_id: job.id },
     });
-    return { applied: false, reason: 'manual_stage' };
+    return { applied: false, reason: manual ? 'manual_stage' : 'stage_not_automatable' };
   }
 
   const allowed = getPipelineTransitions(pipeline, currentStage);
