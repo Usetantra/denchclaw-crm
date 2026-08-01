@@ -1,11 +1,18 @@
 #!/usr/bin/env bash
-# DenchClaw CRM — local contract-test runner.
+# DenchClaw CRM — local contract-test runner. This is what `npm test` runs.
+#
 # Boots a scratch Postgres (Docker postgres:16 unless DATABASE_URL_TEST is
 # provided), applies migrate.sql + migrations/ in order, starts the server on a
-# test port, and runs test/contract.mjs at PHASE=CP5.
+# test port, and runs every suite in the table below.
+#
+# CP-AA: it no longer needs psql. Schema is applied by test/apply-schema.mjs
+# using `pg`, which is already a dependency — so the suite runs on a machine with
+# neither Docker nor psql, given only a local DATABASE_URL_TEST. Before this, the
+# suites every verdict rests on were runnable only through an uncommitted mirror
+# on one machine, which makes every green number a claim nobody else can check.
 #
 # NEVER points at staging: refuses any DATABASE_URL_TEST that doesn't look local.
-set -euo pipefail
+set -uo pipefail
 cd "$(dirname "$0")/.."
 
 TEST_PORT="${TEST_PORT:-3101}"
@@ -30,20 +37,14 @@ cleanup() {
 }
 trap cleanup EXIT
 
-apply_sql() { # $1 = sql file
-  if [ -n "$CONTAINER" ]; then
-    docker exec -i "$CONTAINER" psql -v ON_ERROR_STOP=1 -U denchclaw -d denchclaw_test -q < "$1"
-  else
-    psql -v ON_ERROR_STOP=1 -q "$DATABASE_URL_TEST" < "$1"
-  fi
-}
-
 if [ -n "${DATABASE_URL_TEST:-}" ]; then
+  # UNCHANGED, deliberately. This is the only thing standing between a test run
+  # and production DDL, so CP-AA did not touch it. `psql` is no longer required:
+  # it is needed only INSIDE the container, which already ships it.
   case "$DATABASE_URL_TEST" in
     *localhost*|*127.0.0.1*) : ;;
     *) echo "FATAL: DATABASE_URL_TEST must be a local scratch DB (got a non-local host). Refusing."; exit 2 ;;
   esac
-  command -v psql >/dev/null || { echo "FATAL: psql required to apply schema to DATABASE_URL_TEST"; exit 2; }
 else
   command -v docker >/dev/null || { echo "FATAL: no DATABASE_URL_TEST and no docker — cannot create scratch DB"; exit 2; }
   CONTAINER="denchclaw-crm-test-$$"
@@ -61,11 +62,9 @@ else
 fi
 
 echo "[test] applying schema: migrate.sql + migrations/*.sql (in order)"
-apply_sql migrate.sql
-for f in migrations/0*.sql; do
-  echo "[test]   $f"
-  apply_sql "$f"
-done
+# No psql. apply-schema.mjs re-checks the local-host rule itself, so the guard
+# holds even when that file is run directly rather than through this script.
+node test/apply-schema.mjs || { echo "FATAL: schema failed to apply"; exit 2; }
 
 echo "[test] booting server on :$TEST_PORT"
 DATABASE_URL="$DATABASE_URL_TEST" \
@@ -104,109 +103,90 @@ if [ "$PROBE" != "200" ]; then
   echo "       Another server is almost certainly holding that port — this run"
   echo "       would produce phantom failures against someone else's process."
   echo "       Free the port, or set TEST_PORT to one you own."
-  kill $SERVER_PID 2>/dev/null
   exit 2
 fi
 
-echo "[test] running contract harness PHASE=$PHASE"
-CRM_API_BASE="http://127.0.0.1:${TEST_PORT}" \
-INTERNAL_API_KEY="$KEY" \
-LIMITED_API_KEY="$LIMITED" \
-PHASE="$PHASE" \
-node test/contract.mjs
+# ─── The suite table ─────────────────────────────────────────────────────────
+# ONE list. The "N/M suites reported" denominator is derived from it, so a suite
+# cannot be added here and quietly left out of the tally — which is precisely how
+# an entire 88-test suite once vanished from a runner while the total still
+# looked healthy.
+export CRM_API_BASE="http://127.0.0.1:${TEST_PORT}"
+export INTERNAL_API_KEY="$KEY"
+export LIMITED_API_KEY="$LIMITED"
+export DATABASE_URL="$DATABASE_URL_TEST"
+export PHASE
 
-echo "[test] running unit-tenancy tests (model/helper functions with no HTTP route)"
-DATABASE_URL="$DATABASE_URL_TEST" node test/unit-tenancy.mjs
+SUITES=(
+  "contract (PHASE=$PHASE)|node test/contract.mjs"
+  "unit-tenancy|node test/unit-tenancy.mjs"
+  "unit-tenants|node test/unit-tenants.mjs"
+  "unit-sequences|node test/unit-sequences.mjs"
+  "unit-b2-enrollment|node test/unit-b2-enrollment.mjs"
+  "unit-limits|node test/unit-limits.mjs"
+  "unit-b3-dispatcher|node test/unit-b3-dispatcher.mjs"
+  "unit-api-keys|node test/unit-api-keys.mjs"
+  "unit-a3-api-key-auth|node test/unit-a3-api-key-auth.mjs"
+  "unit-cp1-funnel-pipelines|node test/unit-cp1-funnel-pipelines.mjs"
+  "unit-cp2-step-scheduler|node test/unit-cp2-step-scheduler.mjs"
+  "unit-cpi-inbox|node test/unit-cpi-inbox.mjs"
+  "unit-cp4a0-content|node test/unit-cp4a0-content.mjs"
+  "unit-cp4a-executor|node test/unit-cp4a-executor.mjs"
+  "unit-cpb-marketing|env MARKETING_WEBHOOK_SECRET=$MK_SECRET RUN=$MK_RUN TEST_PORT=$TEST_PORT node test/unit-cpb-marketing.mjs"
+  "unit-cpc-channels|node test/unit-cpc-channels.mjs"
+  "unit-cpc2-linkedin|node test/unit-cpc2-linkedin.mjs"
+  "unit-cpd-automations|node test/unit-cpd-automations.mjs"
+  "unit-cpy-automation-gate|node test/unit-cpy-automation-gate.mjs"
+)
 
-echo "[test] running unit-tenants tests (GOAL A2: tenant entity + resolution)"
-DATABASE_URL="$DATABASE_URL_TEST" node test/unit-tenants.mjs
+TOTAL_SUITES=${#SUITES[@]}
+REPORTED=0
+PASSED=0
+FAILED=0
+BROKEN=""
+SILENT=""
 
-echo "[test] running unit-sequences tests (GOAL B1: sequence data model)"
-DATABASE_URL="$DATABASE_URL_TEST" node test/unit-sequences.mjs
+for entry in "${SUITES[@]}"; do
+  name="${entry%%|*}"
+  cmd="${entry#*|}"
+  echo ""
+  echo "=== $name ==="
+  out="$(eval "$cmd" 2>&1)"
+  rc=$?
+  printf '%s\n' "$out" | tail -3
+  if [ "$rc" -ne 0 ]; then BROKEN="$BROKEN $name"; fi
 
-echo "[test] running B2 stage-triggered enrollment verification"
-CRM_API_BASE="http://127.0.0.1:${TEST_PORT}" \
-INTERNAL_API_KEY="$KEY" \
-DATABASE_URL="$DATABASE_URL_TEST" \
-node test/unit-b2-enrollment.mjs
+  # Suites print either "N passed, M failed" or "N passed / M failed". Matching
+  # only one form is how a tally silently reads TOTAL: 0 while nineteen suites
+  # are reporting hundreds — so both are matched, and a suite that printed
+  # NEITHER is named rather than counted as an empty success.
+  counts="$(printf '%s\n' "$out" | grep -oE '[0-9]+ passed[ ,/]+[0-9]+ failed' | tail -1)"
+  if [ -z "$counts" ]; then
+    SILENT="$SILENT $name"
+    continue
+  fi
+  REPORTED=$((REPORTED + 1))
+  p="$(printf '%s' "$counts" | grep -oE '^[0-9]+')"
+  f="$(printf '%s' "$counts" | grep -oE '[0-9]+ failed$' | grep -oE '^[0-9]+')"
+  PASSED=$((PASSED + p))
+  FAILED=$((FAILED + f))
+done
 
-echo "[test] running unit-limits tests (GOAL A5: quotas/suppression/quiet-hours)"
-DATABASE_URL="$DATABASE_URL_TEST" node test/unit-limits.mjs
+echo ""
+echo "──────────────────────────────────────────────────────────────"
+echo "  TOTAL: $PASSED passed / $FAILED failed"
+echo "  $REPORTED/$TOTAL_SUITES suites reported"
+[ -n "$SILENT" ] && echo "  !! RAN BUT PRINTED NO COUNT:$SILENT"
+[ -n "$BROKEN" ] && echo "  !! EXITED NON-ZERO:$BROKEN"
+echo "──────────────────────────────────────────────────────────────"
 
-echo "[test] running B3 dispatcher verification (real claim/ack routes)"
-CRM_API_BASE="http://127.0.0.1:${TEST_PORT}" \
-INTERNAL_API_KEY="$KEY" \
-DATABASE_URL="$DATABASE_URL_TEST" \
-node test/unit-b3-dispatcher.mjs
-
-echo "[test] running unit-api-keys tests (GOAL A3: per-tenant API keys)"
-DATABASE_URL="$DATABASE_URL_TEST" node test/unit-api-keys.mjs
-
-echo "[test] running A3 API key auth-flow verification (real HTTP, DB-backed key)"
-CRM_API_BASE="http://127.0.0.1:${TEST_PORT}" \
-INTERNAL_API_KEY="$KEY" \
-DATABASE_URL="$DATABASE_URL_TEST" \
-node test/unit-a3-api-key-auth.mjs
-
-echo "[test] running CP1 funnel-pipelines verification (funnel_type + webinar stage machines)"
-CRM_API_BASE="http://127.0.0.1:${TEST_PORT}" \
-INTERNAL_API_KEY="$KEY" \
-DATABASE_URL="$DATABASE_URL_TEST" \
-node test/unit-cp1-funnel-pipelines.mjs
-
-echo "[test] running CP2 step-scheduler verification (enrollment -> queue -> ack -> stage write-back)"
-CRM_API_BASE="http://127.0.0.1:${TEST_PORT}" \
-INTERNAL_API_KEY="$KEY" \
-DATABASE_URL="$DATABASE_URL_TEST" \
-node test/unit-cp2-step-scheduler.mjs
-
-echo "[test] running CP-I unified inbox verification (unification -> unread -> thread union -> stage chips)"
-CRM_API_BASE="http://127.0.0.1:${TEST_PORT}" \
-INTERNAL_API_KEY="$KEY" \
-DATABASE_URL="$DATABASE_URL_TEST" \
-node test/unit-cpi-inbox.mjs
-
-echo "[test] running CP4a-0 message content store (nothing may queue a blank send)"
-CRM_API_BASE="http://127.0.0.1:${TEST_PORT}" \
-INTERNAL_API_KEY="$KEY" \
-DATABASE_URL="$DATABASE_URL_TEST" \
-node test/unit-cp4a0-content.mjs
-
-echo "[test] running CP4a email executor (local stub provider — NEVER a real key)"
-CRM_API_BASE="http://127.0.0.1:${TEST_PORT}" \
-INTERNAL_API_KEY="$KEY" \
-DATABASE_URL="$DATABASE_URL_TEST" \
-node test/unit-cp4a-executor.mjs
-
-echo "[test] running CP-B marketing stage ingestion (the automated marketing stages actually move)"
-CRM_API_BASE="http://127.0.0.1:${TEST_PORT}" \
-INTERNAL_API_KEY="$KEY" \
-MARKETING_WEBHOOK_SECRET="$MK_SECRET" \
-RUN="$MK_RUN" \
-TEST_PORT="$TEST_PORT" \
-DATABASE_URL="$DATABASE_URL_TEST" \
-node test/unit-cpb-marketing.mjs
-
-echo "[test] running CP-C per-channel executors (SMS + WhatsApp, local stub — NEVER a real key)"
-CRM_API_BASE="http://127.0.0.1:${TEST_PORT}" \
-INTERNAL_API_KEY="$KEY" \
-DATABASE_URL="$DATABASE_URL_TEST" \
-node test/unit-cpc-channels.mjs
-
-echo "[test] running CP-C2 LinkedIn executor + safety spine (local stub — NEVER a real key)"
-CRM_API_BASE="http://127.0.0.1:${TEST_PORT}" \
-INTERNAL_API_KEY="$KEY" \
-DATABASE_URL="$DATABASE_URL_TEST" \
-node test/unit-cpc2-linkedin.mjs
-
-echo "[test] running CP-D automations (the operator's actual ladders, borrowed + authored)"
-CRM_API_BASE="http://127.0.0.1:${TEST_PORT}" \
-INTERNAL_API_KEY="$KEY" \
-DATABASE_URL="$DATABASE_URL_TEST" \
-node test/unit-cpd-automations.mjs
-
-echo "[test] running CP-Y automation stage gate (a robot may only set a declared-auto stage)"
-CRM_API_BASE="http://127.0.0.1:${TEST_PORT}" \
-INTERNAL_API_KEY="$KEY" \
-DATABASE_URL="$DATABASE_URL_TEST" \
-node test/unit-cpy-automation-gate.mjs
+# A harness that can report green but not red is worse than no harness. Three
+# separate things make a run RED, and all three are checked: a failing
+# assertion, a suite that crashed before it could report, and a suite that
+# vanished from the tally entirely — the last one being the failure mode that
+# hides inside a healthy-looking total.
+if [ "$FAILED" -ne 0 ] || [ -n "$BROKEN" ] || [ "$REPORTED" -ne "$TOTAL_SUITES" ]; then
+  echo "SUITE FAILED"
+  exit 1
+fi
+echo "SUITE GREEN"
