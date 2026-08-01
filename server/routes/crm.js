@@ -20,7 +20,7 @@ const {
 const { ENGAGEMENT_WEIGHTS, recordEngagement } = require('../lib/scoring');
 // CP-B: the contact-entity advance, shared with marketing-stage ingestion so the
 // mode/transition/entry gates have exactly one implementation.
-const { advanceContactStage, manualStageRefusal } = require('../lib/stage-authority');
+const { advanceContactStage, manualStageRefusal, isAutomatedRequest } = require('../lib/stage-authority');
 
 const { requireAuth, getUserCompanyId } = require('../middleware/auth');
 
@@ -747,7 +747,7 @@ router.post('/contacts/:id/advance', async (req, res) => {
 
     const { pipeline_key, stage, reason, actor } = req.body;
     if (!pipeline_key || !stage) return res.status(400).json({ error: 'pipeline_key and stage required' });
-    const automated = req.body.automated === true;
+    const automated = isAutomatedRequest(req.body);
 
     const contact = await contactDb.getById(req.params.id, companyId);
     if (!contact) return res.status(404).json({ error: 'contact not found' });
@@ -947,7 +947,7 @@ router.post('/deals', validate(), async (req, res) => {
     if (createCfg) {
       const createRefusal = manualStageRefusal({
         pipeline: createCfg, pipelineKey: pipelineKey || 'sales', stage: initialStage,
-        automated: req.body.automated === true });
+        automated: isAutomatedRequest(req.body) });
       if (createRefusal) return res.status(createRefusal.status).json(createRefusal.body);
     }
 
@@ -1113,7 +1113,7 @@ router.patch('/deals/:id', async (req, res) => {
       if (dealPipelineCfg) {
         const patchRefusal = manualStageRefusal({
           pipeline: dealPipelineCfg, pipelineKey: deal.pipeline_key || 'sales', stage: newStage,
-          automated: req.body.automated === true });
+          automated: isAutomatedRequest(req.body) });
         if (patchRefusal) return res.status(patchRefusal.status).json(patchRefusal.body);
       }
 

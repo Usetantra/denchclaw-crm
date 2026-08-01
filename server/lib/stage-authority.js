@@ -44,6 +44,38 @@ const sequenceDb = require('../db/models/sequences');
 const limitDb = require('../db/models/limits');
 
 /**
+ * Is this request a programmatic caller?
+ *
+ * CP-Y3. All three gate sites read `req.body.automated === true`, so the STRING
+ * `"true"` — what a form-encoded or loosely-typed client sends — was not `true`,
+ * the caller was treated as a HUMAN, and the mode gate never fired. An
+ * unexpected value opened the gate instead of closing it: the same fail-open
+ * shape as the original defect, one layer up.
+ *
+ * The asymmetry below is the whole point and is deliberate:
+ *
+ *   ABSENT  ⇒ human. The UI sends no such field, and every real user's PATCH
+ *             would 403 if absence meant "robot". This is the direction that
+ *             breaks the product, so it stays permissive.
+ *   PRESENT but unrecognisable ⇒ AUTOMATED. A caller that bothered to send the
+ *             field is a program. The unsafe direction is treating a robot as a
+ *             human, so ambiguity resolves to automated.
+ *
+ * Only an explicit, recognisable "no" counts as not-automated.
+ *
+ * This does NOT make the flag a security boundary — it is still honour-system,
+ * still self-declared, and A7's identity work is what would change that. It
+ * makes the flag mean what it says when a well-behaved caller sets it.
+ */
+function isAutomatedRequest(body) {
+  const v = body && body.automated;
+  if (v === undefined || v === null) return false;
+  if (typeof v === 'boolean') return v;
+  const sv = String(v).trim().toLowerCase();
+  return !(sv === 'false' || sv === '0' || sv === '');
+}
+
+/**
  * Advance a contact through a contact-entity pipeline.
  *
  * @param {object}   o
@@ -212,4 +244,4 @@ async function advanceContactStage({
   };
 }
 
-module.exports = { advanceContactStage, manualStageRefusal };
+module.exports = { advanceContactStage, manualStageRefusal, isAutomatedRequest };

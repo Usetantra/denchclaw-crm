@@ -16,7 +16,7 @@ import contactDb from '../server/db/models/contacts.js';
 import seqDb from '../server/db/models/sequences.js';
 import dispatchDb from '../server/db/models/dispatch.js';
 import { getPipelineConfig, isManualStage, mayAutomationSetStage } from '../server/db/pipeline.js';
-import { manualStageRefusal } from '../server/lib/stage-authority.js';
+import { manualStageRefusal, isAutomatedRequest } from '../server/lib/stage-authority.js';
 
 const KEY = process.env.INTERNAL_API_KEY;
 const BASE = process.env.CRM_API_BASE;
@@ -241,6 +241,90 @@ async function main() {
   const illegal = await api('PATCH', `/api/crm/deals/${b5.id}`, { stage: 'won' });
   check('Y-10 the transition check still runs on the built-in arm (contacted → won is 409)',
     illegal.status === 409, `${illegal.status} ${JSON.stringify(illegal.json).slice(0, 120)}`);
+
+  // ═══ CP-Y3 — the flag itself was fail-open ═══════════════════════════════
+  // All three gate sites read `req.body.automated === true`. The STRING "true"
+  // — what a form-encoded or loosely-typed client sends — is not `true`, so the
+  // caller was treated as a HUMAN and the gate never fired. An unexpected value
+  // OPENED the gate: the original defect's shape, one layer up.
+  //
+  // The asymmetry is deliberate. ABSENT means human, because the UI sends no
+  // such field and breaking that breaks the product for every real user.
+  // PRESENT-but-unrecognisable means AUTOMATED, because a caller that bothered
+  // to send the field is a program.
+  const unit = [
+    [undefined, false, 'absent ⇒ human (the UI sends nothing)'],
+    [{}, false, 'no field ⇒ human'],
+    [{ automated: true }, true, 'boolean true'],
+    [{ automated: 'true' }, true, 'STRING "true" — the reported hole'],
+    [{ automated: 'TRUE' }, true, 'case-insensitive'],
+    [{ automated: ' True ' }, true, 'whitespace-tolerant'],
+    [{ automated: 1 }, true, 'numeric 1'],
+    [{ automated: '1' }, true, 'string "1"'],
+    [{ automated: 'engine' }, true, 'unrecognisable ⇒ AUTOMATED, not human'],
+    [{ automated: false }, false, 'boolean false'],
+    [{ automated: 'false' }, false, 'string "false"'],
+    [{ automated: '0' }, false, 'string "0"'],
+    [{ automated: '' }, false, 'empty string'],
+  ];
+  const wrong = unit.filter(([body, want]) => isAutomatedRequest(body) !== want);
+  check(`Y-11 the coercion helper is right on all ${unit.length} cases`, wrong.length === 0,
+    wrong.map(([b, w, why]) => `${why}: wanted ${w}`).join('; '));
+
+  // C1 — over real HTTP, on the built-in pipeline, at the stage that matters.
+  for (const truthy of ['true', 'TRUE', 1, '1']) {
+    const d = await mkBuiltin('onboarding');
+    const r = await api('PATCH', `/api/crm/deals/${d.id}`, { stage: 'won', automated: truthy });
+    check(`Y-12 C1 — automated=${JSON.stringify(truthy)} is refused (403) on a manual stage`,
+      r.status === 403, `${r.status} ${JSON.stringify(r.json).slice(0, 90)}`);
+    check(`Y-12 C1 …and the deal did not move (${JSON.stringify(truthy)})`,
+      (await db.query('SELECT stage FROM deals WHERE id=$1', [d.id])).rows[0].stage === 'onboarding',
+      'a string-flagged robot moved the deal');
+  }
+  const cr = await api('POST', '/api/crm/deals',
+    { title: 'CPY3 string flag', contact_id: c2.id, value: 1, stage: 'won', automated: 'true' });
+  check('Y-12 C1 …and CREATE honours the string flag too', cr.status === 403,
+    `${cr.status} ${JSON.stringify(cr.json).slice(0, 90)}`);
+
+  // C2 — an explicit "no" is still a human.
+  for (const falsy of [false, 'false', '0', '']) {
+    const d = await mkBuiltin('onboarding');
+    const r = await api('PATCH', `/api/crm/deals/${d.id}`, { stage: 'won', automated: falsy });
+    check(`Y-13 C2 — automated=${JSON.stringify(falsy)} behaves as a HUMAN (200)`,
+      r.status === 200, `${r.status} ${JSON.stringify(r.json).slice(0, 90)}`);
+  }
+
+  // C3 — THE POSITIVE CONTROL THAT PROTECTS THE PRODUCT.
+  const c3 = await mkBuiltin('onboarding');
+  const c3r = await api('PATCH', `/api/crm/deals/${c3.id}`, { stage: 'won' });
+  check('Y-14 C3 POSITIVE CONTROL — NO automated field at all is still a human (200)',
+    c3r.status === 200, `${c3r.status} ${JSON.stringify(c3r.json).slice(0, 90)}`);
+  check('Y-14 C3 …and the deal moved — the UI sends no such field, and this is what real users do',
+    (await db.query('SELECT stage FROM deals WHERE id=$1', [c3.id])).rows[0].stage === 'won',
+    'the UI path broke');
+
+  // C4 — a string-flagged robot may still write a declared-`auto` stage.
+  const c4 = await mkBuiltin('contacted');
+  const c4r = await api('PATCH', `/api/crm/deals/${c4.id}`, { stage: 'booked', automated: 'true' });
+  check('Y-15 C4 — a string-flagged robot may still write a declared-`auto` stage (200)',
+    c4r.status === 200, `${c4r.status} ${JSON.stringify(c4r.json).slice(0, 90)}`);
+  check('Y-15 C4 …and it moved', (await db.query('SELECT stage FROM deals WHERE id=$1', [c4.id])).rows[0].stage === 'booked',
+    'legitimate automation was blocked');
+
+  // The CONTACT /advance path reads the same helper. `webinar_marketing`'s
+  // first stage `prospects` is MANUAL, and the mode gate runs before transition
+  // legality — so a string-flagged robot must be refused there too.
+  // (`webinar_sales` is a DEAL-entity pipeline and would 404 for lack of an
+  // active deal, which would have tested the wrong thing entirely.)
+  const c5c = await contactDb.create({ name: 'CPY3 Contact', email: `cpy3-${RUN}@ex.test`, company_id: CO });
+  const c5r = await api('POST', `/api/crm/contacts/${c5c.id}/advance`,
+    { pipeline_key: 'webinar_marketing', stage: 'prospects', automated: 'true' });
+  check('Y-15 the CONTACT /advance path honours the string flag as well (403)',
+    c5r.status === 403, `${c5r.status} ${JSON.stringify(c5r.json).slice(0, 120)}`);
+  const c5h = await api('POST', `/api/crm/contacts/${c5c.id}/advance`,
+    { pipeline_key: 'webinar_marketing', stage: 'prospects' });
+  check('Y-15 …while the same call with no flag is a human and succeeds',
+    c5h.status === 200, `${c5h.status} ${JSON.stringify(c5h.json).slice(0, 120)}`);
 
   console.log(results.join('\n'));
   console.log(`\nCP-Y automation gate: ${pass} passed / ${fail} failed`);
