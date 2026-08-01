@@ -1762,3 +1762,11 @@
   cannot report red is worse than none, and I will break a test myself to check. Flagged CI as optional
   and **not** to be enabled without saying so: the org's Actions plan has a 2,000 min/month cap and a
   blown quota fails every job org-wide.
+- 2026-08-01 15:45 [build] **CP-AA DONE — `6e1ac52`.** `npm test` → **1102 passed / 0 failed, 19/19 suites**,
+  with **neither Docker nor psql**. `test/apply-schema.mjs` uses `pg` (already a dependency); the staging
+  guard is untouched and duplicated there, **stricter** — it parses the host, so a password containing
+  `localhost` is refused. Suite table is one list; the `N/19` denominator is derived. All three red paths
+  proven by injection (failing assertion, crashed suite, vanished suite) — exit 1 each. **CORRECTION:** my
+  hand-tallied totals were low — the real number is **1102**, not the 1096 I reported at CP-Z; no verdict
+  changes, but the number was wrong, which is the error this removes. **No CI enabled** — the 2,000 min/mo
+  org cap makes that the operator's spending decision. Receipt: `.loop/receipts/CP-AA-suite-unrunnable.md`.
