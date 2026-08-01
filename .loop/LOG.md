@@ -1744,3 +1744,21 @@
   lessons already in my own notes. A control that fails for the wrong reason is worse than no control;
   it would have sent the builder chasing a regression that did not exist. Verdict
   `.loop/verdicts/CP-Z-channel-without-executor.md`.
+- 2026-08-01 12:4x [orch] `handoff=operator`, and the gap I chased is one I had been stepping around
+  for many ticks: **every number I report comes from `scratchpad/run-suite.sh` — my own mirror, which
+  is deliberately never committed.** Measured the committed entrypoint instead of assuming it works:
+  `npm test` → `test/run-local.sh`, which needs **Docker** (daemon unreachable here — the machine-wide
+  wedge I must never restart) **or** `psql` (**not installed**), and there is **no `.github/workflows`
+  at all**. So the **19 suites / 1102 tests** every verdict in `.loop/verdicts/` rests on are runnable
+  only by me, by hand, on one machine, through an uncommitted script. **When this session ends the
+  operator cannot run their own suite, and every green number becomes a claim they cannot check.**
+  Dispatched as **CP-AA**, explicitly *not* to be fixed by committing my mirror — the mirror exists to
+  work around the committed harness; the harness is what should work. `pg` is already a dependency, so
+  the fix is a node applier instead of psql, with the non-local `DATABASE_URL_TEST` guard left exactly
+  as strict. Carried two of my own hard-won lessons into the ticket (report `N/19 suites reported`;
+  count both reporting formats) after my tally once silently dropped an 88-test suite and separately
+  printed `TOTAL: 0` while 19 suites reported 1058. **AA4 is the criterion that decides it:**
+  deliberately break a test and confirm the runner exits non-zero — a harness that reports green but
+  cannot report red is worse than none, and I will break a test myself to check. Flagged CI as optional
+  and **not** to be enabled without saying so: the org's Actions plan has a 2,000 min/month cap and a
+  blown quota fails every job org-wide.
