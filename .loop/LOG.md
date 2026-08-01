@@ -1701,3 +1701,22 @@
   unstaged. **Consequence worth knowing:** `.loop/STATE.json` is now tracked, so every tick will show as
   a tracked modification in `git status` for both sessions. The 10 `SESSION_HANDOFF_*.md` files are left
   untracked by choice — they were delivered inline in chat and are recoverable.
+- 2026-08-01 12:1x [orch] Re-ran the **goal-conformance audit against the live system** — the copy on
+  disk was from 04:39, before CP-B/C/C2/D and the whole CP-Y arc, and it listed four things as not
+  built. **10/0, all four closed**, checked against behaviour on a virgin DB rather than checkpoint
+  names. The marketing funnel above `prospects` is now a mechanism and not a diagram: visits,
+  registrants, attendees, and **all three auto-registrant paths verbatim** — calendar YES/MAYBE,
+  cold-email reply expressing interest, comment below a content post — each drove a real contact
+  through the real public endpoints. That third detail is precisely what the old paraphrased spec had
+  lost, which is why it was never built. Per-channel providers wired (Resend, Twilio SMS+WhatsApp,
+  Unipile LinkedIn); all six borrowed automations seed 200 across four channels; no-show ladder
+  cumulative `[0,3,6,9,16]`; delivery pipeline all five stages. **Retracted one gap rather than leave a
+  scary zero in the record:** `crm_pipeline_configs.automations` being empty was MY OWN note about an
+  unused column, never an operator ask — the automations live in `sequences`+`sequence_steps`, which is
+  what the dispatcher reads. **One loose end found and dispatched as CP-Z:** `ai_call` is accepted by
+  five whitelists but `executors.js` wires only Resend/Twilio/Unipile, so a step creates (201), **the
+  claim door hands the job out**, and it strands in `claimed` with nothing able to send it. Not a goal
+  violation — GOALS.md never asks for AI calls — but the CP-Y shape again. Specified the fix
+  **generally** (derive the sendable set from the executor registry; refuse at both claim door and
+  front door) rather than special-casing `ai_call`, with a positive control (Z3) so a too-narrow fix
+  cannot pass.

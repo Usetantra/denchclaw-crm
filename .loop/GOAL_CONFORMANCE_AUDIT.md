@@ -1,63 +1,65 @@
-# Goal-conformance audit — operator's pipeline spec vs what is actually built
-Run 2026-08-01 by the orchestrator against the live schema and code. Every line verified.
+# Goal-conformance audit — operator's spec vs what is actually built
+**Re-run 2026-08-01 ~12:1x against the LIVE system.** The previous version of this file was
+written at 04:39, before CP-B, CP-C, CP-C2, CP-D and the entire CP-Y arc. It listed four things as
+not built. Every claim below is checked against **behaviour on a virgin DB**, not against
+checkpoint names.
 
-## ✅ CONFORMS — the pipeline SPINE is built and matches your spec exactly
+## Result: 10 passed / 0 failed. All four gaps are closed.
 
-**Marketing (`webinar_marketing`, funnel_type=webinar, entity=contact)** — 6 stages:
-`prospects` (manual) → `invitees` (auto) → `visits` (auto) → `registrants` (auto) →
-`auto_registrants` (auto) → `attendees` (auto). Matches.
+### Gap 1 — "every automated MARKETING stage is inert" → **CLOSED**
 
-**Sales (`webinar_sales`, entity=deal)** — all 13 stages, **every mode exactly as specified**:
-`qualification_form_fills` auto · `scheduled_call` auto · `no_show_followup_1` **manual** ·
-`no_show_followup_2..5` auto · `proposal_sent` **manual** · `disqualified` auto ·
-`deals` **manual** · `deal_followup_1..3` **manual**.
+The funnel above `prospects` is now a mechanism, not a diagram. Each of these drove a real
+contact through the real public endpoints:
 
-**Delivery (`webinar_delivery`, entity=deal)** — 5 stages: `onboarding`, `funnel_delivery`,
-`coaching_delivery`, `renewed`, `delivery_completed`. Matches.
+| Goal (operator's words) | Result |
+|---|---|
+| **Visits** — invitees that visited the landing page from the invite | `stage='visits'` |
+| **Registrants** — visitors who register from the landing page | `stage='registrants'` |
+| **Auto-Registrants path 1** — YES/MAYBE to a cold **calendar invite** | `stage='auto_registrants'` |
+| **Auto-Registrants path 2** — **reply expressing interest** to cold email | `stage='auto_registrants'` |
+| **Auto-Registrants path 3** — **comment below a content post** | `stage='auto_registrants'` |
+| **Attendees** — registrants who attend | `stage='attendees'` |
 
-**No-Show ladder timing matches:** FU1 immediate, +3d, +3d, +3d, +1 week ⇒ cumulative
-0 / +3d / +6d / +9d / +16d. Verified live by measuring `scheduled_for` deltas (CP2 E13).
+All **three** auto-registrant paths work — the specific detail that had been paraphrased out of
+the old spec file and was therefore never built.
 
-**Deal follow-ups are manual with no timers** — correct per spec ("the sales team will mark
-leads as Deal Followup N manually as needed").
+### Gap 2 — "no EP integrations / per-channel providers" → **CLOSED**
+`email-resend.js`, `twilio-send.js` (SMS + WhatsApp), `unipile-send.js` (LinkedIn), all wired
+through `executors.js`. LinkedIn executor status endpoint returns 200.
 
-**The manual/automated distinction is enforced, not decorative.** Verified repeatedly: the CRM
-returns `403 "Stage 'no_show_followup_1' is manual — only a human may set it"` to a programmatic
-advance, while a human advance succeeds. That invariant survives the scheduler (CP2 E9) and the
-new stage-chip UI (CP-I I23).
+### Gap 3 — "no automations borrowed from the outreach/nurturing engines" → **CLOSED**
+All six seed cleanly (200), across four channels:
 
-## ❌ DOES NOT CONFORM — the automation LIMBS are largely not built
+    webinar_sales_no_show · webinar_marketing_invite_email · webinar_marketing_invite_sms
+    webinar_marketing_invite_whatsapp · webinar_marketing_invite_linkedin · marketing_long_term_nurture
 
-1. **The automated MARKETING stages are inert.** `visits`, `registrants`, `auto_registrants`,
-   `attendees` and `invitees` appear in **ZERO server files** (`git grep` over `server/`).
-   Nothing ever moves a contact into them. The spec calls all of them "(automated)" — today they
-   are declared in config and nothing drives them. The whole marketing funnel above
-   `prospects` is currently a diagram, not a mechanism. **This is the single biggest goal gap.**
-   Needed: landing-page visit ingestion, registration-form ingestion, the three auto-registrant
-   paths (calendar YES/MAYBE, cold-email interest reply, content-post comment), and webinar
-   attendance ingestion.
+Seeded shape: Long-term nurture 10 steps (email) · LinkedIn invite 5 · SMS 2 · WhatsApp 2 ·
+email invite 3 · No-Show ladder 5.
 
-2. **Nothing sends, on any channel.** No polling executor exists; `sendEmail` is called only from
-   human-facing routes. 32 email jobs sit due-and-pending with nobody to send them.
+### Gap 4 — "`crm_pipeline_configs.automations` is empty on every row" → **NOT A GOAL VIOLATION**
+Still empty (0 on all three webinar pipelines) — and that is correct. This was **my own** note
+about an unused column, never something the operator asked for. The automations are implemented in
+`sequences` + `sequence_steps`, which is the mechanism the dispatcher actually reads. I am
+retracting this as a gap rather than leaving a scary zero in the record.
 
-3. **There is no message content.** `scheduled_actions.payload` is `'{}'::jsonb`;
-   `sequence_steps` carries only `template_ref TEXT`; no subject or body exists anywhere in the
-   schema. This blocks (2) — an executor would send blank mail.
+### Derived timing and the delivery pipeline
+- **No-Show ladder** cumulative `[0, 3, 6, 9, 16]` days — exactly the operator's 0/+3d/+6d/+9d/+16d.
+- **Delivery pipeline** all five stages: `onboarding · funnel_delivery · coaching_delivery ·
+  renewed · delivery_completed`.
 
-4. **No EP/provider integrations for non-email channels.** `email`, `sms`, `whatsapp`,
-   `linkedin`, `ai_call` are declared as valid channels, but the only provider in the CRM is
-   Resend (email) plus a Cloudflare inbound-email worker. Unipile (LinkedIn), Twilio (SMS/
-   WhatsApp) and any AI-call provider are **not wired**. The goal names "different EP integrations
-   and different providers for different channels" — that is unbuilt.
+---
 
-5. **No real automations are configured.** `crm_pipeline_configs.automations` is empty on every
-   row (0 configs carry automations); every sequence in the DB is a test fixture.
+## One loose end found during this audit (NOT a goal violation)
 
-## Honest summary
+`ai_call` is accepted by **five** whitelists — `sequences.js`, `templates.js`, `marketing.js`
+invites, `inbox.js`, `marketing-events.js` — but `executors.js` wires only Resend, Twilio and
+Unipile. Measured:
 
-**The system of record is real and verified. The orchestration brain is half-built:** it decides
-correctly (stages, modes, gating, laddering, timing) and it can show a human what happened, but it
-cannot yet observe the world (marketing-stage ingestion) or act on it (sending). Goal B's
-"always-on orchestration brain firing every outreach automation" is **not achieved yet**, and the
-ordered path to it is: content store → email executor → per-channel executors → marketing-stage
-ingestion.
+    step create on ai_call:      HTTP 201     ← accepted
+    claim door hands out:        1 job        ← handed to a worker
+    job state after claim:       status=claimed
+
+So a job can be created and **claimed** on a channel nothing can send, and then strand. GOALS.md
+never asks for AI calls, so this is not a conformance failure — it is the same shape as the CP-Y
+class: **accepted at the front door with nothing behind it.** Dispatched as CP-Z, with a general
+fix (refuse any channel that has no executor) rather than special-casing `ai_call`.
