@@ -1858,3 +1858,8 @@
   mine, builder idle 52m, working tree clean apart from the roadmap that is meant to stay unstaged.
   Holding to what I said two ticks ago: the autonomous work is done and I am not going to invent
   smaller tickets to fill a tick. The three decisions are the only thing left.
+- 2026-08-01 15:0x [orch] Second consecutive no-op caretaker tick. Nothing changed: `local == origin`
+  (`af61ef8`), `origin/main` untouched, 16/19 paired, no MERGE_HEAD, no strays, builder idle 69m, no PR
+  open. Surfaced the cron itself (`ac182011`, every 17 minutes) to the operator — with the build work
+  finished, each tick is a no-op that still spends quota, and whether to keep the loop armed is their
+  call rather than something I should keep absorbing silently.
