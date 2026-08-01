@@ -14,5 +14,6 @@
     "tip": "663eb1f",
     "code_and_record_backed_up": true,
     "main_untouched": "9ff21cb"
-  }
+  },
+  "last_integrity_check": "2026-08-01 14:4x — clean: local==origin cc7a150, main untouched 9ff21cb, 16/19 paired, no strays, no MERGE_HEAD"
 }
