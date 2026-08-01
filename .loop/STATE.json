@@ -3,7 +3,7 @@
   "cp": "CP-UI",
   "phase": "VERIFIED",
   "ticket": "CP-Y3-automated-coercion",
-  "status": "ALL WORK NOW BACKED UP OFF-MACHINE. Found this tick: feat/consolidation did NOT exist on origin and had no upstream — 39 commits / 89 files / 18,792 insertions of verified work existed ONLY on this laptop. Pushed the BRANCH (never main) and verified the remote tip matches local HEAD exactly; origin/main is untouched at 9ff21cb. A PR can now be opened at https://github.com/Usetantra/denchclaw-crm/pull/new/feat/consolidation — I did NOT open it, because merging toward main is the operators decision. Fifteen verdicts banked; suite 1091/0; no UI regression (15/0). THREE OPERATOR DECISIONS REMAIN: (1) merge to main — the PR URL is ready and the branch is now safely on origin; (2) deploy — read the send-safety preconditions in DEPLOY_RUNBOOK first (a tenant with no tenant_channel_limits row sends UNCAPPED); (3) claude login for unattended watchdog autonomy.",
+  "status": "CODE AND VERIFICATION RECORD BOTH NOW OFF-MACHINE. Last tick I pushed 39 commits of code after finding the branch had never existed on origin; this tick I closed the same gap for the thing that makes those commits trustworthy — .loop/ was untracked, so 15 verdicts, 13 receipts, the tickets and DEPLOY_RUNBOOK.md existed on one disk and nowhere else. Committed and pushed (663eb1f); verified on origin: 15 verdicts + the runbook present, tip matches local HEAD, origin/main still 9ff21cb. Deliberate split: markdown record IS tracked because the verdicts are reasoning that does not regenerate; the 3.5M of evidence PNGs are gitignored because every one is reproducible by re-running a probe in scratchpad/. scratchpad/ stays out per the standing rule and CONSOLIDATION_ROADMAP.md stays unstaged. CONSEQUENCE TO KNOW: .loop/STATE.json is now tracked, so every tick shows as a tracked modification in git status for both sessions. The 10 SESSION_HANDOFF_*.md files remain untracked by choice — they were delivered inline in chat and are recoverable. THREE OPERATOR DECISIONS REMAIN: (1) merge to main via https://github.com/Usetantra/denchclaw-crm/pull/new/feat/consolidation — I did not open the PR; (2) deploy — read DEPLOY_RUNBOOK send-safety preconditions first; (3) claude login.",
   "handoff": "operator",
   "updated_by": "orch",
   "build_ticket": "CP-Y3 automated-flag coercion (BUILT ee9e4f1)",
@@ -11,8 +11,8 @@
   "next_ticket": "F38 — the anchored scheduler (a PORT of nurturing-engine dispatcher.py:160-204)",
   "backup": {
     "branch": "origin/feat/consolidation",
-    "tip": "ee9e4f1",
-    "pushed_at": "2026-08-01",
-    "main_untouched": true
+    "tip": "663eb1f",
+    "code_and_record_backed_up": true,
+    "main_untouched": "9ff21cb"
   }
 }

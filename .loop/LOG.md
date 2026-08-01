@@ -1687,3 +1687,17 @@
   `origin/main` is untouched at `9ff21cb`. GitHub returned a PR URL —
   https://github.com/Usetantra/denchclaw-crm/pull/new/feat/consolidation — which I did **not** open,
   because merging toward main is the operator's decision, not mine to take by momentum.
+- 2026-08-01 12:0x [orch] Closed the sibling of last tick's finding. I had pushed 39 commits of **code**
+  after discovering the branch never existed on origin — but the same risk was still open for the thing
+  that makes those commits trustworthy: **`.loop/` was untracked**, so 15 verdicts, 13 receipts, the
+  tickets and `DEPLOY_RUNBOOK.md` lived on one disk and nowhere else. Committed and pushed (`663eb1f`),
+  then **verified on origin rather than trusting the push**: 15 verdicts and the runbook present, remote
+  tip matches local HEAD, `origin/main` still `9ff21cb`. **Deliberate split, not an accident:** the
+  markdown record is tracked because the verdicts are *reasoning* — why a robot could mark a $50,000
+  deal Won, which branch the gate was hoisted above, why absent `mode` had to mean "a human owns it",
+  and which of my own probes produced vacuous passes — none of which regenerates; the 3.5M of evidence
+  PNGs are gitignored *with the reason written in `.gitignore`* because every one is reproducible by
+  re-running a probe. `scratchpad/` stays out per the standing rule; `CONSOLIDATION_ROADMAP.md` stays
+  unstaged. **Consequence worth knowing:** `.loop/STATE.json` is now tracked, so every tick will show as
+  a tracked modification in `git status` for both sessions. The 10 `SESSION_HANDOFF_*.md` files are left
+  untracked by choice — they were delivered inline in chat and are recoverable.
