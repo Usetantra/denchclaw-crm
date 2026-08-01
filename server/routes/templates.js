@@ -18,7 +18,12 @@ const { requireAuth, getUserCompanyId } = require('../middleware/auth');
 
 router.use(requireAuth);
 
+// The known channel vocabulary. Wider than the sendable set on purpose — see
+// routes/sequences.js. The GET filter below accepts the full vocabulary (you may
+// legitimately want to LIST copy for a channel you cannot yet send on); only
+// authoring new copy is narrowed.
 const CHANNELS = ['email', 'sms', 'whatsapp', 'ai_call', 'linkedin'];
+const { canSend, CHANNELS: SENDABLE } = require('../lib/executors');
 
 // GET /api/crm/templates?channel=
 router.get('/', async (req, res) => {
@@ -62,6 +67,14 @@ router.post('/', async (req, res) => {
     // is the hazard, so it is refused at the only door that creates content.
     if (!body || !String(body).trim()) return res.status(400).json({ error: 'body required and must not be blank' });
     if (channel && !CHANNELS.includes(channel)) return res.status(400).json({ error: `unknown channel '${channel}'` });
+    // CP-Z: authoring copy PINNED to a channel nothing can send is a trap that
+    // only surfaces later, as a step that will not fire.
+    if (channel && !canSend(channel)) {
+      return res.status(422).json({
+        error: `no executor exists for channel '${channel}' — copy pinned to it could never be sent`,
+        channel, sendable_channels: SENDABLE,
+      });
+    }
     const t = await templatesDb.upsertTemplate(companyId, { ref, channel, subject, body });
     res.status(201).json(t);
   } catch (err) {

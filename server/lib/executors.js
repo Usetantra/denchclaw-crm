@@ -163,4 +163,22 @@ const linkedin = makeExecutor({
 });
 
 const byChannel = { email, sms, whatsapp, linkedin };
-module.exports = { byChannel, email, sms, whatsapp, linkedin, CHANNELS: Object.keys(byChannel) };
+
+// ─── CP-Z: the SENDABLE set, derived and never hand-maintained ───────────────
+// Five whitelists elsewhere accept `ai_call` as a channel, and nothing here can
+// build an executor for it — so a step could be created, a job queued, and the
+// claim door would hand that job to a worker that does not exist. It came back
+// `claimed` and stayed there: accepted at the front door with nothing behind it.
+//
+// This is `Object.keys(byChannel)`, so it cannot drift from what actually
+// exists. Adding a provider adapter above is the ONLY way to make a channel
+// sendable — there is deliberately no second list to update and forget.
+//
+// SENDABLE is not the same question as RECORDABLE, and conflating them would
+// have been the wrong fix. An AI call that happened out of band is a real event
+// worth logging on the timeline, and inbox/marketing-event ingestion rightly
+// still accept `ai_call`. What the CRM cannot do is QUEUE ONE TO BE SENT.
+const CHANNELS = Object.keys(byChannel);
+const canSend = (channel) => Object.prototype.hasOwnProperty.call(byChannel, channel);
+
+module.exports = { byChannel, email, sms, whatsapp, linkedin, CHANNELS, canSend };

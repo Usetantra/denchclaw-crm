@@ -58,6 +58,23 @@ async function claimJobs(companyId, channel, limit, claimedBy) {
   if (!companyId) throw new Error('dispatch.claimJobs requires companyId');
   if (!claimedBy) throw new Error('dispatch.claimJobs requires claimedBy');
 
+  // CP-Z: a job on a channel with NO EXECUTOR is never handed out. Before this,
+  // the door served it happily, a worker that does not exist never acked it, and
+  // it sat at `claimed` forever — the same "accepted at the front door with
+  // nothing behind it" shape as CP-Y. It is LEFT PENDING rather than skipped,
+  // for the reason this file already gives about unresolved content: a skipped
+  // ack ADVANCES the ladder, so mass-skipping would fire step 3 at people who
+  // never received step 2. Wire the provider and the queue drains by itself.
+  //
+  // Required lazily: lib/executors → lib/channel-executor → this module, so a
+  // top-level require would be a cycle and hand back a half-built export.
+  // Called once per scan, on a module Node has already cached.
+  const { canSend, CHANNELS: SENDABLE } = require('../../lib/executors');
+  if (!canSend(channel)) {
+    console.warn(`[CRM][dispatch] refusing to claim '${channel}' jobs — no executor exists for that channel (have: ${SENDABLE.join(', ')})`);
+    return [];
+  }
+
   if (await limitsDb.isQuietHours(companyId, channel)) return [];
 
   // CP4a-0 F1: a job frozen as content-less BEFORE its copy was authored would

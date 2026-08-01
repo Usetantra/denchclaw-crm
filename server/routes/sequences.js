@@ -14,7 +14,13 @@ const { requireAuth, getUserCompanyId } = require('../middleware/auth');
 
 router.use(requireAuth);
 
+// The known channel VOCABULARY — what the CRM understands at all. Deliberately
+// wider than what it can SEND on: `ai_call` is a real thing that happens to a
+// contact and belongs on their timeline, it just cannot be queued as outbound
+// work. `canSend` below is the narrower question, and it is derived from the
+// executor registry rather than restated here.
 const CHANNELS = ['email', 'sms', 'whatsapp', 'ai_call', 'linkedin'];
+const { canSend, CHANNELS: SENDABLE } = require('../lib/executors');
 
 // CP2 D4b.1 — is the sequence's declared stage_writeback chain actually
 // walkable through the pipeline's transitions, in step_order?
@@ -175,6 +181,17 @@ router.post('/:id/steps', async (req, res) => {
       return res.status(400).json({ error: 'step_order must be a positive integer' });
     }
     if (!CHANNELS.includes(channel)) return res.status(400).json({ error: 'invalid channel' });
+    // CP-Z: refuse at the FRONT DOOR. The claim door already declines to hand
+    // out a job it has no executor for, so nothing gets stranded either way —
+    // but a step created today and discovered as a silently stuck queue in three
+    // weeks is a much worse way to learn this. 422: the channel is a real one,
+    // the request is well-formed, and the CRM simply cannot act on it yet.
+    if (!canSend(channel)) {
+      return res.status(422).json({
+        error: `no executor exists for channel '${channel}' — a step on it would queue work nothing can send`,
+        channel, sendable_channels: SENDABLE,
+      });
+    }
     if (delay_seconds !== undefined && (!Number.isInteger(delay_seconds) || delay_seconds < 0)) {
       return res.status(400).json({ error: 'delay_seconds must be a non-negative integer' });
     }

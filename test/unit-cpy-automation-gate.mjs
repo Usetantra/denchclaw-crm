@@ -17,6 +17,8 @@ import seqDb from '../server/db/models/sequences.js';
 import dispatchDb from '../server/db/models/dispatch.js';
 import { getPipelineConfig, isManualStage, mayAutomationSetStage } from '../server/db/pipeline.js';
 import { manualStageRefusal, isAutomatedRequest } from '../server/lib/stage-authority.js';
+import executors from '../server/lib/executors.js';
+import templatesDb from '../server/db/models/templates.js';
 
 const KEY = process.env.INTERNAL_API_KEY;
 const BASE = process.env.CRM_API_BASE;
@@ -325,6 +327,74 @@ async function main() {
     { pipeline_key: 'webinar_marketing', stage: 'prospects' });
   check('Y-15 …while the same call with no flag is a human and succeeds',
     c5h.status === 200, `${c5h.status} ${JSON.stringify(c5h.json).slice(0, 120)}`);
+
+  // ═══ CP-Z — a channel accepted at the front door with nothing behind it ═══
+  //
+  // `ai_call` is in five channel whitelists and no executor exists for it, so a
+  // step could be created, a job queued, and the claim door would hand it to a
+  // worker that does not exist. It came back `claimed` and stayed there.
+
+  // Z4 — the sendable set is DERIVED, not a second hand-maintained list.
+  check('Z-1 the sendable set is exactly the executor registry\'s own keys',
+    JSON.stringify(executors.CHANNELS) === JSON.stringify(Object.keys(executors.byChannel)),
+    JSON.stringify(executors.CHANNELS));
+  check('Z-1 …so a channel with no provider adapter cannot be sendable',
+    executors.canSend('ai_call') === false && executors.canSend('carrier_pigeon') === false,
+    'an executor-less channel reported sendable');
+
+  // Z3 — POSITIVE CONTROL: the four real channels are untouched.
+  check('Z-2 POSITIVE CONTROL — email, sms, whatsapp and linkedin are all still sendable',
+    ['email', 'sms', 'whatsapp', 'linkedin'].every(ch => executors.canSend(ch)),
+    JSON.stringify(executors.CHANNELS));
+
+  // Z2 — the front door.
+  const zSeq = await api('POST', '/api/crm/sequences', { name: `cpz ${RUN}`, pipeline_key: 'webinar_sales' });
+  const zSeqId = zSeq.json.id || zSeq.json.sequence?.id;
+  const zStep = await api('POST', `/api/crm/sequences/${zSeqId}/steps`,
+    { step_order: 1, channel: 'ai_call', body: 'Hi {first_name}' });
+  check('Z-3 creating a step on an executor-less channel is refused at the FRONT DOOR (422)',
+    zStep.status === 422, `${zStep.status} ${JSON.stringify(zStep.json).slice(0, 120)}`);
+  check('Z-3 …naming the channel and what IS sendable, so the message is actionable',
+    zStep.json && zStep.json.channel === 'ai_call' && Array.isArray(zStep.json.sendable_channels)
+      && zStep.json.sendable_channels.includes('email'), JSON.stringify(zStep.json));
+  const zTpl = await api('POST', '/api/crm/templates',
+    { ref: `cpz_${RUN}`, channel: 'ai_call', body: 'Hi {first_name}' });
+  check('Z-3 …and copy PINNED to such a channel is refused too', zTpl.status === 422,
+    `${zTpl.status} ${JSON.stringify(zTpl.json).slice(0, 100)}`);
+  const zOk = await api('POST', `/api/crm/sequences/${zSeqId}/steps`,
+    { step_order: 1, channel: 'email', subject: 'S', body: 'Hi {first_name}' });
+  check('Z-3 POSITIVE CONTROL — a step on a REAL channel is still created',
+    zOk.status === 201 || zOk.status === 200, `${zOk.status} ${JSON.stringify(zOk.json).slice(0, 100)}`);
+
+  // Z1 — the claim door, driven with a job that got in before the front door
+  // existed (which is the real population: rows already in the queue).
+  const zC = await contactDb.create({ name: 'CPZ Legacy', email: `cpz-${RUN}@ex.test`, company_id: CO });
+  const zS2 = await seqDb.createSequence({ companyId: CO, name: `cpz legacy ${RUN}`, pipelineKey: 'webinar_sales' });
+  const zSt = await seqDb.addStep(zS2.id, CO, { stepOrder: 1, channel: 'email', subject: 'S', body: 'Hi {first_name}' });
+  await db.query(`UPDATE sequence_steps SET channel='ai_call' WHERE id=$1`, [zSt.id]);
+  const zE = await seqDb.enroll(CO, { sequenceId: zS2.id, contactId: zC.id });
+  const zJob = (await db.query('SELECT * FROM scheduled_actions WHERE enrollment_id=$1', [zE.id])).rows[0];
+  await db.query(`UPDATE scheduled_actions SET channel='ai_call', scheduled_for=now()-interval '1 minute' WHERE id=$1`, [zJob.id]);
+  const zClaimed = await dispatchDb.claimJobs(CO, 'ai_call', 10, 'cpz-probe');
+  check('Z-4 the claim door hands out NOTHING for an executor-less channel', zClaimed.length === 0,
+    `claimed ${zClaimed.length}`);
+  const zAfter = (await db.query('SELECT status, attempt FROM scheduled_actions WHERE id=$1', [zJob.id])).rows[0];
+  check('Z-4 …and the job is LEFT PENDING, not stranded at `claimed`', zAfter.status === 'pending',
+    `status=${zAfter.status}`);
+  check('Z-4 …consuming no retry, so wiring a provider later drains the queue by itself',
+    zAfter.attempt === zJob.attempt, `${zAfter.attempt} vs ${zJob.attempt}`);
+
+  // Z3 again, but through the CLAIM DOOR rather than the registry — a fix that
+  // narrowed the sendable set too far would pass everything above and break the
+  // product.
+  const zLive = await contactDb.create({ name: 'CPZ Live', email: `cpz-live-${RUN}@ex.test`, company_id: CO });
+  const zS3 = await seqDb.createSequence({ companyId: CO, name: `cpz live ${RUN}`, pipelineKey: 'webinar_sales' });
+  await seqDb.addStep(zS3.id, CO, { stepOrder: 1, channel: 'email', subject: 'S', body: 'Hi {first_name}' });
+  const zE3 = await seqDb.enroll(CO, { sequenceId: zS3.id, contactId: zLive.id });
+  await db.query(`UPDATE scheduled_actions SET scheduled_for=now()-interval '1 minute' WHERE enrollment_id=$1`, [zE3.id]);
+  const zEmail = await dispatchDb.claimJobs(CO, 'email', 10, 'cpz-live');
+  check('Z-5 POSITIVE CONTROL — an email job STILL claims normally through the same door',
+    zEmail.length >= 1, `claimed ${zEmail.length}`);
 
   console.log(results.join('\n'));
   console.log(`\nCP-Y automation gate: ${pass} passed / ${fail} failed`);
