@@ -1826,3 +1826,16 @@
   rather than produce meaningless output (the same protection I had to add to my mirror after 88 phantom
   401s), and I identified the process before killing anything, since it belonged to neither this project
   nor the builder. Verdict `.loop/verdicts/CP-AB-suite-runs-once.md`.
+- 2026-08-01 14:0x [orch] `handoff=operator`. Closed the last piece of the CP-AA/CP-AB arc: those two
+  checkpoints made `npm test` work without Docker, but **the README still told everyone it "boots a
+  Docker postgres:16 scratch DB"** — so the fix was undiscoverable. A contributor without Docker would
+  read that, conclude the suite was unrunnable for them, and never find the path that now works, which
+  is precisely the state CP-AA existed to end. Rewrote the Tests section **myself** rather than spend a
+  builder round-trip, because every claim in it is something I measured this session and I could map
+  each one to the tick that measured it: the no-Docker path (CP-AA verify — psql absent, daemon
+  unreachable, 1102/0), re-runnability (CP-AB — three consecutive runs, identical totals), the
+  non-local guard with the **host parsed rather than string-matched** (CP-AB AB3 — 6/6 refused,
+  including `localhost` in the credentials), the `N/19 suites reported` completeness count, and that a
+  failing suite is **named** and the run exits non-zero (AA4/AB5). Committed and pushed.
+  **Honest status:** the autonomous work has reached genuine diminishing returns — what I have left to
+  find is smaller than what the three pending decisions unblock.
