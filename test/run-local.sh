@@ -12,6 +12,15 @@ TEST_PORT="${TEST_PORT:-3101}"
 PHASE="${PHASE:-CP5}"
 KEY="ct-key-$$"
 LIMITED="ct-limited-$$"
+# CP-B: the public marketing webhooks fail CLOSED with no secret, so the test
+# server needs one. Per-run, never a real deployment value.
+MK_SECRET="ct-marketing-secret-$$"
+# The public marketing webhooks derive the TENANT from the secret, so the suite's
+# per-run tenant needs its own binding. RUN is pinned here (not left to the test's
+# Date.now() default) precisely so the server, booted first, can know the tenant
+# id the test will create.
+MK_RUN="$$"
+MK_SECRETS="{\"$MK_SECRET\":\"cpb_co_$MK_RUN\"}"
 CONTAINER=""
 SERVER_PID=""
 
@@ -64,6 +73,9 @@ PORT="$TEST_PORT" \
 INTERNAL_API_KEY="$KEY" \
 INTERNAL_API_KEYS="{\"$KEY\":\"*\",\"$LIMITED\":[\"co_bound_only\"]}" \
 AUTOMATION_ENV_FILE=/nonexistent \
+MARKETING_WEBHOOK_SECRET="$MK_SECRET" \
+MARKETING_WEBHOOK_SECRETS="$MK_SECRETS" \
+MARKETING_PUBLIC_BASE="http://127.0.0.1:${TEST_PORT}" \
   RESEND_API_KEY="" CLOUDFLARE_AI_TOKEN="" \
 node server/server.js &
 SERVER_PID=$!
@@ -165,3 +177,12 @@ CRM_API_BASE="http://127.0.0.1:${TEST_PORT}" \
 INTERNAL_API_KEY="$KEY" \
 DATABASE_URL="$DATABASE_URL_TEST" \
 node test/unit-cp4a-executor.mjs
+
+echo "[test] running CP-B marketing stage ingestion (the automated marketing stages actually move)"
+CRM_API_BASE="http://127.0.0.1:${TEST_PORT}" \
+INTERNAL_API_KEY="$KEY" \
+MARKETING_WEBHOOK_SECRET="$MK_SECRET" \
+RUN="$MK_RUN" \
+TEST_PORT="$TEST_PORT" \
+DATABASE_URL="$DATABASE_URL_TEST" \
+node test/unit-cpb-marketing.mjs

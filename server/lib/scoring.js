@@ -28,6 +28,13 @@ const ENGAGEMENT_WEIGHTS = {
   cta_clicked: 10,
   proposal_viewed: 15,
   payment: 50,
+  // CP-B marketing ingestion. `registered` above already covers a form fill and
+  // an auto-registration; these are the two signals it did not cover.
+  // Attendance outweighs registration because turning up is the strongest
+  // marketing-side buying signal there is — the same reasoning the nurturing
+  // engine encodes by pushing attendance a stage further than registration.
+  webinar_attended: 25,
+  content_comment: 8,
 };
 
 // Log an activity entry to the contact's append-only feed and, when the entry is

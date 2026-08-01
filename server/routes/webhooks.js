@@ -11,6 +11,14 @@ const crypto = require('crypto');
 const router = express.Router();
 const contactDb = require('../db/models/contacts');
 const tenantDb = require('../db/models/tenants');
+const { query } = require('../db/index');
+// CP-B: an interested reply to a cold email invite is auto-registrant path 2.
+const { ingestMarketingEvent } = require('../lib/marketing-events');
+const crmRouter = require('./crm');
+const marketingDeps = {
+  recordActivity: crmRouter.addContactActivity,
+  findOrCreateContact: crmRouter.findOrCreateContact,
+};
 
 const PORT = process.env.PORT || 3100;
 const SELF = `http://127.0.0.1:${PORT}`;
@@ -220,8 +228,46 @@ router.post('/email/inbound', async (req, res) => {
       metadata: { subject, from, to, in_reply_to: inReplyTo || null, references: references || null },
     }, company);
 
+    // ─── CP-B, auto-registrant path 2 ────────────────────────────────────────
+    // "Invitees that REPLY AND EXPRESS INTEREST in joining the webinar for cold
+    // EMAIL outreach." This is the natural home for it: the inbound reply
+    // already lands here, already resolves the contact, and already dedupes.
+    //
+    // Attribution comes from the invite the reply is answering — the contact's
+    // most recent EMAIL invite link names the webinar. No invite link means
+    // this person was never emailed an invite, so their reply is not an
+    // auto-registration signal for any webinar and we do not guess one.
+    //
+    // Wrapped so it can NEVER fail the inbound delivery. Recording the customer's
+    // email is the contract of this endpoint; the funnel move is a consequence.
+    let marketing = null;
+    try {
+      const linkRes = await query(
+        `SELECT webinar_id FROM crm_invite_links
+          WHERE company_id=$1 AND contact_id=$2 AND channel='email'
+          ORDER BY created_at DESC LIMIT 1`,
+        [company, contact.id]
+      );
+      if (linkRes.rows[0]) {
+        marketing = await ingestMarketingEvent(company, {
+          event_type: 'email_reply', channel: 'email',
+          contact_id: contact.id, webinar_id: linkRes.rows[0].webinar_id,
+          body: text || subject || '',
+          provider: 'inbound_email',
+          provider_event_id: messageId || undefined,
+          source: 'inbound_email',
+        }, marketingDeps);
+      }
+    } catch (e) {
+      console.error('[Webhooks] marketing email_reply ingest failed (inbound still recorded):', e.message);
+    }
+
     return res.status(msg.status === 201 ? 200 : 502).json({
       ok: msg.status === 201, company_id: company, contact_id: contact.id, conversation_id: conv.json.id,
+      ...(marketing ? { marketing: {
+        event_type: marketing.event_type, outcome: marketing.outcome,
+        from_stage: marketing.from_stage, to_stage: marketing.to_stage, detail: marketing.detail,
+      } } : {}),
     });
   } catch (err) {
     console.error('[Webhooks] inbound email error:', err.message);
