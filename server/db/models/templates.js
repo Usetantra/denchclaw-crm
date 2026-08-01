@@ -24,7 +24,7 @@
 // A subject follows its body's source — mixing a step's body with a template's
 // subject would be a third, invisible source of truth.
 const { query } = require('../index');
-const { resolveTokens } = require('../../lib/ai-draft');
+const { resolveTokens, unresolvedTokensIn, suspiciousBracesIn, restoreEscapes } = require('../../lib/ai-draft');
 
 // Channels where a subject is a real field. On the chat-shaped channels a
 // subject is meaningless, so its absence must never count as "unresolved".
@@ -142,9 +142,14 @@ async function resolveStepContent(companyId, step, contact, { stageLabel = null,
   // Tokens are resolved against THIS contact, at the moment the job is
   // materialised — which for step 5 of a ladder is 16 days after enrolment, so
   // the copy reflects who the contact is when the message actually goes out.
-  const tokenCtx = { contact: contact || {}, stageLabel };
-  const subject = rawSubject ? resolveTokens(rawSubject, tokenCtx) : null;
-  const body = resolveTokens(rawBody, tokenCtx);
+  // Validate with escapes still as sentinels, then restore at the very end:
+  // after {{first_name}} becomes the literal {first_name}, nothing can tell a
+  // deliberate literal from a merge that failed.
+  const tokenCtx = { contact: contact || {}, stageLabel, restore: false };
+  const subjectV = rawSubject ? resolveTokens(rawSubject, tokenCtx) : null;
+  const bodyV = resolveTokens(rawBody, tokenCtx);
+  const subject = subjectV;
+  const body = bodyV;
 
   // These two are BLOCKING, not advisory, and that was a deliberate change of
   // mind: as warnings they were recorded and then sent anyway, because nothing
@@ -163,13 +168,19 @@ async function resolveStepContent(companyId, step, contact, { stageLabel = null,
   // embarrassing to a real person. The operator fixes the copy or the contact
   // data and it flows again.
   const cleanSubject = subject && subject.trim() ? subject.trim() : null;
-  const leftover = [...new Set(
-    [...String(body + ' ' + (cleanSubject || '')).matchAll(/\{(\w+)\}/g)].map(m => m[1])
-  )];
+  // Only a KNOWN token still present means resolution FAILED. Braced prose like
+  // "the {growth} framework" is ordinary marketing copy and must not be refused
+  // — blocking it would leave an operator unable to work out why a perfectly
+  // good email will not send, and the reliable response to that is to switch the
+  // executor off.
+  const combined = String(body) + ' ' + (cleanSubject || '');
+  const leftover = unresolvedTokensIn(combined);
   if (leftover.length) {
     return {
       resolved: false, source, template_ref: templateRef || null, subject: null, body: null,
-      reason: `content would ship unresolved tokens (${leftover.join(', ')}) — the contact is missing those fields, or the copy references a token that does not exist`,
+      reason: `content would ship unresolved ${leftover.map(t => '{' + t + '}').join(', ')} — this contact has no value for `
+        + `${leftover.join('/')}. Fill it in on the contact, remove the token from the copy, or write it as `
+        + `{{${leftover[0]}}} if you meant the literal text.`,
     };
   }
   if (wantsSubject && !cleanSubject) {
@@ -179,7 +190,27 @@ async function resolveStepContent(companyId, step, contact, { stageLabel = null,
     };
   }
 
-  return { resolved: true, source, template_ref: templateRef || null, subject: cleanSubject, body, reason: null, warnings: [] };
+  // Non-blocking: brace-shaped words that are not tokens. Usually deliberate
+  // prose, occasionally a typo like {frist_name}. Surfaced at authoring time via
+  // the readiness endpoint; never a reason to refuse a send.
+  const suspicious = suspiciousBracesIn(combined);
+  const warnings = suspicious.length
+    ? [`looks like a token but is not one: ${suspicious.map(w => '{' + w + '}').join(', ')} — if that is literal text it will send as-is`]
+    : [];
+  // Did we deliberately emit literal braces (from a {{escaped}} token)? The
+  // send-time guards re-check for unresolved tokens as defence in depth, and
+  // after restoration a deliberate literal is byte-identical to a failed merge.
+  // Recording the fact here is what lets those guards stay strict for everyone
+  // else while not false-blocking copy an operator explicitly escaped.
+  const finalSubject = cleanSubject ? restoreEscapes(cleanSubject) : null;
+  const finalBody = restoreEscapes(body);
+  const literalBraces = finalBody !== body || (cleanSubject && finalSubject !== cleanSubject);
+  return {
+    resolved: true, source, template_ref: templateRef || null,
+    subject: finalSubject, body: finalBody,
+    literal_braces: !!literalBraces,
+    reason: null, warnings,
+  };
 }
 
 // The payload frozen into `scheduled_actions.payload`. Shape is deliberately
@@ -202,6 +233,7 @@ function contentPayload(resolved, extra = {}) {
     template_ref: resolved.template_ref,
     subject: resolved.subject,
     body: resolved.body,
+    content_literal_braces: !!resolved.literal_braces,
     content_error: resolved.resolved ? null : resolved.reason,
   };
 }

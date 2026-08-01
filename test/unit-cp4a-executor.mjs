@@ -379,6 +379,68 @@ async function main() {
       !churnClaim.some(j => j.id === churn.job.id), String(churnClaim.length));
   }
 
+
+  // ── R8 — "tried to SEND" and "a claim EXPIRED" must not share a counter ───
+  // The orchestrator's forward risk: if a reclaim bumps `attempt`, pure claim
+  // churn (a slow provider, two executor restarts) inflates it to MAX_ATTEMPTS,
+  // and then the FIRST genuine failure dead-letters immediately instead of
+  // getting its three real delivery attempts — and a dead-letter sets
+  // enrollments.status='exited', which is TERMINAL. So the reclaim bump was
+  // removed entirely: `attempt` counts delivery attempts and nothing else.
+  {
+    const dispatch = (await import('../server/db/models/dispatch.js')).default;
+    stub.mode = 'ok'; stub.requests.length = 0;
+    const churned = await mkJob({});
+    // Two full claim-expiry cycles, no send attempted in either.
+    await dispatch.claimJobs(CO, 'email', 10, 'inst-1');
+    await db.query(`UPDATE scheduled_actions SET claimed_at=now()-interval '2 hours' WHERE id=$1`, [churned.job.id]);
+    await dispatch.claimJobs(CO, 'email', 10, 'inst-2');
+    await db.query(`UPDATE scheduled_actions SET claimed_at=now()-interval '2 hours' WHERE id=$1`, [churned.job.id]);
+    const third = (await dispatch.claimJobs(CO, 'email', 10, 'inst-3')).find(j => j.id === churned.job.id);
+    // `attempt` DEFAULTs to 1 (migrations/014), so an unburned job reads 1.
+    check('R8 a job reclaimed twice has NOT burned any delivery attempts', third.attempt === 1, String(third.attempt));
+    // Now ONE genuine delivery failure. It must retry, not dead-letter.
+    const ack = await dispatch.ackJob(CO, churned.job.id, { claimedBy: 'inst-3', status: 'failed', error: 'transient provider error' });
+    check('R8 THE CRITERION: reclaimed twice then failed once ⇒ still retries, does NOT dead-letter',
+      ack.body?.retry?.will_retry === true, JSON.stringify(ack.body?.retry));
+    const enr = (await db.query('SELECT status FROM enrollments WHERE id=$1', [churned.enr.id])).rows[0];
+    check('R8 …and the enrollment is NOT terminally exited', enr.status === 'active', enr.status);
+    const row = await jobRow(churned.job.id);
+    check('R8 …the job is requeued for another try', row.status === 'pending' && row.attempt === 2, `${row.status}/${row.attempt}`);
+  }
+
+  // ── R9 — braced PROSE must send; only a real merge failure blocks ────────
+  // "We call this the {growth} framework." is ordinary marketing copy. Blocking
+  // it is a false refusal an operator cannot diagnose, and the reliable response
+  // to an inexplicably stuck queue is to switch sending off.
+  {
+    stub.mode = 'ok'; stub.requests.length = 0;
+    const prose = await mkJob({ body: 'Hi {first_name}, we call this the {growth} framework.', subject: 'The {growth} framework' });
+    const rp = await exec.tick(CO);
+    check('R9 copy containing braced PROSE is sent, not false-blocked', rp.sent >= 1, JSON.stringify(rp));
+    const body = stub.requests[0]?.body;
+    check('R9 …the merge field resolved', /^Hi X4A/.test(body?.text || ''), body?.text);
+    check('R9 …and the braced prose survives verbatim', /\{growth\} framework/.test(body?.text || ''), body?.text);
+    check('R9 …including in the subject', /\{growth\}/.test(body?.subject || ''), body?.subject);
+
+    // A genuine merge failure still blocks, and the reason tells the operator
+    // what to actually do about it.
+    const templates = (await import('../server/db/models/templates.js')).default;
+    const nameless = await contactDb.create({ name: '', email: `nameless-${RUN}@ex.test`, company_id: CO });
+    const res = await templates.resolveStepContent(CO, { channel: 'email', subject: 'Hi', body: 'Hi {first_name}.' }, nameless);
+    check('R9 a REAL unresolved merge field still blocks', res.resolved === false, JSON.stringify(res));
+    check('R9 …and the reason is actionable (names the field and the escape)',
+      /\{first_name\}/.test(res.reason || '') && /\{\{first_name\}\}/.test(res.reason || ''), res.reason);
+
+    // The escape hatch actually works end to end.
+    stub.requests.length = 0;
+    const lit = await mkJob({ body: 'Write {{first_name}} to personalise. Regards.', subject: 'About merge fields' });
+    const rl2 = await exec.tick(CO);
+    check('R9 {{first_name}} sends as LITERAL {first_name}, not blocked and not substituted',
+      rl2.sent >= 1 && /Write \{first_name\} to personalise/.test(stub.requests[0]?.body?.text || ''),
+      stub.requests[0]?.body?.text);
+  }
+
   // ── X12 — tenancy ────────────────────────────────────────────────────────
   stub.requests.length = 0;
   const foreign = await mkJob({ company: CO2 });

@@ -118,8 +118,18 @@ async function claimJobs(companyId, channel, limit, claimedBy) {
           -- Resolution is the only writer today, so this is unreachable — but
           -- the contract should not depend on every future writer behaving, and
           -- shipping "Hi {first_name}," to a prospect is not recoverable.
-          AND COALESCE(sa.payload->>'body', '') !~ '\{[a-zA-Z_][a-zA-Z0-9_]*\}'
-          AND COALESCE(sa.payload->>'subject', '') !~ '\{[a-zA-Z_][a-zA-Z0-9_]*\}'
+          -- Only the KNOWN token names count as "unresolved". Matching every
+          -- brace-shaped word would refuse ordinary copy such as
+          -- "the {growth} framework", which is a false block on good marketing
+          -- text — and an operator who cannot see why a good email will not send
+          -- switches the executor off.
+          -- …unless resolution recorded that it deliberately emitted literal
+          -- braces from an {{escaped}} token, which after restoration is
+          -- byte-identical to a failed merge.
+          AND (COALESCE(sa.payload->>'content_literal_braces', 'false') = 'true' OR (
+                COALESCE(sa.payload->>'body', '') !~ '\{(first_name|company|stage)\}'
+            AND COALESCE(sa.payload->>'subject', '') !~ '\{(first_name|company|stage)\}'
+          ))
           -- CP4a: A ROW WHOSE PHYSICAL SEND ALREADY LEFT IS NEVER RE-SERVED.
           -- send_started_at is committed immediately before the provider call,
           -- so on a stale 'claimed' row it proves the request went out and the

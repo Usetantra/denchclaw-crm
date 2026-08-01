@@ -227,18 +227,25 @@ async function main() {
   await req('POST', '/api/crm/templates', { ref: 'tokentest', channel: 'email',
     subject: 'Re: {first_name}', body: 'Hello {first_name}, about {nonexistent_token}.' });
   const rWarn = await templatesDb.resolveStepContent(CO, { channel: 'email', template_ref: 'tokentest' }, contact);
-  check('C10 copy that would ship a LITERAL {token} is refused, not sent',
-    rWarn.resolved === false, JSON.stringify(rWarn));
-  check('C10 …and the reason names the offending token',
-    /nonexistent_token/.test(rWarn.reason || ''), rWarn.reason);
-  check('C10 …and no body is handed on', rWarn.body === null, JSON.stringify(rWarn.body));
+  // A brace-shaped word that is NOT a personalisation token is ordinary prose —
+  // "we call this the {growth} framework" — and refusing it would be a false
+  // block on good copy that an operator cannot diagnose. It sends, with an
+  // advisory. Only a KNOWN token left unresolved blocks (asserted just below).
+  check('C10 braced NON-token prose is allowed through, not false-blocked',
+    rWarn.resolved === true, JSON.stringify(rWarn));
+  check('C10 …the literal text survives verbatim',
+    /about \{nonexistent_token\}/.test(rWarn.body || ''), rWarn.body);
+  check('C10 …and it is flagged advisorily, in case it was a typo',
+    (rWarn.warnings || []).some(w => /nonexistent_token/.test(w)), JSON.stringify(rWarn.warnings));
   // A contact missing the data a token needs is the same hazard from the other side.
   await req('POST', '/api/crm/templates', { ref: 'needs_company', channel: 'email',
     subject: 'Hi {first_name}', body: 'About {company}.' });
   const nameless = await mkContact('C10 Nocompany');
   const rNameless = await templatesDb.resolveStepContent(CO, { channel: 'email', template_ref: 'needs_company' }, nameless);
-  check('C10 a contact missing the token data blocks too (never "About {company}.")',
+  check('C10 a KNOWN token the contact cannot satisfy DOES block (never "About {company}.")',
     rNameless.resolved === false && /company/.test(rNameless.reason || ''), JSON.stringify(rNameless));
+  check('C10 …and the reason tells the operator how to fix it (fill it, remove it, or escape it)',
+    /\{\{company\}\}/.test(rNameless.reason || ''), rNameless.reason);
   // Subject rules.
   await req('POST', '/api/crm/templates', { ref: 'nosubject', channel: 'email', body: 'Body only.' });
   const noSubj = await templatesDb.resolveStepContent(CO, { channel: 'email', template_ref: 'nosubject' }, contact);

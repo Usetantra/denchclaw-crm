@@ -115,8 +115,12 @@ function contentProblem(payload) {
   if (p.content_resolved !== true) return 'payload is not marked content_resolved';
   if (!p.body || !String(p.body).trim()) return 'payload has no body';
   if (!p.subject || !String(p.subject).trim()) return 'email payload has no subject';
-  if (/\{[a-zA-Z_][a-zA-Z0-9_]*\}/.test(String(p.body) + ' ' + String(p.subject))) {
-    return 'payload still contains unresolved {tokens}';
+  const leftover = p.content_literal_braces
+    ? []  // resolution deliberately emitted literal braces from an {{escape}}
+    : require('./ai-draft').unresolvedTokensIn(String(p.body) + ' ' + String(p.subject));
+  if (leftover.length) {
+    return `payload still contains unresolved ${leftover.map(t => '{' + t + '}').join(', ')}`
+      + ' — fill the field on the contact, remove the token, or write {{' + leftover[0] + '}} for literal text';
   }
   return null;
 }

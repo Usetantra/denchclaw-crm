@@ -40,7 +40,25 @@ function isConfigured() {
 // {first_name} {company} {stage} resolved against the real contact. Unknown
 // tokens are left verbatim rather than blanked, so a typo is visible in the
 // composer instead of silently producing "Hi ,".
-function resolveTokens(text, { contact = {}, stageLabel = null } = {}) {
+// The CLOSED set of personalisation tokens. It matters that this is closed and
+// small: the send-time guard blocks only on THESE names remaining in the copy,
+// so ordinary braced prose — "we call this the {growth} framework" — is not
+// mistaken for a broken merge field. A guard that blocked every brace-shaped
+// thing would refuse perfectly good marketing copy, and an operator who cannot
+// work out why a good email will not send turns the executor off.
+const KNOWN_TOKENS = ['first_name', 'company', 'stage'];
+
+// Escape hatch: {{first_name}} renders as the literal text {first_name}. Without
+// one there is no way to write about a merge field in the copy itself.
+const ESC_OPEN = '\u0000CPI_LB\u0000';
+const ESC_CLOSE = '\u0000CPI_RB\u0000';
+
+// `restore:false` leaves escaped braces as internal sentinels. That matters:
+// once {{first_name}} has been restored to the literal {first_name}, no guard
+// can tell a deliberate literal from a merge that failed. So resolution
+// validates FIRST (sentinels intact) and restores LAST — see
+// db/models/templates.js.
+function resolveTokens(text, { contact = {}, stageLabel = null, restore = true } = {}) {
   if (!text) return '';
   const first = String(contact.name || '').trim().split(/\s+/)[0] || '';
   const map = {
@@ -48,9 +66,41 @@ function resolveTokens(text, { contact = {}, stageLabel = null } = {}) {
     company: contact.company_name || '',
     stage: stageLabel || contact.deal_stage || contact.marketing_stage || '',
   };
-  return String(text).replace(/\{(\w+)\}/g, (whole, key) =>
-    Object.prototype.hasOwnProperty.call(map, key) && map[key] ? map[key] : whole
-  );
+  return String(text)
+    // Protect {{...}} before substitution…
+    .replace(/\{\{/g, ESC_OPEN).replace(/\}\}/g, ESC_CLOSE)
+    .replace(/\{(\w+)\}/g, (whole, key) =>
+      Object.prototype.hasOwnProperty.call(map, key) && map[key] ? map[key] : whole
+    )
+    // …then restore it as literal braces, unless the caller wants to validate
+    // the result first.
+    .split(restore ? ESC_OPEN : '\u0000KEEP_L').join(restore ? '{' : '\u0000KEEP_L')
+    .split(restore ? ESC_CLOSE : '\u0000KEEP_R').join(restore ? '}' : '\u0000KEEP_R');
+}
+
+// Turn the sentinels left by resolveTokens(..., {restore:false}) into literal
+// braces. Call this only AFTER the content has been validated.
+function restoreEscapes(text) {
+  return String(text || '').split(ESC_OPEN).join('{').split(ESC_CLOSE).join('}');
+}
+
+// What a send-time guard must refuse: a KNOWN token still present, which means
+// resolution genuinely failed and the prospect would receive "Hi {first_name},".
+function unresolvedTokensIn(text) {
+  const found = new Set();
+  for (const t of KNOWN_TOKENS) {
+    if (new RegExp(`\\{${t}\\}`).test(String(text || ''))) found.add(t);
+  }
+  return [...found];
+}
+
+// Advisory only, for AUTHORING time: brace-shaped words that are not tokens.
+// Usually deliberate prose; occasionally a typo like {frist_name}. Worth
+// surfacing while the human is writing, never worth blocking a send over.
+function suspiciousBracesIn(text) {
+  return [...new Set(
+    [...String(text || '').matchAll(/\{([a-zA-Z_][a-zA-Z0-9_]*)\}/g)].map(m => m[1])
+  )].filter(w => !KNOWN_TOKENS.includes(w));
 }
 
 // A deterministic, provider-free draft. Used when no model is configured, and
@@ -156,4 +206,5 @@ async function draftReply({ contact, channel = 'email', thread = [], dealTitle =
   }
 }
 
-module.exports = { draftReply, resolveTokens, templateDraft, isConfigured, sanitize };
+module.exports = { draftReply, resolveTokens, templateDraft, isConfigured, sanitize,
+  KNOWN_TOKENS, unresolvedTokensIn, suspiciousBracesIn, restoreEscapes };
