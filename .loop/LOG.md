@@ -1863,3 +1863,8 @@
   open. Surfaced the cron itself (`ac182011`, every 17 minutes) to the operator — with the build work
   finished, each tick is a no-op that still spends quota, and whether to keep the loop armed is their
   call rather than something I should keep absorbing silently.
+- 2026-08-01 15:1x [orch] **Loop PAUSED at the operator's direction.** Cancelled cron `ac182011`
+  (every 17 minutes) after two consecutive no-op ticks. Nothing is blocked or half-finished: the branch
+  is on origin, 19 verdicts are banked, the suite is `1102 / 0` green **from a fresh clone**, and
+  `origin/main` is untouched at `9ff21cb`. Resuming is one action — re-arm the same tick prompt, or
+  hand this session new scope. The three operator decisions remain the only open items.
