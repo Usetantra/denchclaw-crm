@@ -137,3 +137,9 @@ CRM_API_BASE="http://127.0.0.1:${TEST_PORT}" \
 INTERNAL_API_KEY="$KEY" \
 DATABASE_URL="$DATABASE_URL_TEST" \
 node test/unit-cp4a0-content.mjs
+
+echo "[test] running CP4a email executor (local stub provider — NEVER a real key)"
+CRM_API_BASE="http://127.0.0.1:${TEST_PORT}" \
+INTERNAL_API_KEY="$KEY" \
+DATABASE_URL="$DATABASE_URL_TEST" \
+node test/unit-cp4a-executor.mjs

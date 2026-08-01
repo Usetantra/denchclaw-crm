@@ -114,6 +114,27 @@ async function claimJobs(companyId, channel, limit, claimedBy) {
           -- stay put, invisible to the executor, and become claimable the moment
           -- their copy is authored.
           AND COALESCE((sa.payload->>'content_resolved')::boolean, false) = true
+          -- F-CP4a0-1: re-validate at the door instead of trusting the flag.
+          -- Resolution is the only writer today, so this is unreachable — but
+          -- the contract should not depend on every future writer behaving, and
+          -- shipping "Hi {first_name}," to a prospect is not recoverable.
+          AND COALESCE(sa.payload->>'body', '') !~ '\{[a-zA-Z_][a-zA-Z0-9_]*\}'
+          AND COALESCE(sa.payload->>'subject', '') !~ '\{[a-zA-Z_][a-zA-Z0-9_]*\}'
+          -- CP4a: A ROW WHOSE PHYSICAL SEND ALREADY LEFT IS NEVER RE-SERVED.
+          -- send_started_at is committed immediately before the provider call,
+          -- so on a stale 'claimed' row it proves the request went out and the
+          -- outcome is unknown. Re-serving it is precisely the duplicate-send
+          -- bug: the executor cannot tell "crashed before send" from "sent, ack
+          -- lost", and guessing wrong emails a real person twice. Such rows are
+          -- quarantined for a human instead (outcome_unknown_at).
+          AND sa.send_started_at IS NULL
+          -- HIGH: quarantine must be DURABLE. Without this a row quarantined
+          -- BEFORE any send (bad content, no recipient, executor error) still
+          -- has send_started_at NULL, so after CLAIM_TIMEOUT_MS the scan
+          -- happily reclaimed it and sent it — "stops and asks a human" lasted
+          -- five minutes.
+          AND sa.outcome_unknown_at IS NULL
+
         ORDER BY sa.scheduled_for ASC
         FOR UPDATE OF sa SKIP LOCKED
         LIMIT $4`,
@@ -146,6 +167,15 @@ async function claimJobs(companyId, channel, limit, claimedBy) {
         continue;
       }
       const updated = await client.query(
+        // `attempt` deliberately counts EXPLICIT ack(failed) calls only, and a
+        // reclaim does NOT bump it. Bumping on reclaim was tried and reverted:
+        // it makes "picked up twice" indistinguishable from "failed twice", so a
+        // row that was merely reclaimed burns its delivery budget and
+        // dead-letters early — and a dead-letter EXITS the enrollment
+        // TERMINALLY. Unbounded reclaim churn is prevented by the two
+        // exclusions in the scan above instead (a row that has started a send,
+        // or that is quarantined, is never re-served), which bounds it without
+        // overloading what `attempt` means.
         `UPDATE scheduled_actions SET status='claimed', claimed_by=$1, claimed_at=now(), updated_at=now()
          WHERE id=$2 RETURNING *`,
         [claimedBy, row.id]
