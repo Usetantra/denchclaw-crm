@@ -1770,3 +1770,20 @@
   hand-tallied totals were low — the real number is **1102**, not the 1096 I reported at CP-Z; no verdict
   changes, but the number was wrong, which is the error this removes. **No CI enabled** — the 2,000 min/mo
   org cap makes that the operator's spending decision. Receipt: `.loop/receipts/CP-AA-suite-unrunnable.md`.
+- 2026-08-01 13:0x [orch] **CP-AA ACCEPTED.** This is the checkpoint that makes every other verdict in
+  `.loop/verdicts/` checkable by someone other than me. Verified independently: **`npm test` completes
+  with neither Docker nor psql** — psql confirmed absent during the run and the daemon unreachable — from
+  an **empty** database: `1102 passed / 0 failed`, `19/19 suites reported`, `SUITE GREEN`. A non-local
+  `DATABASE_URL_TEST` is still refused with exit 2. **AA4 tested by breaking a real test rather than
+  trusting the claim:** `TOTAL: 1102 passed / 1 failed` · `!! EXITED NON-ZERO: unit-tenants` ·
+  `SUITE FAILED` · `EXITCODE=1` — it names the failing suite and exits 1. Injected assertion removed;
+  the file is byte-identical to HEAD (`git diff --quiet`). The builder went beyond the ticket: the
+  staging guard is **duplicated inside `test/apply-schema.mjs`** rather than trusted from the caller,
+  and **CI was deliberately not enabled** with the reasoning stated — the 2,000 min/month cap and the
+  org-wide blast radius of a blown quota — so the checkpoint makes CI possible without spending the
+  operator's decision for them. **Two probe defects were mine, and the second nearly mattered:** I
+  reached for `timeout`, which macOS lacks and for which I had already written a portable replacement
+  in the watchdog; and my first AA4 injection landed **after `process.exit()`**, so it never executed
+  and the suite reported an unchanged `1102 / 0` — **a false GREEN that would have "confirmed" AA4
+  while proving nothing.** I caught it only because the total was byte-identical to the clean run,
+  which is precisely the tell. Verdict `.loop/verdicts/CP-AA-suite-unrunnable.md`.
