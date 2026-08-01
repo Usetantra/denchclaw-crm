@@ -192,3 +192,9 @@ CRM_API_BASE="http://127.0.0.1:${TEST_PORT}" \
 INTERNAL_API_KEY="$KEY" \
 DATABASE_URL="$DATABASE_URL_TEST" \
 node test/unit-cpc-channels.mjs
+
+echo "[test] running CP-C2 LinkedIn executor + safety spine (local stub — NEVER a real key)"
+CRM_API_BASE="http://127.0.0.1:${TEST_PORT}" \
+INTERNAL_API_KEY="$KEY" \
+DATABASE_URL="$DATABASE_URL_TEST" \
+node test/unit-cpc2-linkedin.mjs

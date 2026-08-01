@@ -37,6 +37,7 @@ const crypto = require('crypto');
 const { query } = require('../db/index');
 const dispatchDb = require('../db/models/dispatch');
 const contactDb = require('../db/models/contacts');
+const { killSwitchOn, liveSendAllowed } = require('./send-safety');
 
 // Channels where a subject is a real field. On chat-shaped channels a subject is
 // meaningless, so demanding one would refuse every legitimate SMS.
@@ -49,6 +50,13 @@ function makeExecutor({ channel, provider, enabledEnv, batchEnv, recipientField 
     `${channel}-exec-${os.hostname()}-${process.pid}-${crypto.randomBytes(4).toString('hex')}`;
 
   function bootGate() {
+    // CP-C2: the global kill switch, checked HERE because tick() calls bootGate
+    // at the top of every tick and every check below reads process.env fresh.
+    // That is the whole requirement — an operator flipping this needs sending to
+    // stop within one poll, not on the next restart. It is deliberately ahead of
+    // the per-channel enable flag: during an incident you want one lever, not
+    // one lever per channel you happened to remember.
+    if (killSwitchOn()) return 'LIVE_SENDS_DISABLED is set — all sending is off';
     if (!ENABLED()) return `${enabledEnv} is not 1 — sending is off for ${channel}`;
     // A provider may supply its own wording — email's is load-bearing, because
     // its boot-gate reasons are asserted by CP4a's banked tests and naming the
@@ -97,6 +105,38 @@ function makeExecutor({ channel, provider, enabledEnv, batchEnv, recipientField 
   }
   const clearSendStarted = (jobId) =>
     query(`UPDATE scheduled_actions SET send_started_at = NULL, updated_at = now() WHERE id = $1`, [jobId]);
+  // CP-C2: hand a claimed job straight back, consuming NOTHING — no retry, no
+  // reservation, no ladder movement. This is upstream's `release_send`
+  // (linkedin_gate.py:246) in CRM terms: the job was legitimately claimed, then
+  // a per-recipient rail refused it, and the slot must stop counting against the
+  // caps immediately rather than ageing out. Deliberately NOT an ack: 'failed'
+  // would burn a life and 'skipped' would advance the ladder past a message the
+  // prospect never received.
+  //
+  // THREE GUARDS, each one a critic finding, each one a real duplicate-send:
+  //   * `claimed_by = INSTANCE_ID` — without it, a slow tick returning to a job a
+  //     second instance legitimately reclaimed and is CURRENTLY SENDING would
+  //     hand that row back to the queue mid-flight. The ack would then 404 and
+  //     the scan would re-serve a message already delivered to a real person.
+  //   * `send_started_at IS NULL` — the same row, seen from the other side: a
+  //     reservation that exists must never be erased by a release, because the
+  //     claim scan's whole duplicate guard is that column being non-NULL.
+  //   * `scheduled_for` is pushed out. A released job keeps a past
+  //     `scheduled_for`, and the scan orders by it ASC — so a full batch of
+  //     released jobs is re-claimed and re-released every tick forever, and a
+  //     job to an ALLOWLISTED recipient scheduled later never surfaces. The
+  //     allowlist would starve exactly the sends it exists to permit.
+  // `linkedin_account_id` is deliberately NOT cleared: a released row is
+  // 'pending' with no reservation, which the cap ledger already does not count,
+  // and naming a channel-specific column here would make this generic path fail
+  // on any deploy that ran before migration 024.
+  const releaseClaim = (jobId) =>
+    query(`UPDATE scheduled_actions
+              SET status='pending', claimed_by=NULL, claimed_at=NULL,
+                  scheduled_for = GREATEST(scheduled_for, now() + interval '15 minutes'),
+                  updated_at=now()
+            WHERE id = $1 AND status='claimed' AND claimed_by = $2
+              AND send_started_at IS NULL`, [jobId, INSTANCE_ID]);
   const quarantine = (jobId, reason) =>
     query(`UPDATE scheduled_actions SET outcome_unknown_at = now(), outcome_unknown_reason = $2,
              updated_at = now() WHERE id = $1`, [jobId, String(reason).slice(0, 500)]);
@@ -105,7 +145,21 @@ function makeExecutor({ channel, provider, enabledEnv, batchEnv, recipientField 
     const blocked = bootGate();
     if (blocked) return { ok: false, blocked, channel, sent: 0, failed: 0, quarantined: 0, skipped: 0, jobs: [] };
 
-    const from = provider.senderFor(channel);
+    // CP-C2: a per-tick, per-tenant preflight for anything the sync boot gate
+    // cannot answer — LinkedIn's connected identity is a DB row (its caps, its
+    // window and its timezone all hang off it), and an account an operator
+    // paused must stop sending on the NEXT tick, which a boot-time check would
+    // miss entirely.
+    let ctx = null;
+    if (provider.preflight) {
+      const pre = await provider.preflight(companyId);
+      if (pre && pre.blocked) {
+        return { ok: false, blocked: pre.blocked, channel, sent: 0, failed: 0, quarantined: 0, skipped: 0, jobs: [] };
+      }
+      ctx = pre || null;
+    }
+
+    const from = (ctx && ctx.sender) || provider.senderFor(channel);
     const claimed = await dispatchDb.claimJobs(companyId, channel, BATCH(), INSTANCE_ID);
     const report = { ok: true, channel, instance: INSTANCE_ID, claimed: claimed.length,
       sent: 0, failed: 0, quarantined: 0, skipped: 0, jobs: [] };
@@ -126,6 +180,34 @@ function makeExecutor({ channel, provider, enabledEnv, batchEnv, recipientField 
           continue;
         }
 
+        // CP-C2: the live allowlist, checked per RECIPIENT and therefore here
+        // rather than at the claim door. Empty allowlist ⇒ unchanged behaviour;
+        // set ⇒ only these people may receive a real send, which is what makes a
+        // verification run against production data safe to do at all. Checked
+        // BEFORE markSendStarted so no reservation is created and nothing leaks.
+        if (!liveSendAllowed(channel, to)) {
+          await releaseClaim(job.id);
+          report.skipped++;
+          report.jobs.push({ id: job.id, outcome: 'skipped_not_in_live_allowlist' });
+          continue;
+        }
+
+        // A LAST-MOMENT per-job refusal. The claim door gates the whole scan,
+        // but a batch is processed sequentially and a provider may take tens of
+        // seconds per job, so a tick that started at 17:58 can reach its tail
+        // after the send window closed. Upstream re-checked the window
+        // immediately before every provider call; checking it only at the door
+        // would have been the one place this port LOOSENED the original.
+        if (provider.admitJob) {
+          const refusal = await provider.admitJob({ job, contact, ctx, to });
+          if (refusal) {
+            await releaseClaim(job.id);
+            report.skipped++;
+            report.jobs.push({ id: job.id, outcome: 'skipped_gate', reason: refusal });
+            continue;
+          }
+        }
+
         const payload = (typeof job.payload === 'string' ? JSON.parse(job.payload) : job.payload) || {};
         const token = crypto.randomUUID();
         if (!(await markSendStarted(job.id, token))) {
@@ -135,8 +217,35 @@ function makeExecutor({ channel, provider, enabledEnv, batchEnv, recipientField 
 
         let sent = null;
         try {
-          sent = await provider.send({ channel, from, to, payload, idempotencyKey: token });
+          // `job`, `contact` and `ctx` are passed for providers that need more
+          // than an address: LinkedIn's action (invite/message/inmail) is a
+          // property of the row the claim door stamped, and its target is a
+          // profile identifier that has to be parsed off the contact.
+          sent = await provider.send({ channel, from, to, payload, idempotencyKey: token, job, contact, ctx });
         } catch (err) {
+          if (err.ineligible) {
+            // The provider says this action is ILLEGAL for this relationship —
+            // inviting someone already connected, messaging a stranger. Nothing
+            // about retrying changes that, and a doomed retry loop against
+            // LinkedIn is exactly the account-restriction path this checkpoint
+            // exists to close. So it is TERMINAL: force the attempt count to the
+            // ceiling and ack failed, which routes through the existing
+            // dead-letter path (ending the ladder) instead of inventing a second
+            // terminal state the rest of the system would not understand.
+            await clearSendStarted(job.id);
+            if (provider.onIneligible) {
+              await provider.onIneligible({ companyId, job, contact, ctx, error: err }).catch(() => {});
+            }
+            await query(
+              `UPDATE scheduled_actions SET attempt = $2
+                WHERE id = $1 AND claimed_by = $3 AND status = 'claimed'`,
+              [job.id, dispatchDb.MAX_ATTEMPTS, INSTANCE_ID]);
+            await dispatchDb.ackJob(companyId, job.id, {
+              claimedBy: INSTANCE_ID, status: 'failed', error: `ineligible: ${err.message}` });
+            report.failed++;
+            report.jobs.push({ id: job.id, outcome: 'ineligible', reason: err.message });
+            continue;
+          }
           if (err.configError) {
             // OUR misconfiguration, identical for every job. Acking failed would
             // burn a retry and, three times over, dead-letter the job — which
@@ -173,6 +282,15 @@ function makeExecutor({ channel, provider, enabledEnv, batchEnv, recipientField 
                   outcome_unknown_reason = NULL, updated_at = now() WHERE id = $1`,
           [job.id, sent.id || null]
         );
+        // Post-send bookkeeping the provider owns — for LinkedIn, recording that
+        // an invite is now pending, which is what the accept gate and the
+        // pending-invite ceiling both read on the next tick. Run BEFORE the ack
+        // so a crash between them leaves the state recorded rather than a send
+        // the safety spine has no memory of.
+        if (provider.onSent) {
+          await provider.onSent({ companyId, job, contact, ctx, sent }).catch((e) =>
+            console.error(`[CRM][${channel}-executor] post-send bookkeeping failed for ${job.id}: ${e.message}`));
+        }
         await dispatchDb.ackJob(companyId, job.id, {
           claimedBy: INSTANCE_ID, status: 'sent', providerMessageId: sent.id || null,
           activity: {

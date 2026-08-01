@@ -11,7 +11,23 @@ const { requireAuth, getUserCompanyId } = require('../middleware/auth');
 
 router.use(requireAuth);
 
-const CHANNELS = ['email', 'sms', 'whatsapp', 'ai_call', 'linkedin'];
+// CP-C2: 'linkedin' is deliberately NOT claimable over HTTP, and this is a
+// CONTRACT NARROWING worth stating plainly.
+//
+// The claim door gates LinkedIn correctly for any claimant — caps, window and
+// accept gate all hold. What an external claimant does NOT get is the
+// reserve-before-send: `send_started_at` is written by the CRM's own executor
+// immediately before the provider call, and the reclaim scan's entire duplicate
+// guard is that column being non-NULL. An engine that claims a LinkedIn invite,
+// sends it through its own path and dies before acking leaves a row that looks
+// exactly like "claimed but never sent" — so it is re-served and a SECOND
+// connection request goes to the same person. On email that is an apology; on
+// LinkedIn it is how an account gets restricted.
+//
+// So LinkedIn sends through /executors/linkedin/tick, in-process, where the
+// reservation and the send are the same code. Ack stays open for every channel:
+// acking a job you already hold is not a send.
+const CHANNELS = ['email', 'sms', 'whatsapp', 'ai_call'];
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 router.post('/claim', async (req, res) => {

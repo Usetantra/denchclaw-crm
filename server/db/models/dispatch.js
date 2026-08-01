@@ -15,6 +15,10 @@ const seqDb = require('./sequences');
 const templatesDb = require('./templates');
 const { getPipelineConfig, findStage, isManualStage, isTerminalStage, getPipelineTransitions } = require('../pipeline');
 const analyticsRouter = require('../../routes/analytics');
+// CP-C2: per-channel claim-door gates. Only LinkedIn has one, and only because
+// LinkedIn restricts ACCOUNTS rather than messages, so its limits have to be
+// enforced where jobs are handed out rather than where they are sent.
+const CHANNEL_GATES = { linkedin: require('../../lib/linkedin-gate') };
 
 const CLAIM_TIMEOUT_MS = parseInt(process.env.CHANNEL_JOB_CLAIM_TIMEOUT_MS, 10) || 300_000;
 const MAX_ATTEMPTS = parseInt(process.env.CHANNEL_JOB_MAX_ATTEMPTS, 10) || 3;
@@ -88,10 +92,34 @@ async function claimJobs(companyId, channel, limit, claimedBy) {
       rate.hourlyLimit != null ? rate.hourlyLimit - rate.hourlyCount - inFlight.rows[0].n : Infinity,
       rate.dailyLimit != null ? rate.dailyLimit - rate.dailyCount - inFlight.rows[0].n : Infinity,
     );
-    const effectiveLimit = Math.min(limit, remainingBudget);
+    let effectiveLimit = Math.min(limit, remainingBudget);
     if (effectiveLimit <= 0) {
       await client.query('COMMIT');
       return [];
+    }
+
+    // CP-C2: the per-channel safety gate, run INSIDE this transaction and under
+    // the advisory lock already held above — which is exactly why it lives here
+    // and not in the executor. A job claimed at 17:59 and sent at 18:05 has left
+    // the send window, so the only way a window can mean anything is to refuse
+    // to hand the job out. The same lock that stops two ticks overshooting a
+    // rate limit stops them overshooting a LinkedIn daily cap, for free.
+    // Channels with no gate (email, sms, whatsapp) are unaffected: the map has
+    // no entry and nothing runs.
+    const gate = CHANNEL_GATES[channel];
+    let gateCtx = null;
+    if (gate) {
+      const pre = await gate.preScan(companyId, (t, p) => client.query(t, p));
+      if (!pre.allow) {
+        await client.query('COMMIT');
+        return [];
+      }
+      gateCtx = pre.ctx;
+      effectiveLimit = Math.min(effectiveLimit, pre.limit);
+      if (effectiveLimit <= 0) {
+        await client.query('COMMIT');
+        return [];
+      }
     }
 
     // Scalar subquery (not a JOIN) for sequence_id — scheduled_actions only
@@ -188,6 +216,20 @@ async function claimJobs(companyId, channel, limit, claimedBy) {
         await client.query(`UPDATE scheduled_actions SET status='skipped', updated_at=now() WHERE id=$1`, [row.id]);
         suppressionSkips.push({ job: row, global: supp.rows.some(r => r.channel === null) });
         continue;
+      }
+      // CP-C2: the per-JOB half of the channel gate. Some refusals are only
+      // answerable per row — which action this step performs, whether we have
+      // evidence the prospect ever accepted a connection — and the gate mutates
+      // its own running counts as it admits, so a single batch cannot itself
+      // overshoot a cap. Refused rows are LEFT PENDING, never 'skipped': a
+      // skipped ack advances the ladder, and advancing past an unsent message is
+      // how step 3 arrives at someone who never saw step 1.
+      if (gate) {
+        const verdict = await gate.admits(companyId, row, gateCtx, (t, p) => client.query(t, p));
+        if (!verdict.ok) continue;
+        await gate.stampClaim(row.id, verdict.accountId, verdict.action, (t, p) => client.query(t, p));
+        row.linkedin_action = verdict.action;
+        row.linkedin_account_id = verdict.accountId;
       }
       const updated = await client.query(
         // `attempt` deliberately counts EXPLICIT ack(failed) calls only, and a
