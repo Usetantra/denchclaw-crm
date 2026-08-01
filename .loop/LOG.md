@@ -1787,3 +1787,19 @@
   and the suite reported an unchanged `1102 / 0` — **a false GREEN that would have "confirmed" AA4
   while proving nothing.** I caught it only because the total was byte-identical to the clean run,
   which is precisely the tell. Verdict `.loop/verdicts/CP-AA-suite-unrunnable.md`.
+- 2026-08-01 13:2x [orch] `handoff=operator`. Did what a real user does with the thing CP-AA just
+  fixed: **ran `npm test` twice.** Run 1 on an empty DB — `1102 passed / 0 failed`, `SUITE GREEN`,
+  exit 0. **Run 2 on the same database — `FATAL: migrate.sql failed to apply: relation "contacts"
+  already exists`, exit 2.** Run 3 identical, so deterministic rather than a race. `migrate.sql` is
+  not idempotent (4 bare `CREATE TABLE`, **0** with `IF NOT EXISTS`), which never mattered while the
+  Docker path spun a fresh container per run — CP-AA correctly made `DATABASE_URL_TEST` the path
+  everyone without Docker uses, and **that database persists.** So a new contributor's first
+  `npm test` is green and their second is FATAL, and they will conclude the suite is broken rather
+  than that it needs a manual `dropdb`. **CP-AA is not wrong; this is what it surfaced.** Dispatched
+  as CP-AB with the fix specified as a guarded `DROP SCHEMA public CASCADE` inside
+  `test/apply-schema.mjs` — and explicitly **not** as `IF NOT EXISTS` through `migrate.sql`, which
+  would let a *partially* applied schema pass as complete (a worse failure than a loud one) and which
+  is the production base schema, not a test fixture. AB3 demands proof the DROP is **unreachable** for
+  a non-local URL; AB5 demands AA4 still holds so a reset path cannot swallow failures. Also cleaned
+  three stray processes of my own — `cpi-shim` (:8903), `orch-twilio-stub` (:8901) and
+  `orch-resend-stub` (:8899); the last was what had been contending for :8899 in the UI tick.
