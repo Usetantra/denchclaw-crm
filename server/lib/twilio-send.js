@@ -31,7 +31,12 @@ const TIMEOUT_MS = parseInt(process.env.TWILIO_TIMEOUT_MS, 10) || 15000;
 
 // Overridable base so the send path can be exercised against a LOCAL STUB.
 // Defaults to the real API, so a stub is always a deliberate, explicit opt-in.
-const API_BASE = () => process.env.TWILIO_API_BASE || 'https://api.twilio.com';
+// Trailing slashes are stripped. The URL below appends an absolute path, so a
+// base of `http://127.0.0.1:3141/` yields `//2010-04-01/...` — which most stubs
+// still route and some do not, and the failure looks like a broken executor
+// rather than a typo in an env var. `UNIPILE_API_BASE` does the same.
+const API_BASE = () =>
+  String(process.env.TWILIO_API_BASE || 'https://api.twilio.com').replace(/\/+$/, '');
 
 function accountSid() { return process.env.TWILIO_ACCOUNT_SID || ''; }
 
