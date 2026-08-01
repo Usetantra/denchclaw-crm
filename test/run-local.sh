@@ -186,3 +186,9 @@ RUN="$MK_RUN" \
 TEST_PORT="$TEST_PORT" \
 DATABASE_URL="$DATABASE_URL_TEST" \
 node test/unit-cpb-marketing.mjs
+
+echo "[test] running CP-C per-channel executors (SMS + WhatsApp, local stub — NEVER a real key)"
+CRM_API_BASE="http://127.0.0.1:${TEST_PORT}" \
+INTERNAL_API_KEY="$KEY" \
+DATABASE_URL="$DATABASE_URL_TEST" \
+node test/unit-cpc-channels.mjs

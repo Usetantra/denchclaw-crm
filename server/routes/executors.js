@@ -6,6 +6,7 @@
 const express = require('express');
 const router = express.Router();
 const emailExecutor = require('../lib/email-executor');
+const { byChannel, CHANNELS } = require('../lib/executors');
 const { requireAuth, getUserCompanyId } = require('../middleware/auth');
 
 router.use(requireAuth);
@@ -70,6 +71,69 @@ router.post('/email/quarantine/:id/release', async (req, res) => {
     res.json(out);
   } catch (err) {
     console.error('[CRM] POST /executors/email/quarantine/:id/release error:', err.message);
+    res.status(500).json({ error: 'failed to release' });
+  }
+});
+
+// ─── CP-C: the same four operations for every channel ────────────────────────
+// `/email/*` above is kept because it is already wired and tested; these are the
+// same operations addressed generically, and they resolve to the SAME executor
+// instances — there is one implementation, not a per-channel copy.
+function resolve(req, res) {
+  const ex = byChannel[req.params.channel];
+  if (!ex) {
+    res.status(404).json({ error: `no executor for channel '${req.params.channel}'`, channels: CHANNELS });
+    return null;
+  }
+  return ex;
+}
+
+router.get('/:channel/status', (req, res) => {
+  const ex = resolve(req, res); if (!ex) return;
+  const blocked = ex.bootGate();
+  res.json({ channel: ex.channel, enabled: !blocked, blocked_reason: blocked,
+    instance: ex.INSTANCE_ID, sender: ex.senderFor() });
+});
+
+router.post('/:channel/tick', async (req, res) => {
+  try {
+    const companyId = getUserCompanyId(req);
+    if (!companyId) return res.status(401).json({ error: 'Authentication required' });
+    const ex = resolve(req, res); if (!ex) return;
+    res.json(await ex.tick(companyId));
+  } catch (err) {
+    console.error('[CRM] POST /executors/:channel/tick error:', err.message);
+    res.status(500).json({ error: 'tick failed' });
+  }
+});
+
+router.get('/:channel/quarantine', async (req, res) => {
+  try {
+    const companyId = getUserCompanyId(req);
+    if (!companyId) return res.status(401).json({ error: 'Authentication required' });
+    const ex = resolve(req, res); if (!ex) return;
+    const rows = await ex.listQuarantine(companyId, { limit: req.query.limit });
+    res.json({ channel: ex.channel, total: rows.length, quarantined: rows });
+  } catch (err) {
+    console.error('[CRM] GET /executors/:channel/quarantine error:', err.message);
+    res.status(500).json({ error: 'failed to list quarantine' });
+  }
+});
+
+router.post('/:channel/quarantine/:id/release', async (req, res) => {
+  try {
+    const companyId = getUserCompanyId(req);
+    if (!companyId) return res.status(401).json({ error: 'Authentication required' });
+    const ex = resolve(req, res); if (!ex) return;
+    const decision = req.body && req.body.decision;
+    if (!['resend', 'discard'].includes(decision)) {
+      return res.status(400).json({ error: "decision must be 'resend' (it never arrived) or 'discard' (it did)" });
+    }
+    const out = await ex.releaseQuarantine(companyId, req.params.id, decision);
+    if (!out) return res.status(404).json({ error: 'quarantined job not found' });
+    res.json(out);
+  } catch (err) {
+    console.error('[CRM] POST /executors/:channel/quarantine/:id/release error:', err.message);
     res.status(500).json({ error: 'failed to release' });
   }
 });
