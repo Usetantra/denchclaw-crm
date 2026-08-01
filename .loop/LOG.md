@@ -1803,3 +1803,12 @@
   a non-local URL; AB5 demands AA4 still holds so a reset path cannot swallow failures. Also cleaned
   three stray processes of my own — `cpi-shim` (:8903), `orch-twilio-stub` (:8901) and
   `orch-resend-stub` (:8899); the last was what had been contending for :8899 in the UI tick.
+- 2026-08-01 16:30 [build] **CP-AB DONE — `82ccfbb`.** `npm test` **three times on one database** → 1102/0,
+  19/19, exit 0, identical; row counts unchanged between runs. `apply-schema.mjs` resets the public schema
+  behind **two** guards — the URL host (which exits before anything destructive; proven by `nonexistent.invalid`
+  returning the guard's message rather than a DNS error) and `inet_server_addr()` on the server actually
+  reached. **Guard 2 rejected the local server on its first run** (`inet` ::text gives `127.0.0.1/32`);
+  reported rather than quietly fixed, because it is the only evidence guard 2 is live. Not fixed via
+  `IF NOT EXISTS` in `migrate.sql` — that would let a partial schema pass as complete. **F47 filed:**
+  concurrent runs against one `DATABASE_URL_TEST` would now drop each other's schema.
+  Receipt: `.loop/receipts/CP-AB-suite-runs-once.md`.
