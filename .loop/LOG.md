@@ -1812,3 +1812,17 @@
   `IF NOT EXISTS` in `migrate.sql` — that would let a partial schema pass as complete. **F47 filed:**
   concurrent runs against one `DATABASE_URL_TEST` would now drop each other's schema.
   Receipt: `.loop/receipts/CP-AB-suite-runs-once.md`.
+- 2026-08-01 13:5x [orch] **CP-AB ACCEPTED.** `npm test` is repeatable: **three consecutive runs on the
+  same database, all `1102 / 0`, `19/19`, exit 0** — where run 2 previously died deterministically with
+  `FATAL: relation "contacts" already exists`. **AB3 verified by trying to DEFEAT the guard rather than
+  confirm it:** six URLs refused with exit 2, including the two shapes that break substring checks —
+  `localhost` in the **credentials** with a remote host, and `localhost` as the **database name** with a
+  remote host. The guard parses the **host** instead of matching a substring, which is precisely what
+  makes those safe; any `rc=0` would have meant a `DROP SCHEMA` reaching a database it must never touch.
+  **AB5 held:** an injected failing assertion still produces `1102 passed / 1 failed` ·
+  `!! EXITED NON-ZERO: unit-tenants` · `EXITCODE=1`, so the reset path does not swallow red. Injection
+  removed; file byte-identical to HEAD. Incidentally caught that `:3117` was a **content-engine vite
+  server from another project** — the committed harness's **ownership guard** refused to run against it
+  rather than produce meaningless output (the same protection I had to add to my mirror after 88 phantom
+  401s), and I identified the process before killing anything, since it belonged to neither this project
+  nor the builder. Verdict `.loop/verdicts/CP-AB-suite-runs-once.md`.
