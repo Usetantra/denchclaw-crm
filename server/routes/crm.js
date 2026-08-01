@@ -18,6 +18,9 @@ const {
   findFunnelContactPipelineForStage, onPipelineCacheInvalidate,
 } = require('../db/pipeline');
 const { ENGAGEMENT_WEIGHTS, recordEngagement } = require('../lib/scoring');
+// CP-B: the contact-entity advance, shared with marketing-stage ingestion so the
+// mode/transition/entry gates have exactly one implementation.
+const { advanceContactStage, manualStageRefusal } = require('../lib/stage-authority');
 
 const { requireAuth, getUserCompanyId } = require('../middleware/auth');
 
@@ -763,73 +766,16 @@ router.post('/contacts/:id/advance', async (req, res) => {
       : pipeline.entity_type;
 
     if (entityType === 'contact') {
-      const currentStage = contact.marketing_stage || 'sourced';
-      if (currentStage === stage) {
-        return res.json({ contact_id: contact.id, pipeline_key, stage, previous: currentStage, changed: false });
-      }
-
-      // Mode gate before transition legality: "never auto-advance a manual
-      // stage" is the stronger invariant (see honor-system note above).
-      if (automated && isManualStage(pipeline, stage)) {
-        return res.status(403).json({
-          error: `Stage '${stage}' is manual — only a human may set it`,
-          error_code: 'manual_stage', pipeline_key, requested: stage,
-        });
-      }
-
-      const stageKeys = pipeline.stages.map(s => s.key);
-      if (stageKeys.includes(currentStage)) {
-        const allowed = getPipelineTransitions(pipeline, currentStage);
-        if (!allowed.includes(stage)) {
-          return res.status(409).json({ error: 'Illegal stage transition', current: currentStage, requested: stage, allowed });
-        }
-      } else {
-        // Entry rule (CP1 decision 5): a contact currently outside pipeline P
-        // may enter P only at its first stage. Refusals: a 'suppressed'
-        // contact, and an active all-channel suppression row (A5) — entering
-        // a new pipeline must not be a suppression escape.
-        if (currentStage === 'suppressed') {
-          return res.status(409).json({
-            error: `Contact is suppressed and may not enter pipeline '${pipeline_key}'`,
-            current: currentStage, requested: stage, allowed: [],
-          });
-        }
-        if (await limitDb.isSuppressed(companyId, contact.id, null)) {
-          return res.status(409).json({
-            error: `Contact has an active all-channel suppression and may not enter pipeline '${pipeline_key}'`,
-            current: currentStage, requested: stage, allowed: [],
-          });
-        }
-        if (stage !== stageKeys[0]) {
-          return res.status(409).json({
-            error: `Contact is not in pipeline '${pipeline_key}' — entry is only allowed at its first stage`,
-            current: currentStage, requested: stage, allowed: stageKeys.length ? [stageKeys[0]] : [],
-          });
-        }
-      }
-
-      // Update both marketing_stage and the legacy deal_stage mirror
-      await query(
-        `UPDATE contacts SET marketing_stage=$1, deal_stage=$1, updated_at=now() WHERE id=$2 AND company_id=$3`,
-        [stage, contact.id, companyId]
-      );
-
-      await addContactActivity(contact.id, companyId, {
-        type: 'stage_change',
-        message: `${pipeline_key === 'marketing' ? 'Marketing stage' : `Stage (${pipeline_key})`}: ${currentStage} → ${stage}${reason ? ' (' + reason + ')' : ''}`,
-        agent: actor || 'system',
-        channel: null,
-        data: { pipeline_key, from: currentStage, to: stage, reason: reason || null },
+      // CP-B: the whole body of this branch now lives in server/lib/
+      // stage-authority.js, because marketing-stage ingestion has to perform the
+      // SAME advance and must not be allowed a second copy of the gates. The
+      // result carries a ready-made {status, body} so these responses are
+      // byte-identical to what this route returned before the extraction.
+      const r = await advanceContactStage({
+        companyId, contact, pipelineKey: pipeline_key, pipeline, stage,
+        automated, reason, actor, recordActivity: addContactActivity,
       });
-
-      // GOAL B2: a real (non-idempotent) stage transition auto-enrolls the
-      // contact into any active sequence configured to trigger on this stage.
-      const sequenceEnrollments = await sequenceDb.enrollForTriggerStage(companyId, contact.id, pipeline_key, stage);
-
-      return res.json({
-        contact_id: contact.id, pipeline_key, stage, previous: currentStage, changed: true,
-        ...(sequenceEnrollments.length ? { sequence_enrollments: sequenceEnrollments } : {}),
-      });
+      return res.status(r.status).json(r.body);
     }
 
     // Deal-entity pipelines. Legacy 'sales' owns deals with pipeline_key NULL
@@ -868,12 +814,10 @@ router.post('/contacts/:id/advance', async (req, res) => {
       return res.json({ contact_id: contact.id, deal_id: deal.id, pipeline_key, stage, previous: currentStage, changed: false });
     }
 
-    if (automated && isManualStage(pipeline, stage)) {
-      return res.status(403).json({
-        error: `Stage '${stage}' is manual — only a human may set it`,
-        error_code: 'manual_stage', pipeline_key, requested: stage,
-      });
-    }
+    // One implementation of the invariant, shared with the contact branch and
+    // the two deal-write paths below (lib/stage-authority.js).
+    const dealRefusal = manualStageRefusal({ pipeline, pipelineKey: pipeline_key, stage, automated });
+    if (dealRefusal) return res.status(dealRefusal.status).json(dealRefusal.body);
 
     const allowed = getPipelineTransitions(pipeline, currentStage);
     if (!allowed.includes(stage)) {
@@ -989,12 +933,9 @@ router.post('/deals', validate(), async (req, res) => {
         // fresh deal directly inside a manual stage (and that new deal would
         // win the active-deal lookup), sidestepping /advance's 403. Same
         // honor-system caveat as /advance (see the comment there).
-        if (req.body.automated === true && isManualStage(cfg, initialStage)) {
-          return res.status(403).json({
-            error: `Stage '${initialStage}' is manual — only a human may set it`,
-            error_code: 'manual_stage', pipeline_key: pipelineKey, requested: initialStage,
-          });
-        }
+        const createRefusal = manualStageRefusal({
+          pipeline: cfg, pipelineKey, stage: initialStage, automated: req.body.automated === true });
+        if (createRefusal) return res.status(createRefusal.status).json(createRefusal.body);
       } else {
         initialStage = (stage && keys.includes(stage)) ? stage : (keys[0] || 'lead');
       }
@@ -1165,12 +1106,10 @@ router.patch('/deals/:id', async (req, res) => {
           // CP1: funnel-typed deals are mode-gated (`automated: true` may not
           // set a manual stage — honor-system flag, see the /advance comment
           // for the accepted limitation) and transition-gated like /advance.
-          if (req.body.automated === true && isManualStage(dealPipelineCfg, newStage)) {
-            return res.status(403).json({
-              error: `Stage '${newStage}' is manual — only a human may set it`,
-              error_code: 'manual_stage', pipeline_key: deal.pipeline_key, requested: newStage,
-            });
-          }
+          const patchRefusal = manualStageRefusal({
+            pipeline: dealPipelineCfg, pipelineKey: deal.pipeline_key, stage: newStage,
+            automated: req.body.automated === true });
+          if (patchRefusal) return res.status(patchRefusal.status).json(patchRefusal.body);
           const allowed = getPipelineTransitions(dealPipelineCfg, oldStage);
           if (!allowed.includes(newStage)) {
             return res.status(409).json({

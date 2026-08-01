@@ -12,6 +12,7 @@
 const { query, getClient } = require('../index');
 const limitsDb = require('./limits');
 const seqDb = require('./sequences');
+const templatesDb = require('./templates');
 const { getPipelineConfig, findStage, isManualStage, isTerminalStage, getPipelineTransitions } = require('../pipeline');
 const analyticsRouter = require('../../routes/analytics');
 
@@ -47,6 +48,18 @@ async function claimJobs(companyId, channel, limit, claimedBy) {
   if (!claimedBy) throw new Error('dispatch.claimJobs requires claimedBy');
 
   if (await limitsDb.isQuietHours(companyId, channel)) return [];
+
+  // CP4a-0 F1: a job frozen as content-less BEFORE its copy was authored would
+  // otherwise stay unclaimable forever, because the claim door reads the frozen
+  // flag and nothing re-resolved it. Retry resolution for due-but-unresolved
+  // rows first, so authoring the template genuinely does un-stick the ladder —
+  // which is what this file's own comment already promised.
+  try {
+    await templatesDb.reresolveUnresolvedJobs(companyId, channel);
+  } catch (err) {
+    // Never let a re-resolve problem stop a claim scan for healthy jobs.
+    console.error(`[CRM][dispatch] content re-resolve pass failed: ${err.message}`);
+  }
 
   const client = await getClient();
   // The client is released as soon as the claim transaction commits, so the

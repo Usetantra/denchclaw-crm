@@ -238,6 +238,60 @@ function contentPayload(resolved, extra = {}) {
   };
 }
 
+
+// ─── CP4a-0 F1: un-stick jobs whose copy was authored AFTER they queued ──────
+// materializeNextStep FREEZES the resolved content into the job's payload, and
+// the claim door reads that frozen flag. So authoring the missing template did
+// NOT make the job claimable — the claim door's own comment promised it would,
+// and that promise was false. The operator took the exactly-correct remedial
+// action and the ladder stayed dead, recoverable only by DB surgery.
+//
+// This matters far beyond a stuck test fixture: the whole point of CP-B is to
+// borrow the outreach/nurturing automations, and those will materialise jobs
+// before their copy exists in this new content store. Every one of those
+// ladders would be silently dead while readiness reported them healthy.
+//
+// So resolution is retried at the claim door, bounded, for due-but-unresolved
+// rows only. A row that resolves is rewritten in place and becomes claimable on
+// this very scan; one that still cannot resolve is left exactly as it was.
+async function reresolveUnresolvedJobs(companyId, channel, { limit = 50 } = {}) {
+  if (!companyId) throw new Error('templates.reresolveUnresolvedJobs requires companyId');
+  const due = await query(
+    `SELECT sa.id, sa.step_id, sa.contact_id, sa.payload
+       FROM scheduled_actions sa
+      WHERE sa.company_id = $1 AND sa.channel = $2
+        AND sa.status = 'pending'
+        AND sa.scheduled_for <= now()
+        AND COALESCE((sa.payload->>'content_resolved')::boolean, false) = false
+      ORDER BY sa.scheduled_for ASC
+      LIMIT $3`,
+    [companyId, channel, Math.min(parseInt(limit, 10) || 50, 200)]
+  );
+  let fixed = 0;
+  for (const row of due.rows) {
+    try {
+      const st = await query(
+        'SELECT * FROM sequence_steps WHERE id = $1 AND company_id = $2', [row.step_id, companyId]);
+      if (!st.rows[0]) continue;
+      const ct = await query(
+        `SELECT id, name, email, company_name, marketing_stage, deal_stage
+           FROM contacts WHERE id = $1 AND company_id = $2`, [row.contact_id, companyId]);
+      const resolved = await resolveStepContent(companyId, st.rows[0], ct.rows[0] || null);
+      if (!resolved.resolved) continue;   // still no copy — leave it untouched
+      const prior = (typeof row.payload === 'string' ? JSON.parse(row.payload) : row.payload) || {};
+      await query(
+        `UPDATE scheduled_actions SET payload = $2::jsonb, updated_at = now() WHERE id = $1`,
+        [row.id, JSON.stringify(contentPayload(resolved, { ...prior, content_reresolved_at: new Date().toISOString() }))]
+      );
+      fixed += 1;
+    } catch (err) {
+      // One bad row must never stop a claim scan.
+      console.error(`[CRM][content] re-resolve failed for job ${row.id}: ${err.message}`);
+    }
+  }
+  return fixed;
+}
+
 // Operator-facing readiness: which steps of a sequence would go out blank?
 // Answers the question BEFORE the ladder fires at anyone, which is the only
 // time the answer is cheap.
@@ -261,18 +315,34 @@ async function sequenceContentReadiness(companyId, sequenceId, { sampleContact =
       subject_preview: r.subject, body_preview: r.body ? String(r.body).slice(0, 200) : null,
     });
   }
+  // F2: resolving the STEPS is not the same question as "will the queue drain".
+  // A job frozen with content_resolved=false stays unclaimable even after its
+  // template is authored, so reporting `sendable: true` off the steps alone
+  // answered "yes, safe to switch on" about a ladder that could never send —
+  // worse than silence. Count the actually-queued unresolved rows too.
+  const stuck = await query(
+    `SELECT count(*)::int AS n
+       FROM scheduled_actions sa
+       JOIN sequence_steps ss ON ss.id = sa.step_id AND ss.company_id = sa.company_id
+      WHERE sa.company_id = $1 AND ss.sequence_id = $2
+        AND sa.status IN ('pending','claimed')
+        AND COALESCE((sa.payload->>'content_resolved')::boolean, false) = false`,
+    [companyId, sequenceId]
+  );
+  const stuckJobs = stuck.rows[0].n;
   return {
     sequence_id: sequenceId,
     total_steps: out.length,
     unresolved_steps: out.filter(s => !s.resolved).length,
+    unresolved_queued_jobs: stuckJobs,
     // The one line an operator needs: is this sequence safe to switch on?
-    sendable: out.length > 0 && out.every(s => s.resolved),
+    sendable: out.length > 0 && out.every(s => s.resolved) && stuckJobs === 0,
     steps: out,
   };
 }
 
 module.exports = {
   upsertTemplate, getTemplate, listTemplates, deleteTemplate, templateChannelMismatch,
-  resolveStepContent, contentPayload, sequenceContentReadiness,
+  resolveStepContent, contentPayload, sequenceContentReadiness, reresolveUnresolvedJobs,
   SUBJECT_CHANNELS,
 };

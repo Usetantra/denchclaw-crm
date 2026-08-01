@@ -48,6 +48,7 @@ const mkContact = (name, company = CO, extra = {}) =>
   contactDb.create({ name, email: `${name.toLowerCase().replace(/[^a-z0-9]+/g, '')}-${RUN}@ex.test`, company_id: company, ...extra });
 const jobsFor = async (enrollmentId) =>
   (await db.query('SELECT * FROM scheduled_actions WHERE enrollment_id=$1 ORDER BY created_at ASC', [enrollmentId])).rows;
+const jobRowOf = async (id) => (await db.query('SELECT * FROM scheduled_actions WHERE id=$1',[id])).rows[0];
 const payloadOf = (job) => (typeof job.payload === 'string' ? JSON.parse(job.payload) : job.payload) || {};
 
 async function main() {
@@ -385,6 +386,56 @@ async function main() {
       { step_order: 4, channel: 'email', template_ref: 'not_written_yet' });
     check('C16 a not-yet-authored ref is ACCEPTED at config time (readiness reports it instead)',
       later.status === 201, JSON.stringify(later.json));
+  }
+
+
+  // ── F1/F2 — authoring the copy must ACTUALLY un-stick the ladder ──────────
+  // A second orchestrator pass reproduced this: materializeNextStep FREEZES
+  // content_resolved into the payload, the claim door reads that frozen flag,
+  // and nothing re-resolved it — so the operator authored the missing template,
+  // got a 201, and the job stayed unclaimable. My own C13 only passed because it
+  // re-SCHEDULED the job (which re-resolves); authoring alone did not.
+  {
+    const fSeq = await seqDb.createSequence({ companyId: CO, name: `F1 ${RUN}`, pipelineKey: 'webinar_sales' });
+    await seqDb.addStep(fSeq.id, CO, { stepOrder: 1, channel: 'email', templateRef: `f1_ref_${RUN}` });
+    const fc = await mkContact('F1 Stuck');
+    const fEnr = await seqDb.enroll(CO, { sequenceId: fSeq.id, contactId: fc.id });
+    const fJob = (await jobsFor(fEnr.id))[0];
+    await db.query(`UPDATE scheduled_actions SET scheduled_for = now() - interval '1 minute' WHERE id=$1`, [fJob.id]);
+    check('F1 the job is frozen content-less', payloadOf(await jobRowOf(fJob.id)).content_resolved === false);
+
+    // F2: readiness must NOT claim the sequence is sendable while that row is stuck.
+    await req('POST', '/api/crm/templates', { ref: `f1_ref_${RUN}`, channel: 'email',
+      subject: 'Now authored', body: 'Real copy for {first_name}.' });
+    const ready = await req('GET', `/api/crm/sequences/${fSeq.id}/content`);
+    check('F2 readiness counts the QUEUED unresolved job, not just the step',
+      ready.json?.unresolved_queued_jobs >= 1, JSON.stringify(ready.json?.unresolved_queued_jobs));
+    check('F2 …so sendable does NOT lie while a queued row is still stuck',
+      ready.json?.sendable === false, JSON.stringify(ready.json?.sendable));
+
+    // F1: the claim door re-resolves, so authoring alone un-sticks it.
+    const claim = await req('POST', '/api/crm/channel-jobs/claim', { channel: 'email', limit: 100, claimed_by: 'f1-exec' });
+    const got = (claim.json?.jobs || []).find(j => j.job_id === fJob.id);
+    check('F1 AUTHORING THE COPY ALONE makes the job claimable — no re-schedule, no DB surgery',
+      !!got, JSON.stringify((claim.json?.jobs || []).length));
+    check('F1 …and it arrives carrying the real, token-resolved body',
+      /Real copy for F1/.test(got?.payload?.body || ''), JSON.stringify(got?.payload?.body));
+    const after = payloadOf(await jobRowOf(fJob.id));
+    check('F1 …the row was rewritten in place, and says when', after.content_resolved === true && !!after.content_reresolved_at,
+      JSON.stringify([after.content_resolved, after.content_reresolved_at]));
+    const ready2 = await req('GET', `/api/crm/sequences/${fSeq.id}/content`);
+    check('F2 …after which readiness agrees it is sendable', ready2.json?.sendable === true, JSON.stringify(ready2.json?.sendable));
+
+    // A job whose copy STILL does not exist must be left exactly as it was.
+    const gSeq = await seqDb.createSequence({ companyId: CO, name: `F1 never ${RUN}`, pipelineKey: 'webinar_sales' });
+    await seqDb.addStep(gSeq.id, CO, { stepOrder: 1, channel: 'email', templateRef: `never_authored_${RUN}` });
+    const gEnr = await seqDb.enroll(CO, { sequenceId: gSeq.id, contactId: (await mkContact('F1 NeverCopy')).id });
+    const gJob = (await jobsFor(gEnr.id))[0];
+    await db.query(`UPDATE scheduled_actions SET scheduled_for = now() - interval '1 minute' WHERE id=$1`, [gJob.id]);
+    const claim2 = await req('POST', '/api/crm/channel-jobs/claim', { channel: 'email', limit: 100, claimed_by: 'f1-exec2' });
+    check('F1 a job with STILL no copy stays unclaimable (the re-resolve is not a bypass)',
+      !(claim2.json?.jobs || []).some(j => j.job_id === gJob.id));
+    check('F1 …and is left pending, untouched', (await jobRowOf(gJob.id)).status === 'pending');
   }
 
   // ── C12 — model guards ────────────────────────────────────────────────────
