@@ -74,6 +74,28 @@ for i in $(seq 1 30); do
   sleep 1
 done
 
+# A healthy port is NOT proof the server is OURS. If another process already
+# holds TEST_PORT, our `node server/server.js` fails to bind, /health answers
+# from THEIR server, and every keyed request 401s against a key it has never
+# heard of — which surfaces as dozens of phantom test failures with no hint of
+# the real cause. (Observed for real: 88 "failures" that were one port clash.
+# The tell was that the DB-only suites, which need no server, passed clean.)
+#
+# So prove the server accepts OUR key before running anything. A silent
+# fall-through to the wrong server makes a green suite meaningless, and a red
+# one a wild goose chase.
+PROBE=$(curl -s -o /dev/null -w '%{http_code}' \
+  -H "x-internal-key: $KEY" -H 'x-company-id: tantra' \
+  "http://127.0.0.1:${TEST_PORT}/api/crm/contacts?limit=1" || echo 000)
+if [ "$PROBE" != "200" ]; then
+  echo "FATAL: :$TEST_PORT answered /health but rejected our key (HTTP $PROBE)."
+  echo "       Another server is almost certainly holding that port — this run"
+  echo "       would produce phantom failures against someone else's process."
+  echo "       Free the port, or set TEST_PORT to one you own."
+  kill $SERVER_PID 2>/dev/null
+  exit 2
+fi
+
 echo "[test] running contract harness PHASE=$PHASE"
 CRM_API_BASE="http://127.0.0.1:${TEST_PORT}" \
 INTERNAL_API_KEY="$KEY" \
