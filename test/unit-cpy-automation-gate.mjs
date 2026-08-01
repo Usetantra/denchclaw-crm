@@ -166,6 +166,82 @@ async function main() {
     all.rows.find(r => r.key === 'marketing').stages.find(s => s.key === 'responded').mode === 'auto',
     'responded is no longer auto');
 
+  // ═══ CP-Y2 — the BUILT-IN sales pipeline, where `won` actually lives ═════
+  //
+  // CP-Y hoisted the PATCH mode gate out of an `if (funnel_type)` condition and
+  // into the `else` arm — the arm for deals with an EXPLICIT pipeline_key. But
+  // `POST /deals` normalises the built-in sales pipeline to NULL, so built-in
+  // deals take the `if` arm. The gate landed one branch short of the stages
+  // that matter, and a robot could still mark a deal Won.
+  //
+  // Every check below runs on a deal with pipeline_key = NULL, which is what
+  // the earlier round never exercised.
+  const mkBuiltin = async (stage = 'onboarding') => {
+    n += 1;
+    const c = await contactDb.create({ name: `CPY2 P${n}`, email: `cpy2-${n}-${RUN}@ex.test`, company_id: CO });
+    const created = await api('POST', '/api/crm/deals',
+      { title: `CPY2 deal ${n}`, contact_id: c.id, value: 90000, stage });
+    return created.json;
+  };
+
+  const b1 = await mkBuiltin('onboarding');
+  check('Y-7 a built-in deal really is stored with pipeline_key = NULL — the branch this missed',
+    (await db.query('SELECT pipeline_key FROM deals WHERE id=$1', [b1.id])).rows[0].pipeline_key === null,
+    JSON.stringify((await db.query('SELECT pipeline_key FROM deals WHERE id=$1', [b1.id])).rows[0]));
+
+  // B1
+  const b1Robot = await api('PATCH', `/api/crm/deals/${b1.id}`, { stage: 'won', automated: true });
+  check('Y-7 B1 — an automated PATCH to `won` on a BUILT-IN deal is 403', b1Robot.status === 403,
+    `${b1Robot.status} ${JSON.stringify(b1Robot.json).slice(0, 120)}`);
+  check('Y-7 B1 …and the deal did not move',
+    (await db.query('SELECT stage FROM deals WHERE id=$1', [b1.id])).rows[0].stage === 'onboarding',
+    'a robot moved a built-in deal to won');
+  check('Y-7 B1 …refused as manual_stage, because 026 declares built-in `won` manual',
+    b1Robot.json && b1Robot.json.error_code === 'manual_stage', JSON.stringify(b1Robot.json?.error_code));
+
+  // B2 — creation, the second write point
+  const c2 = await contactDb.create({ name: 'CPY2 Create', email: `cpy2-create-${RUN}@ex.test`, company_id: CO });
+  const b2 = await api('POST', '/api/crm/deals',
+    { title: 'CPY2 minted at won', contact_id: c2.id, value: 90000, stage: 'won', automated: true });
+  check('Y-8 B2 — an automated CREATE directly at `won` is 403, not 201', b2.status === 403,
+    `${b2.status} ${JSON.stringify(b2.json).slice(0, 120)}`);
+  const minted = await db.query(`SELECT COUNT(*)::int AS n FROM deals WHERE contact_id=$1`, [c2.id]);
+  check('Y-8 …and no deal was minted at all', minted.rows[0].n === 0, JSON.stringify(minted.rows[0]));
+  const b2Human = await api('POST', '/api/crm/deals',
+    { title: 'CPY2 human at won', contact_id: c2.id, value: 90000, stage: 'won' });
+  check('Y-8 …while a HUMAN may still create one there', b2Human.status === 201,
+    `${b2Human.status} ${JSON.stringify(b2Human.json).slice(0, 120)}`);
+
+  // B3 — the positive control, and the orchestrator's point that their earlier
+  // one proved nothing because the path was ungated. Now it is gated, so this
+  // asserts something for the first time.
+  const b3 = await mkBuiltin('contacted');
+  const b3Robot = await api('PATCH', `/api/crm/deals/${b3.id}`, { stage: 'booked', automated: true });
+  check('Y-9 B3 POSITIVE CONTROL — an automated PATCH to a declared-`auto` stage still 200s',
+    b3Robot.status === 200, `${b3Robot.status} ${JSON.stringify(b3Robot.json).slice(0, 140)}`);
+  check('Y-9 B3 …and the deal actually moved',
+    (await db.query('SELECT stage FROM deals WHERE id=$1', [b3.id])).rows[0].stage === 'booked',
+    'the deal did not move — the gate is now blocking legitimate automation');
+  const b3Create = await api('POST', '/api/crm/deals',
+    { title: 'CPY2 auto create', contact_id: c2.id, value: 1000, stage: 'contacted', automated: true });
+  check('Y-9 B3 …and an automated CREATE at a declared-`auto` stage still 201s',
+    b3Create.status === 201, `${b3Create.status} ${JSON.stringify(b3Create.json).slice(0, 120)}`);
+
+  // B4
+  const b4 = await mkBuiltin('onboarding');
+  const b4Human = await api('PATCH', `/api/crm/deals/${b4.id}`, { stage: 'won' });
+  check('Y-10 B4 — a HUMAN PATCH to `won` still 200s', b4Human.status === 200,
+    `${b4Human.status} ${JSON.stringify(b4Human.json).slice(0, 120)}`);
+  check('Y-10 B4 …and the deal moved',
+    (await db.query('SELECT stage FROM deals WHERE id=$1', [b4.id])).rows[0].stage === 'won', 'deal did not move');
+
+  // The gate must not have eaten the TRANSITION checks, which live in both arms
+  // and were deliberately left alone.
+  const b5 = await mkBuiltin('contacted');
+  const illegal = await api('PATCH', `/api/crm/deals/${b5.id}`, { stage: 'won' });
+  check('Y-10 the transition check still runs on the built-in arm (contacted → won is 409)',
+    illegal.status === 409, `${illegal.status} ${JSON.stringify(illegal.json).slice(0, 120)}`);
+
   console.log(results.join('\n'));
   console.log(`\nCP-Y automation gate: ${pass} passed / ${fail} failed`);
   await db.closeDatabase?.();

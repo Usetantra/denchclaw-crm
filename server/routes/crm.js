@@ -929,18 +929,26 @@ router.post('/deals', validate(), async (req, res) => {
           return res.status(400).json({ error: `stage '${stage}' is not a stage of pipeline '${pipelineKey}'`, allowed_stages: keys });
         }
         initialStage = stage || keys[0] || 'lead';
-        // Mode gate on CREATION too — otherwise `automated: true` could mint a
-        // fresh deal directly inside a manual stage (and that new deal would
-        // win the active-deal lookup), sidestepping /advance's 403. Same
-        // honor-system caveat as /advance (see the comment there).
-        const createRefusal = manualStageRefusal({
-          pipeline: cfg, pipelineKey, stage: initialStage, automated: req.body.automated === true });
-        if (createRefusal) return res.status(createRefusal.status).json(createRefusal.body);
       } else {
         initialStage = (stage && keys.includes(stage)) ? stage : (keys[0] || 'lead');
       }
     } else {
       initialStage = DEAL_STAGES.includes(stage) ? stage : 'lead';
+    }
+
+    // ─── CP-Y2: the mode gate on CREATION, for EVERY pipeline ──────────────
+    // Otherwise `automated: true` mints a fresh deal directly inside a manual
+    // stage — and that new deal wins the active-deal lookup — sidestepping the
+    // 403 on every other path. This used to sit inside `if (cfg.funnel_type)`,
+    // the same conditional CP-Y removed from PATCH; the built-in sales pipeline
+    // has no funnel_type, so creating a deal straight at `won` was a 201.
+    // Same honor-system caveat as /advance (see the comment there).
+    const createCfg = await getPipelineConfig(companyId, pipelineKey || 'sales');
+    if (createCfg) {
+      const createRefusal = manualStageRefusal({
+        pipeline: createCfg, pipelineKey: pipelineKey || 'sales', stage: initialStage,
+        automated: req.body.automated === true });
+      if (createRefusal) return res.status(createRefusal.status).json(createRefusal.body);
     }
 
     // Link (or create) a real contact so the opportunity also shows up in
@@ -1083,11 +1091,36 @@ router.patch('/deals/:id', async (req, res) => {
       const oldStage = deal.stage;
       const newStage = updates.stage;
 
+      // ─── CP-Y2: THE MODE GATE, ABOVE THE BRANCH ────────────────────────
+      // CP-Y hoisted this out of an `if (funnel_type)` condition and put it in
+      // the `else` arm — which is where deals with an EXPLICIT pipeline_key go.
+      // `POST /deals` normalises the built-in sales pipeline to NULL, so
+      // built-in deals take the `if` arm, and `won`/`lost` actually live there.
+      // The fix moved the gate one branch short of the stages that matter, and
+      // a robot could still mark a deal Won.
+      //
+      // The lesson, written down because it has now cost two checkpoints: a gate
+      // placed inside ANY arm of a branch is a gate that only guards some
+      // writes. This one resolves the config once — an explicit key, or the
+      // built-in `sales` — and runs before the split, so there is one place
+      // where "may a robot set this stage?" is asked, for every deal write.
+      //
+      // The transition checks stay exactly where they are, in both arms: legacy
+      // and built-in deals are governed by this file's own DEAL_TRANSITIONS
+      // reasoning rather than the JSONB config, and hoisting those too would
+      // gate them against the wrong table.
+      const dealPipelineCfg = await getPipelineConfig(companyId, deal.pipeline_key || 'sales');
+      if (dealPipelineCfg) {
+        const patchRefusal = manualStageRefusal({
+          pipeline: dealPipelineCfg, pipelineKey: deal.pipeline_key || 'sales', stage: newStage,
+          automated: req.body.automated === true });
+        if (patchRefusal) return res.status(patchRefusal.status).json(patchRefusal.body);
+      }
+
       // Only the built-in sales pipeline and funnel-typed pipelines gate
       // transitions (same source as /advance, preserving the automation
       // contract). Untyped custom pipelines (migration 009) move freely —
       // the operator designed them.
-      let dealPipelineCfg = null;
       if (!deal.pipeline_key) {
         const salesPipeline = await getPipelineConfig(companyId, 'sales');
         if (salesPipeline) {
@@ -1101,25 +1134,6 @@ router.patch('/deals/:id', async (req, res) => {
           }
         }
       } else {
-        dealPipelineCfg = await getPipelineConfig(companyId, deal.pipeline_key);
-        // CP-Y: THE MODE GATE RUNS FOR EVERY PIPELINE, not only funnel-typed
-        // ones. It used to sit inside the `funnel_type` branch below — which is
-        // the HTTP twin of the write-back hole this checkpoint exists to close:
-        // the legacy `sales` pipeline has no funnel_type, so an
-        // `automated: true` PATCH could set `won` or `lost` on a legacy deal
-        // with nothing checking it at all. Closing the scheduler's path while
-        // leaving the HTTP path open would have fixed the reproduction and not
-        // the defect.
-        //
-        // The transition check stays where it was: legacy deals are governed by
-        // this file's own DEAL_TRANSITIONS map, not by the JSONB config, so
-        // hoisting that too would double-gate them against the wrong table.
-        if (dealPipelineCfg) {
-          const patchRefusal = manualStageRefusal({
-            pipeline: dealPipelineCfg, pipelineKey: deal.pipeline_key, stage: newStage,
-            automated: req.body.automated === true });
-          if (patchRefusal) return res.status(patchRefusal.status).json(patchRefusal.body);
-        }
         if (dealPipelineCfg && dealPipelineCfg.funnel_type) {
           // CP1: funnel-typed deals are additionally transition-gated against
           // the JSONB config, like /advance.
