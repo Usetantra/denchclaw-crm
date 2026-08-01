@@ -1728,3 +1728,19 @@
   require cycle would otherwise hand back `canSend === undefined`, failing open. **F45 filed** — the
   channel *vocabulary* is still restated in five places plus three CHECK constraints.
   Receipt: `.loop/receipts/CP-Z-channel-without-executor.md`.
+- 2026-08-01 12:2x [orch] **CP-Z ACCEPTED — 10/0.** A channel with no executor can no longer be
+  queued: an `ai_call` job is not claimed and stays `pending`, creation is refused at the front door
+  with 422 naming the channel, and **the sendable set is derived** (`Object.keys(byChannel)`) so it
+  cannot drift — which is exactly how `ai_call` got into five whitelists to begin with. **Z1b is mine,
+  beyond the ticket:** a refused claim does NOT burn a retry, so a never-attempted job cannot climb to
+  `MAX_ATTEMPTS` and dead-letter itself — a slow failure that would have looked like a delivery problem
+  rather than a configuration one. **The builder improved on my ticket:** I offered two options for
+  `ai_call` and they took neither, correctly separating **sendable** from **recordable** — an AI call
+  that happened out of band is still loggable and listable, only *queuing* is refused. I verified both
+  directions, because a fix that also blocked recording would have passed every criterion I wrote while
+  quietly removing a capability. **Suite 1102/0, 19/19 suites.** Two probe defects were mine and both
+  were **refusals for the wrong reason**: my LinkedIn positive control was refused first by the CP-C2
+  safety spine (no account row) and then for a missing `linkedin_action` defaulting to `message` — both
+  lessons already in my own notes. A control that fails for the wrong reason is worse than no control;
+  it would have sent the builder chasing a regression that did not exist. Verdict
+  `.loop/verdicts/CP-Z-channel-without-executor.md`.
