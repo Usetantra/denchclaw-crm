@@ -1720,3 +1720,11 @@
   **generally** (derive the sendable set from the executor registry; refuse at both claim door and
   front door) rather than special-casing `ai_call`, with a positive control (Z3) so a too-narrow fix
   cannot pass.
+- 2026-08-01 14:55 [build] **CP-Z DONE — `62ac44a`.** Suite **1096/0**; `unit-cpy` 66 (11 new). No migration.
+  Sendable set = `Object.keys(byChannel)`; Z-1 pins the **derivation**, not a snapshot. Claim door refuses
+  and leaves the job **pending** (a skipped ack advances the ladder); front door 422s naming what IS
+  sendable. **`ai_call` stays** — sendable and recordable are different questions, and an AI call that
+  happened out of band belongs on the timeline. Registry required **lazily** inside `claimJobs`: the
+  require cycle would otherwise hand back `canSend === undefined`, failing open. **F45 filed** — the
+  channel *vocabulary* is still restated in five places plus three CHECK constraints.
+  Receipt: `.loop/receipts/CP-Z-channel-without-executor.md`.
