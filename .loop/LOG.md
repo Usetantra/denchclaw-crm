@@ -1839,3 +1839,16 @@
   failing suite is **named** and the run exits non-zero (AA4/AB5). Committed and pushed.
   **Honest status:** the autonomous work has reached genuine diminishing returns — what I have left to
   find is smaller than what the three pending decisions unblock.
+- 2026-08-01 14:2x [orch] `handoff=operator`, and rather than manufacture a ticket I closed the one
+  check the backup work implies but I had never done: **every suite run this session happened inside my
+  working tree, which carries 11 untracked files.** If any test depended on one, the copy on origin
+  would be **illusory — present but unusable**. Cloned `feat/consolidation` from origin (`8dc5398`,
+  exact match), `npm install` (exit 0), `npm test` → **`1102 passed / 0 failed`, `19/19 suites`,
+  `SUITE GREEN`, exit 0**, with nothing from my working tree involved. The record travelled too: 18
+  verdicts, 16 receipts, `DEPLOY_RUNBOOK.md` and the operator's verbatim `GOALS.md` all present;
+  `.loop/EVIDENCE` is 0 files (gitignored deliberately — every screenshot regenerable) and
+  `scratchpad/` is absent, never committed. This also **validates the README section I wrote last
+  tick from a clean clone**, rather than from the tree where I had already learned every quirk — which
+  is the only way that documentation claim is worth anything. Verdict
+  `.loop/verdicts/CP-AC-fresh-clone.md`. **The autonomous work is at genuine diminishing returns; I am
+  not going to keep generating finer tickets to look busy.**
