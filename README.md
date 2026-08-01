@@ -55,13 +55,38 @@ backups, cron jobs, and superuser slots.
 
 ## Tests
 
-Contract tests write rows — run them against a **local dev server + scratch
-DB**, never staging:
+The tests write rows — they run against a **local scratch DB**, never staging.
+19 suites, ~1100 assertions.
+
+**You do not need Docker.** Point `DATABASE_URL_TEST` at any local Postgres and
+the harness applies the schema itself using the `pg` driver already in
+`dependencies`:
 
 ```bash
-npm test            # boots a Docker postgres:16 scratch DB + local server,
-                    # applies migrate.sql + migrations/, runs PHASE=CP5 harness
+DATABASE_URL_TEST=postgres://you@127.0.0.1:5432/denchclaw_test npm test
 ```
+
+If you do have Docker, plain `npm test` still spins up its own `postgres:16`
+container and needs nothing from you:
+
+```bash
+npm test
+```
+
+Either way it applies `migrate.sql` + `migrations/` in order, starts a local
+server, runs all 19 suites, and prints a total with an `N/19 suites reported`
+count so a suite that vanishes cannot hide inside a healthy number.
+
+Useful to know:
+
+- **Re-runnable.** The scratch schema is reset before each run, so the same
+  `DATABASE_URL_TEST` works run after run.
+- **It cannot point at production.** A `DATABASE_URL_TEST` whose *host* is not
+  local is refused before any DDL runs. The host is parsed, not string-matched,
+  so `postgres://localhost:pw@prod.example.com/live` is correctly rejected.
+- **`TEST_PORT`** (default `3101`) if that port is busy. The harness refuses to
+  run against a server on that port that isn't the one it started.
+- A failing suite is named in the output and the run exits non-zero.
 
 Manual invocation against an already-running server:
 
