@@ -1868,3 +1868,21 @@
   is on origin, 19 verdicts are banked, the suite is `1102 / 0` green **from a fresh clone**, and
   `origin/main` is untouched at `9ff21cb`. Resuming is one action — re-arm the same tick prompt, or
   hand this session new scope. The three operator decisions remain the only open items.
+- 2026-08-02 [orch] **MERGED AND DEPLOYED** at operator direction (standing never-push/never-deploy
+  rules explicitly lifted). **(1)** PR #6 merged, `origin/main` `9ff21cb → c9ddcbd`, +50 commits.
+  **(2)** Staging deployed by the runbook — **982 MB backup first**, migrations **012–026 applied
+  15/15**, schema verified **before** restart, **only `denchclaw-crm` restarted** (other six pm2 apps
+  untouched at `restarts=0`), then the decisive check: **authenticated request 200 with 30,612
+  contacts**. Two things would have made this deploy silently useless: **migration 013 failed on real
+  data** (FK to `tenants`; two test-residue company_ids had no tenant row — I provisioned them as
+  `archived/test` rather than delete 17 rows of production data), and **the served UI was from 4 July**
+  because nginx serves `/crm/` from `/var/www/crm/`, not the repo, so migrating alone would have left a
+  month-stale dashboard. **(3) `claude login` NOT DONE and cannot be** — no TTY, no credentials file,
+  no reachable OAuth prompt. **Verification: staging read-only 15/0** (22,888 real contact emails
+  rendered, deployed backend reports 13/6/5 funnel stages, clean console — read-only by design so a
+  probe could not write into live data) **and interactive at the deployed commit 24/0** (new-contact
+  button really POSTs 201; **Draft with AI produced a real draft**; content formats correct per channel
+  — email 18/18 subjects, sms/whatsapp 0, linkedin exactly 1 and that one is the **InMail** step;
+  composer excludes `ai_call` while the inbox filter includes it — CP-Z's sendable≠recordable rule
+  visible in the UI). **Five probe defects were mine, none product bugs**, including assuming
+  "LinkedIn ⇒ no subject" and failing a correct design. Verdict `.loop/verdicts/CP-DEPLOY-staging.md`.
