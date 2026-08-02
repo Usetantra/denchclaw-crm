@@ -1,5 +1,7 @@
 'use strict';
 const { v4: uuidv4 } = require('uuid');
+const tenantDb = require('../db/models/tenants');
+const apiKeysDb = require('../db/models/apiKeys');
 
 const INTERNAL_API_KEY = process.env.INTERNAL_API_KEY || (() => {
   const k = 'denchclaw-dev-' + uuidv4();
@@ -9,19 +11,67 @@ const INTERNAL_API_KEY = process.env.INTERNAL_API_KEY || (() => {
 
 const DEFAULT_COMPANY_ID = process.env.DEFAULT_COMPANY_ID || 'tantra';
 
-// Single-tenant consolidation (migration 011): legacy tenant ids were folded into
-// the canonical tenant. Any inbound X-Company-Id in this set is canonicalized so
-// a stale caller (an engine, an old bulk-import script) can never re-split the
-// tenant. Tunable via LEGACY_COMPANY_IDS / CANONICAL_COMPANY_ID; test tenants
-// (co_a_*, cp4_co) are deliberately NOT folded so multi-tenant contract tests
-// still exercise real isolation.
+// Static fallback fold — used ONLY when the tenants table (migration 012)
+// can't be consulted (DB not ready yet at boot, or a transient query error).
+// Tenant resolution is "best-effort enrichment" the same way company
+// auto-identification is (server/db/models/companies.js): a DB hiccup must
+// never block auth on this always-on service. Tunable via LEGACY_COMPANY_IDS /
+// CANONICAL_COMPANY_ID for back-compat with pre-migration-012 deployments.
 const CANONICAL_COMPANY_ID = process.env.CANONICAL_COMPANY_ID || DEFAULT_COMPANY_ID;
 const LEGACY_COMPANY_IDS = new Set(
   (process.env.LEGACY_COMPANY_IDS || 'growthclub,dev_company')
     .split(',').map(s => s.trim()).filter(Boolean)
 );
-function canonicalCompanyId(id) {
+function staticFold(id) {
   return LEGACY_COMPANY_IDS.has(id) ? CANONICAL_COMPANY_ID : id;
+}
+
+// DB-backed canonicalization (migration 012 `tenants.aliases` replaces the env-
+// parsed fold above as the source of truth). A known tenant id or alias
+// resolves to that tenant's canonical id; an id no tenant recognizes (e.g. the
+// contract suite's ad-hoc co_a_<run> test tenants, which are deliberately never
+// provisioned as real tenant rows) passes through the static fold unchanged —
+// same back-compat posture as before migration 012, not a behavior change for
+// anything that isn't `tantra`/its legacy aliases.
+const TENANT_CACHE_TTL_MS = parseInt(process.env.TENANT_CACHE_TTL_MS, 10) || 60_000;
+// Bounded LRU-ish cache keyed on the raw incoming X-Company-Id: any caller
+// holding a valid internal key controls this header, so an unbounded map
+// keyed on attacker-influenced input would be a memory-exhaustion DoS vector
+// (many distinct header values -> unbounded growth). Insertion order in a JS
+// Map lets a cheap "evict oldest" approximate LRU without a dependency.
+const TENANT_CACHE_MAX_ENTRIES = parseInt(process.env.TENANT_CACHE_MAX_ENTRIES, 10) || 1000;
+const tenantCache = new Map(); // id -> { canonicalId, expiresAt }
+
+function cacheTenant(id, canonicalId) {
+  tenantCache.delete(id); // re-inserting moves it to the "most recent" end
+  tenantCache.set(id, { canonicalId, expiresAt: Date.now() + TENANT_CACHE_TTL_MS });
+  while (tenantCache.size > TENANT_CACHE_MAX_ENTRIES) {
+    tenantCache.delete(tenantCache.keys().next().value); // evict oldest
+  }
+}
+
+async function canonicalCompanyId(id) {
+  const cached = tenantCache.get(id);
+  if (cached && cached.expiresAt > Date.now()) return cached.canonicalId;
+
+  try {
+    const tenant = await tenantDb.resolve(id);
+    const canonicalId = tenant ? tenant.id : staticFold(id);
+    cacheTenant(id, canonicalId);
+    return canonicalId;
+  } catch (err) {
+    // DB not ready / transient error — fall back without caching, so the next
+    // request retries the DB rather than being stuck on a stale fallback.
+    // NOTE: staticFold is frozen at process start from LEGACY_COMPANY_IDS/
+    // CANONICAL_COMPANY_ID env vars. If tenants.aliases is ever edited in the
+    // DB without updating those env vars too, a DB blip during that window
+    // falls back to the stale env mapping — accepted tradeoff (availability
+    // over consistency during an outage, consistent with this service's
+    // "never block on DB pressure" design elsewhere), not an oversight. Keep
+    // the env vars in sync with tenants.aliases for this fallback to be safe.
+    console.error('[Auth] tenant resolution failed, using static fold:', err.message);
+    return staticFold(id);
+  }
 }
 
 // ─── Key → allowed-company binding (multi-tenant isolation, layer 1) ──────────
@@ -143,20 +193,103 @@ function ipAllowed(ip) {
   return ALLOWED_CIDRS.some(cidr => ipInCidr(ip, cidr));
 }
 
+// Express 4 does not catch a rejected promise from an async middleware — an
+// uncaught throw here would leave the request hanging with no response ever
+// sent, not just a 500. canonicalCompanyId() currently swallows every error
+// internally, so nothing throws today, but that's incidental to its current
+// implementation, not a structural guarantee for future edits to this
+// function. This wrapper makes "never hang, always respond" true regardless.
 function requireAuth(req, res, next) {
+  requireAuthAsync(req, res, next).catch((err) => {
+    console.error('[Auth] unexpected error in requireAuth:', err.message);
+    // Guard against a throw after next() already let a downstream handler
+    // respond — a second res.status()/json() call would throw
+    // ERR_HTTP_HEADERS_SENT instead of just logging the original error.
+    if (res.headersSent) return;
+    res.status(500).json({ error: 'internal auth error' });
+  });
+}
+
+async function requireAuthAsync(req, res, next) {
   const key = req.headers['x-internal-key'];
-  const allowed = key ? allowedCompaniesFor(key) : null;
-  if (!key || !allowed) {
+  if (!key) {
     return res.status(401).json({ error: 'Missing or invalid X-Internal-Key' });
   }
+
+  // GOAL A3: a DB-backed per-tenant key (tenant_api_keys, migration 017)
+  // resolves independently of the legacy env-configured map below — both are
+  // checked before deciding anything, specifically so the collision case
+  // right below can be caught before either path is trusted.
+  let dbCompanyId = null;
+  let dbCheckFailed = false;
+  try {
+    dbCompanyId = await apiKeysDb.resolveKey(key);
+  } catch (err) {
+    // DB not ready / transient error. The collision check right below can
+    // only detect an ambiguous key if BOTH sides were actually queried —
+    // when this side errors, we CANNOT prove this key isn't also a
+    // DB-backed one, so we can't just silently trust the env side as if
+    // nothing were wrong. Handled below: narrowly-scoped env keys still
+    // work (no escalation risk even if an undetected collision existed —
+    // a colliding DB key grants at most the same narrow access), but a
+    // wildcard ('*') env key is refused during this window rather than
+    // risking an undetected collision handing out admin power.
+    console.error('[Auth] DB-backed API key resolution failed:', err.message);
+    dbCheckFailed = true;
+  }
+  const envAllowed = allowedCompaniesFor(key);
+
+  // SECURITY: a literal key string must never be valid in BOTH systems at
+  // once. This can only happen via an operator manually reusing a string
+  // across tenant_api_keys and INTERNAL_API_KEYS (createKey() always
+  // generates its own random value, so the DB side of this can't happen
+  // through normal API use) — but if it ever does, silently preferring
+  // either side is dangerous: preferring the DB side would let a per-tenant
+  // key inherit '*'-admin power should that same string also be an env
+  // wildcard key (requireAdmin re-derives admin-ness from the raw key via
+  // allowedCompaniesFor, independent of how requireAuth resolved it); and
+  // preferring the env side would silently bind the request to whatever
+  // tenant the env config says instead of the DB-issued key's actual tenant.
+  // Fail loud (401) instead of silently picking a side.
+  if (dbCompanyId && envAllowed) {
+    console.error('[Auth] SECURITY: a key resolved via BOTH tenant_api_keys and INTERNAL_API_KEYS — refusing (ambiguous binding); rotate one of them');
+    return res.status(401).json({ error: 'Missing or invalid X-Internal-Key' });
+  }
+  if (dbCheckFailed && envAllowed) {
+    // NOT narrowed to wildcard-only: a narrowly-bound env key is not "safe"
+    // here either. The narrow env key's granted tenant comes from the
+    // CALLER-SUPPLIED X-Company-Id header, not from anything the colliding
+    // DB key was actually issued for — if key K is DB-bound to tenant A but
+    // also present (operator error) in INTERNAL_API_KEYS narrowly bound to
+    // {B, C}, an attacker sends X-Company-Id: C and authenticates as C, not
+    // A and not "the same or a narrower" tenant. That's cross-tenant
+    // confusion, not a privilege reduction — refusing wildcard keys alone
+    // does not close it. Any env binding, wide or narrow, is refused when
+    // the collision check itself can't run.
+    console.error('[Auth] SECURITY: DB key-collision check unavailable (DB error) for an env-bound key — refusing rather than risk an undetected collision');
+    return res.status(401).json({ error: 'Missing or invalid X-Internal-Key' });
+  }
+  if (!dbCompanyId && !envAllowed) {
+    return res.status(401).json({ error: 'Missing or invalid X-Internal-Key' });
+  }
+
   const callerIp = req.ip || req.socket?.remoteAddress || '';
   if (!ipAllowed(callerIp)) {
     console.warn('[Auth] X-Internal-Key rejected from IP:', callerIp);
     return res.status(403).json({ error: 'Internal API access denied from this address' });
   }
-  const companyId = canonicalCompanyId(req.headers['x-company-id'] || DEFAULT_COMPANY_ID);
+
+  if (dbCompanyId) {
+    // X-Company-Id is irrelevant for a DB-backed key — it belongs to exactly
+    // one tenant, unlike the legacy env-based keys below which are bound to
+    // a SET of companies and still need the header to pick one.
+    req.auth = { userId: 'internal-agent', companyId: dbCompanyId, role: 'agent' };
+    return next();
+  }
+
+  const companyId = await canonicalCompanyId(req.headers['x-company-id'] || DEFAULT_COMPANY_ID);
   // Layer-1 isolation: a bound key may only act for companies in its set.
-  if (allowed !== '*' && !allowed.has(companyId)) {
+  if (envAllowed !== '*' && !envAllowed.has(companyId)) {
     console.warn(`[Auth] key not permitted for company '${companyId}'`);
     return res.status(403).json({ error: 'company not permitted for this key' });
   }
@@ -172,4 +305,23 @@ function getUserCompanyId(req) {
   return req.auth?.companyId || null;
 }
 
-module.exports = { requireAuth, getUserCompanyId, INTERNAL_API_KEY, ipAllowed, ipInCidr };
+// Tenant management (creating/listing tenants) isn't a company-scoped
+// operation — it's the operation that DEFINES companies — so it needs a
+// stronger gate than "bound to this one company": only a key bound to '*'
+// (unrestricted) may manage tenants. Composes with requireAuth rather than
+// duplicating its key/IP checks.
+function requireAdmin(req, res, next) {
+  requireAuth(req, res, () => {
+    const allowed = allowedCompaniesFor(req.headers['x-internal-key']);
+    if (allowed !== '*') {
+      return res.status(403).json({ error: 'tenant management requires a key bound to all companies (*)' });
+    }
+    next();
+  });
+}
+
+// CP-M union (D2): the branch's requireAdmin survives, and the export surface is
+// the UNION of both sides — the branch's four plus main's ipAllowed/ipInCidr.
+// Nothing outside auth.js imports the CIDR helpers today, but exporting them is
+// what lets M9 probe the allowlist behaviourally instead of by reading the code.
+module.exports = { requireAuth, requireAdmin, getUserCompanyId, INTERNAL_API_KEY, ipAllowed, ipInCidr };

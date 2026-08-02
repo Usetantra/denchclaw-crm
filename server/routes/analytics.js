@@ -14,9 +14,40 @@ const TYPE_TO_COL = {
   mql: 'mql_count', // engines report MQL conversions so mqls/mql_rate aren't stuck at 0
 };
 
+// Writes a raw row to campaign_events and upserts the per-(company,campaign,
+// channel,segment,day) rollup. Exported so other ingestion paths (B3's
+// channel-job ack) can reuse this without duplicating the rollup math.
+// Returns true if the event type was valid and got ingested, false otherwise
+// (caller decides whether that's an error or just "nothing to roll up").
+async function ingestCampaignEvent(companyId, { campaign_id, contact_id, channel, segment, type, ts, metadata = {} }) {
+  if (!VALID_EVENT_TYPES.includes(type)) return false;
+  const eventTs = ts ? new Date(ts) : new Date();
+
+  await query(
+    `INSERT INTO campaign_events (company_id, campaign_id, contact_id, channel, segment, type, metadata, ts)
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8)`,
+    [companyId, campaign_id || null, contact_id || null, channel || null,
+     segment || null, type, JSON.stringify(metadata), eventTs]
+  );
+
+  // Upsert rollup — empty-string sentinels instead of NULL for the UNIQUE constraint
+  const col = TYPE_TO_COL[type];
+  if (col) {
+    const day = eventTs.toISOString().slice(0, 10);
+    await query(
+      `INSERT INTO campaign_event_rollups
+         (company_id, campaign_id, channel, segment, day, ${col})
+       VALUES ($1,$2,$3,$4,$5,1)
+       ON CONFLICT (company_id, campaign_id, channel, segment, day)
+       DO UPDATE SET ${col} = campaign_event_rollups.${col} + 1, updated_at = now()`,
+      [companyId, campaign_id || '', channel || '', segment || '', day]
+    );
+  }
+  return true;
+}
+
 // POST /api/crm/campaign-events
 // Receive one event or an array of events from the outreach engine.
-// Writes a raw row to campaign_events and upserts the per-(company,campaign,channel,segment,day) rollup.
 router.post('/campaign-events', async (req, res) => {
   try {
     const companyId = getUserCompanyId(req);
@@ -24,34 +55,8 @@ router.post('/campaign-events', async (req, res) => {
 
     const events = Array.isArray(req.body) ? req.body : [req.body];
     let inserted = 0;
-
     for (const ev of events) {
-      const { campaign_id, contact_id, channel, segment, type, ts, metadata = {} } = ev;
-      if (!VALID_EVENT_TYPES.includes(type)) continue;
-
-      const eventTs = ts ? new Date(ts) : new Date();
-
-      await query(
-        `INSERT INTO campaign_events (company_id, campaign_id, contact_id, channel, segment, type, metadata, ts)
-         VALUES ($1,$2,$3,$4,$5,$6,$7,$8)`,
-        [companyId, campaign_id || null, contact_id || null, channel || null,
-         segment || null, type, JSON.stringify(metadata), eventTs]
-      );
-
-      // Upsert rollup — empty-string sentinels instead of NULL for the UNIQUE constraint
-      const col = TYPE_TO_COL[type];
-      if (col) {
-        const day = eventTs.toISOString().slice(0, 10);
-        await query(
-          `INSERT INTO campaign_event_rollups
-             (company_id, campaign_id, channel, segment, day, ${col})
-           VALUES ($1,$2,$3,$4,$5,1)
-           ON CONFLICT (company_id, campaign_id, channel, segment, day)
-           DO UPDATE SET ${col} = campaign_event_rollups.${col} + 1, updated_at = now()`,
-          [companyId, campaign_id || '', channel || '', segment || '', day]
-        );
-      }
-      inserted++;
+      if (await ingestCampaignEvent(companyId, ev)) inserted++;
     }
 
     return res.status(202).json({ ok: true, accepted: inserted, total: events.length });
@@ -189,4 +194,5 @@ router.get('/analytics/funnel', async (req, res) => {
   }
 });
 
+router.ingestCampaignEvent = ingestCampaignEvent;
 module.exports = router;

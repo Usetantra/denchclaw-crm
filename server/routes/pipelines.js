@@ -10,6 +10,7 @@
 const express = require('express');
 const router = express.Router();
 const { query } = require('../db/index');
+const { invalidateCompanyPipelines } = require('../db/pipeline');
 const { requireAuth, getUserCompanyId } = require('../middleware/auth');
 
 router.use(requireAuth);
@@ -37,48 +38,73 @@ function slugify(s, i) {
   return b || `stage_${i + 1}`;
 }
 
-// Normalize incoming stages into [{key,name,color,transitions}]. When `prev` is
-// given, per-key transitions are preserved (pruned to surviving keys) so a pure
-// rename/recolor/reorder of a built-in leaves its state machine intact; new
-// stages get a simple linear default.
+// Normalize incoming stages into [{key,name,color,transitions,mode?,terminal?}].
+// When `prev` is given, per-key transitions are preserved (pruned to surviving
+// keys) so a pure rename/recolor/reorder of a built-in leaves its state machine
+// intact; new stages get a simple linear default.
+// CP1: `mode` and `terminal` MUST survive normalization — a tenant renaming one
+// webinar stage must not silently strip every mode gate. Incoming values win
+// (so a client can flip a mode deliberately); a stage that arrives without them
+// inherits the previous stage object's values by key.
 function normalizeStages(input, prev) {
   if (!Array.isArray(input)) return null;
   const seen = new Set();
   const out = [];
   input.forEach((s, i) => {
     if (!s) return;
-    const name = String(s.name || s.key || '').trim();
+    const name = String(s.name || s.label || s.key || '').trim();
     if (!name) return;
     let key = (s.key ? String(s.key) : slugify(name, i)).toLowerCase().replace(/[^a-z0-9_]+/g, '_') || slugify(name, i);
     while (seen.has(key)) key = `${key}_${i}`;
     seen.add(key);
-    out.push({ key, name, color: s.color || PALETTE[out.length % PALETTE.length] });
+    out.push({
+      key, name, color: s.color || PALETTE[out.length % PALETTE.length],
+      mode: s.mode === 'auto' || s.mode === 'manual' ? s.mode : undefined,
+      // true/false are deliberate values (false CLEARS an inherited flag,
+      // symmetric with mode's incoming-wins rule); anything else = unset.
+      terminal: s.terminal === true ? true : (s.terminal === false ? false : undefined),
+    });
   });
   if (!out.length) return null;
   const keys = out.map(s => s.key);
   const prevMap = {};
-  (prev || []).forEach(s => { if (s && s.key) prevMap[s.key] = Array.isArray(s.transitions) ? s.transitions : []; });
+  (prev || []).forEach(s => { if (s && s.key) prevMap[s.key] = s; });
   return out.map((s, i) => {
+    const prevStage = prevMap[s.key];
     let tr;
-    if (prevMap[s.key]) tr = prevMap[s.key].filter(k => keys.includes(k));
+    if (prevStage) tr = (Array.isArray(prevStage.transitions) ? prevStage.transitions : []).filter(k => keys.includes(k));
     else {
       tr = [];
       if (out[i + 1]) tr.push(out[i + 1].key);
       const lost = keys.find(k => k === 'lost');
       if (lost && lost !== s.key && !tr.includes(lost)) tr.push(lost);
     }
-    return { key: s.key, name: s.name, color: s.color, transitions: tr };
+    const mode = s.mode !== undefined ? s.mode
+      : (prevStage && (prevStage.mode === 'auto' || prevStage.mode === 'manual') ? prevStage.mode : undefined);
+    const terminal = s.terminal !== undefined
+      ? s.terminal === true
+      : (prevStage && prevStage.terminal === true);
+    return {
+      key: s.key, name: s.name, color: s.color, transitions: tr,
+      ...(mode ? { mode } : {}),
+      ...(terminal ? { terminal: true } : {}),
+    };
   });
 }
 
 function withColors(stages) {
-  return (stages || []).map((s, i) => ({ key: s.key, name: s.name || s.key, color: s.color || PALETTE[i % PALETTE.length], transitions: s.transitions || [] }));
+  return (stages || []).map((s, i) => ({
+    key: s.key, name: s.name || s.label || s.key, color: s.color || PALETTE[i % PALETTE.length],
+    transitions: s.transitions || [],
+    ...(s.mode ? { mode: s.mode } : {}),
+    ...(s.terminal === true ? { terminal: true } : {}),
+  }));
 }
 
 // Resolve a pipeline by key: prefer the company override, else the global row.
 async function resolve(companyId, key) {
   const { rows } = await query(
-    `SELECT name, stages, (company_id IS NOT NULL) AS overridden
+    `SELECT name, stages, entity_type, funnel_type, (company_id IS NOT NULL) AS overridden
        FROM crm_pipeline_configs
       WHERE key = $1 AND (company_id = $2 OR company_id IS NULL)
       ORDER BY (company_id IS NOT NULL) DESC, created_at ASC LIMIT 1`,
@@ -103,12 +129,33 @@ router.get('/', async (req, res) => {
       list.push({ key, name: (r && r.name) || meta.name, applies_to: meta.applies_to, builtin: true,
         overridden: !!(r && r.overridden), stages: withColors(r && r.stages) });
     }
+    // Global funnel-typed pipelines (CP1) — resolved per-tenant so a
+    // company-scoped override appears ONCE, the override winning (same
+    // precedence as getPipelineConfig).
+    const funnelGlobals = await query(
+      `SELECT key FROM crm_pipeline_configs
+        WHERE company_id IS NULL AND funnel_type IS NOT NULL ORDER BY created_at ASC`
+    );
+    for (const g of funnelGlobals.rows) {
+      const r = await resolve(companyId, g.key);
+      if (!r) continue;
+      list.push({
+        key: g.key, name: r.name, applies_to: r.entity_type === 'deal' ? 'deal' : 'contact',
+        builtin: true, funnel_type: r.funnel_type, overridden: !!r.overridden, stages: withColors(r.stages),
+      });
+    }
+    const listed = new Set(list.map(p => p.key));
     const custom = await query(
-      `SELECT key, name, stages FROM crm_pipeline_configs
+      `SELECT key, name, stages, entity_type, funnel_type FROM crm_pipeline_configs
         WHERE company_id = $1 AND key NOT IN ('marketing','sales') ORDER BY created_at ASC`,
       [companyId]
     );
-    custom.rows.forEach(r => list.push({ key: r.key, name: r.name, applies_to: 'deal', builtin: false, overridden: true, stages: withColors(r.stages) }));
+    // Overrides of the funnel globals are already listed above — skip them here.
+    custom.rows.filter(r => !listed.has(r.key)).forEach(r => list.push({
+      key: r.key, name: r.name, applies_to: r.entity_type === 'contact' ? 'contact' : 'deal',
+      builtin: false, ...(r.funnel_type ? { funnel_type: r.funnel_type } : {}),
+      overridden: true, stages: withColors(r.stages),
+    }));
     res.json({ pipelines: list });
   } catch (err) {
     console.error('[CRM] GET /pipelines error:', err.message);
@@ -130,16 +177,26 @@ router.post('/', async (req, res) => {
     const norm = normalizeStages(raw, null);
     if (!norm) return res.status(400).json({ error: 'at least one stage required' });
 
-    // Derive a unique, non-builtin key from the name.
+    // Derive a unique, non-builtin key from the name. The collision check
+    // includes GLOBAL rows: a company row whose key shadows e.g.
+    // 'webinar_sales' would silently become an override of it — an untyped
+    // one, which would strip that tenant's funnel gates entirely.
     let key = slugify(name, 0);
     if (key === 'marketing' || key === 'sales') key = `${key}_pipeline`;
-    const existing = await query(`SELECT 1 FROM crm_pipeline_configs WHERE company_id = $1 AND key = $2`, [companyId, key]);
+    const existing = await query(
+      `SELECT 1 FROM crm_pipeline_configs WHERE (company_id = $1 OR company_id IS NULL) AND key = $2`,
+      [companyId, key]
+    );
     if (existing.rows.length) key = `${key}_${Date.now().toString(36).slice(-4)}`;
 
+    // Custom pipelines are deals-only (deals.pipeline_key), so entity_type is
+    // 'deal' explicitly — the column default 'contact' exists for the legacy
+    // marketing rows, not for new customs.
     const { rows } = await query(
-      `INSERT INTO crm_pipeline_configs (company_id, key, name, stages) VALUES ($1,$2,$3,$4) RETURNING key, name, stages`,
+      `INSERT INTO crm_pipeline_configs (company_id, key, name, stages, entity_type) VALUES ($1,$2,$3,$4,'deal') RETURNING key, name, stages`,
       [companyId, key, String(name).trim(), JSON.stringify(norm)]
     );
+    invalidateCompanyPipelines(companyId);
     res.status(201).json({ key: rows[0].key, name: rows[0].name, applies_to: 'deal', builtin: false, overridden: true, stages: withColors(rows[0].stages) });
   } catch (err) {
     console.error('[CRM] POST /pipelines error:', err.message);
@@ -163,13 +220,29 @@ router.patch('/:key', async (req, res) => {
     const finalName = (name && String(name).trim()) || (current && current.name) || (isBuiltin ? BUILTINS[key].name : key);
     const finalStages = norm || [];
 
+    // The override row INHERITS entity_type/funnel_type from the row it
+    // overrides (CP1 decision 8) — otherwise overriding e.g. webinar_sales
+    // would flip the /advance branch and disable every mode gate for that
+    // tenant. Brand-new keys (no current row) default to deal/no-funnel,
+    // matching POST's customs.
+    const entityType = (current && current.entity_type)
+      || (isBuiltin ? (BUILTINS[key].applies_to === 'contact' ? 'contact' : 'deal') : 'deal');
+    const funnelType = (current && current.funnel_type) || null;
+
     await query(
-      `INSERT INTO crm_pipeline_configs (company_id, key, name, stages) VALUES ($1,$2,$3,$4)
+      `INSERT INTO crm_pipeline_configs (company_id, key, name, stages, entity_type, funnel_type) VALUES ($1,$2,$3,$4,$5,$6)
        ON CONFLICT (company_id, key) WHERE company_id IS NOT NULL
-       DO UPDATE SET name = EXCLUDED.name, stages = EXCLUDED.stages, updated_at = now()`,
-      [companyId, key, finalName, JSON.stringify(finalStages)]
+       DO UPDATE SET name = EXCLUDED.name, stages = EXCLUDED.stages,
+                     entity_type = EXCLUDED.entity_type, funnel_type = EXCLUDED.funnel_type, updated_at = now()`,
+      [companyId, key, finalName, JSON.stringify(finalStages), entityType, funnelType]
     );
-    res.json({ key, name: finalName, applies_to: isBuiltin ? BUILTINS[key].applies_to : 'deal', builtin: isBuiltin, overridden: true, stages: withColors(finalStages) });
+    invalidateCompanyPipelines(companyId);
+    res.json({
+      key, name: finalName,
+      applies_to: isBuiltin ? BUILTINS[key].applies_to : (entityType === 'contact' ? 'contact' : 'deal'),
+      builtin: isBuiltin || !!funnelType, ...(funnelType ? { funnel_type: funnelType } : {}),
+      overridden: true, stages: withColors(finalStages),
+    });
   } catch (err) {
     console.error('[CRM] PATCH /pipelines/:key error:', err.message);
     res.status(500).json({ error: 'failed to update pipeline' });
@@ -184,7 +257,16 @@ router.delete('/:key', async (req, res) => {
     if (BUILTINS[key]) return res.status(400).json({ error: 'cannot delete a built-in pipeline' });
     const { rows } = await query(`DELETE FROM crm_pipeline_configs WHERE company_id = $1 AND key = $2 RETURNING key`, [companyId, key]);
     if (!rows.length) return res.status(404).json({ error: 'pipeline not found' });
-    await query(`UPDATE deals SET pipeline_key = NULL WHERE company_id = $1 AND pipeline_key = $2`, [companyId, key]);
+    // Only reassign this key's deals back to sales when NO global row backs
+    // the key. Deleting a tenant's override of a global funnel pipeline
+    // (e.g. webinar_sales) just reverts to the global config — its deals
+    // must NOT be dumped onto the sales board. Deleting the global rows
+    // themselves is impossible here (the query above is company-scoped).
+    const globalRow = await query(`SELECT 1 FROM crm_pipeline_configs WHERE company_id IS NULL AND key = $1`, [key]);
+    if (!globalRow.rows.length) {
+      await query(`UPDATE deals SET pipeline_key = NULL WHERE company_id = $1 AND pipeline_key = $2`, [companyId, key]);
+    }
+    invalidateCompanyPipelines(companyId);
     res.json({ ok: true, deleted: key });
   } catch (err) {
     console.error('[CRM] DELETE /pipelines/:key error:', err.message);

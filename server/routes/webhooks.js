@@ -10,6 +10,15 @@ const express = require('express');
 const crypto = require('crypto');
 const router = express.Router();
 const contactDb = require('../db/models/contacts');
+const tenantDb = require('../db/models/tenants');
+const { query } = require('../db/index');
+// CP-B: an interested reply to a cold email invite is auto-registrant path 2.
+const { ingestMarketingEvent } = require('../lib/marketing-events');
+const crmRouter = require('./crm');
+const marketingDeps = {
+  recordActivity: crmRouter.addContactActivity,
+  findOrCreateContact: crmRouter.findOrCreateContact,
+};
 
 const PORT = process.env.PORT || 3100;
 const SELF = `http://127.0.0.1:${PORT}`;
@@ -104,6 +113,37 @@ async function api(method, path, payload, company) {
   return { status: r.status, json };
 }
 
+// ─── CP-M / D7 (GT-2): prove the API honoured the RECIPIENT-DERIVED tenant ────
+// This file self-calls the CRM with `x-internal-key: INTERNAL_API_KEY` and an
+// `x-company-id` derived from the receiving address. The merge put that call
+// behind the consolidation branch's A3 auth, which resolves a DB-backed
+// `tenant_api_keys` key FIRST and — deliberately, and asserted by
+// `test/unit-a3-api-key-auth.mjs:74` — IGNORES `X-Company-Id` when it hits,
+// because a DB-issued key belongs to exactly one tenant. That is the right rule
+// for A3 and must not be weakened here.
+//
+// The consequence for THIS caller is what mattered: if `INTERNAL_API_KEY` were
+// ever also issued as a DB key, every inbound email would be filed under that
+// key's tenant and main's recipient→tenant property (commit b8488d7) would die
+// with NO error at all. So the webhook now VERIFIES rather than assumes: every
+// self-call's response carries the `company_id` the auth layer actually assigned,
+// and a disagreement is a loud, specific refusal instead of a silent cross-file.
+//
+// OPERATIONAL RULE (also recorded in the CP-M receipt): `INTERNAL_API_KEY` must
+// be an ENV-configured key (`INTERNAL_API_KEYS`) bound to `*` or to every tenant
+// named in `INBOUND_ROUTING`. It must NOT be a DB-issued tenant_api_keys value.
+function tenantMismatch(res, wanted, what) {
+  const got = res?.json?.company_id;
+  if (!got || got === wanted) return null;
+  console.error(
+    `[Webhooks] SECURITY: inbound delivery resolved to tenant '${wanted}' from the recipient address, ` +
+    `but the CRM filed the ${what} under '${got}'. INTERNAL_API_KEY is almost certainly a DB-issued ` +
+    `tenant_api_keys key, which binds to its own tenant and ignores X-Company-Id. ` +
+    `Rotate it to an env-bound key (INTERNAL_API_KEYS) covering every INBOUND_ROUTING tenant.`
+  );
+  return { error: 'inbound tenant mismatch — refusing to file this delivery under the wrong tenant', expected: wanted, actual: got };
+}
+
 // POST /webhooks/email/inbound
 router.post('/email/inbound', async (req, res) => {
   try {
@@ -120,10 +160,26 @@ router.post('/email/inbound', async (req, res) => {
 
     // Which tenant owns this delivery? Derived from the recipient address, not a
     // hardcoded default — so multi-tenant routing can never cross-file a contact.
-    const company = resolveCompany(to);
+    let company = resolveCompany(to);
     if (!company) {
       console.warn('[Webhooks] no tenant mapped for recipient:', to || '(none)');
       return res.status(422).json({ error: `no tenant mapped for recipient ${to || '(none)'}` });
+    }
+    // Fold the routing value to its CANONICAL tenant id before using it.
+    // INBOUND_ROUTING may legitimately name an alias (migration 012 seeds
+    // `tantra` with aliases ['growthclub','dev_company']), and the auth layer
+    // canonicalizes X-Company-Id on the way in — so the raw value and the id the
+    // API actually files under can differ by design. Without this fold, the
+    // tenantMismatch guard below would 502 a configuration that worked fine on
+    // main, and the direct `contactDb.getByEmail(from, company)` call just below
+    // would query an alias id that owns no rows. An unresolvable value is left
+    // as-is on purpose, so an unprovisioned tenant still fails loudly (M16)
+    // instead of being silently rewritten.
+    try {
+      const canonical = await tenantDb.resolve(company);
+      if (canonical && canonical.id) company = canonical.id;
+    } catch (err) {
+      console.error('[Webhooks] tenant canonicalization failed, using the routing value as-is:', err.message);
     }
 
     // Resolve the contact by sender email; create one if this is a new person.
@@ -131,7 +187,26 @@ router.post('/email/inbound', async (req, res) => {
     if (!contact) {
       const created = await api('POST', '/api/crm/contacts',
         { email: from, name: from.split('@')[0], source: 'inbound_email' }, company);
+      const mism = tenantMismatch(created, company, 'contact');
+      if (mism) return res.status(502).json(mism);
       contact = created.json;
+      if (!contact || !contact.id) {
+        // M16: a recipient mapped by INBOUND_ROUTING to a tenant that is not
+        // provisioned in `tenants` trips migration 013's FK, which surfaces here.
+        // Report it loudly WITH the upstream status/error — never fall through to
+        // the default tenant, and never leave the operator guessing.
+        console.error(
+          `[Webhooks] could not create contact for tenant '${company}' (upstream ${created.status}):`,
+          JSON.stringify(created.json)
+        );
+        return res.status(502).json({
+          error: 'could not resolve contact',
+          company_id: company,
+          upstream_status: created.status,
+          upstream_error: created.json?.error || null,
+          hint: 'every INBOUND_ROUTING value must be a provisioned tenant (see migrations/013_tenant_fk.sql)',
+        });
+      }
     }
     if (!contact || !contact.id) return res.status(502).json({ error: 'could not resolve contact' });
 
@@ -139,6 +214,11 @@ router.post('/email/inbound', async (req, res) => {
     // The messages endpoint dedupes on provider_message_id, advances the marketing
     // stage (engaged→responded) and scores the reply — all reused here.
     const conv = await api('POST', '/api/crm/conversations', { contact_id: contact.id, channel: 'email' }, company);
+    // The choke point for D7: this response's company_id IS whatever the auth
+    // layer assigned to the self-call, so agreeing with `company` proves the
+    // recipient-derived tenant survived end to end.
+    const convMism = tenantMismatch(conv, company, 'conversation');
+    if (convMism) return res.status(502).json(convMism);
     if (!conv.json || !conv.json.id) return res.status(502).json({ error: 'could not open conversation' });
 
     const msg = await api('POST', `/api/crm/conversations/${conv.json.id}/messages`, {
@@ -148,8 +228,46 @@ router.post('/email/inbound', async (req, res) => {
       metadata: { subject, from, to, in_reply_to: inReplyTo || null, references: references || null },
     }, company);
 
+    // ─── CP-B, auto-registrant path 2 ────────────────────────────────────────
+    // "Invitees that REPLY AND EXPRESS INTEREST in joining the webinar for cold
+    // EMAIL outreach." This is the natural home for it: the inbound reply
+    // already lands here, already resolves the contact, and already dedupes.
+    //
+    // Attribution comes from the invite the reply is answering — the contact's
+    // most recent EMAIL invite link names the webinar. No invite link means
+    // this person was never emailed an invite, so their reply is not an
+    // auto-registration signal for any webinar and we do not guess one.
+    //
+    // Wrapped so it can NEVER fail the inbound delivery. Recording the customer's
+    // email is the contract of this endpoint; the funnel move is a consequence.
+    let marketing = null;
+    try {
+      const linkRes = await query(
+        `SELECT webinar_id FROM crm_invite_links
+          WHERE company_id=$1 AND contact_id=$2 AND channel='email'
+          ORDER BY created_at DESC LIMIT 1`,
+        [company, contact.id]
+      );
+      if (linkRes.rows[0]) {
+        marketing = await ingestMarketingEvent(company, {
+          event_type: 'email_reply', channel: 'email',
+          contact_id: contact.id, webinar_id: linkRes.rows[0].webinar_id,
+          body: text || subject || '',
+          provider: 'inbound_email',
+          provider_event_id: messageId || undefined,
+          source: 'inbound_email',
+        }, marketingDeps);
+      }
+    } catch (e) {
+      console.error('[Webhooks] marketing email_reply ingest failed (inbound still recorded):', e.message);
+    }
+
     return res.status(msg.status === 201 ? 200 : 502).json({
       ok: msg.status === 201, company_id: company, contact_id: contact.id, conversation_id: conv.json.id,
+      ...(marketing ? { marketing: {
+        event_type: marketing.event_type, outcome: marketing.outcome,
+        from_stage: marketing.from_stage, to_stage: marketing.to_stage, detail: marketing.detail,
+      } } : {}),
     });
   } catch (err) {
     console.error('[Webhooks] inbound email error:', err.message);

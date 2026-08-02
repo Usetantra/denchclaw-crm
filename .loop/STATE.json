@@ -1,0 +1,20 @@
+{
+  "cycle": 15,
+  "cp": "CP-AC",
+  "phase": "VERIFIED",
+  "ticket": "CP-AB-suite-runs-once",
+  "status": "FRESH-CLONE INTEGRITY VERIFIED — the backup is USABLE, not merely present. Every suite run this session happened inside my working tree, which carries 11 untracked files; if any test depended on one, the copy on origin would be illusory. Cloned feat/consolidation from origin (8dc5398, exact match), npm install (exit 0), npm test → 1102 passed / 0 failed, 19/19 suites, SUITE GREEN, exit 0, with NOTHING from my working tree involved. The record travelled: 18 verdicts, 16 receipts, DEPLOY_RUNBOOK.md and the operators verbatim GOALS.md all present; .loop/EVIDENCE is 0 files (gitignored on purpose, every screenshot regenerable) and scratchpad/ is absent (never committed). This also validates the README section I wrote last tick, from a clean clone rather than from the tree where I already knew every quirk. NINETEEN VERDICTS BANKED. The autonomous work is at genuine diminishing returns and I am not going to manufacture further tickets. THREE OPERATOR DECISIONS, all yours: (1) merge to main via https://github.com/Usetantra/denchclaw-crm/pull/new/feat/consolidation; (2) deploy — DEPLOY_RUNBOOK send-safety preconditions first, a tenant with no tenant_channel_limits row sends UNCAPPED; (3) claude login for unattended watchdog autonomy.",
+  "handoff": "operator",
+  "updated_by": "orch",
+  "build_ticket": "CP-AB repeatable suite runs (BUILT 82ccfbb)",
+  "orch_ticket": "verify each as it lands; goal audit at .loop/GOAL_CONFORMANCE_AUDIT.md",
+  "next_ticket": "F38 — the anchored scheduler (a PORT of nurturing-engine dispatcher.py:160-204)",
+  "backup": {
+    "branch": "origin/feat/consolidation",
+    "tip": "663eb1f",
+    "code_and_record_backed_up": true,
+    "main_untouched": "9ff21cb"
+  },
+  "last_integrity_check": "2026-08-01 14:4x — clean: local==origin cc7a150, main untouched 9ff21cb, 16/19 paired, no strays, no MERGE_HEAD",
+  "loop_state": "PAUSED at the operators direction — cron ac182011 (every 17 min) cancelled after two consecutive no-op ticks. Nothing is blocked or half-done: branch feat/consolidation is on origin, 19 verdicts banked, suite 1102/0 green from a FRESH CLONE (npm install + npm test, nothing from a working tree), origin/main untouched at 9ff21cb. To resume: re-arm the same tick prompt, or hand the orchestrator new scope. THREE OPERATOR DECISIONS REMAIN, each unblocking real work: (1) merge to main via https://github.com/Usetantra/denchclaw-crm/pull/new/feat/consolidation; (2) deploy — read .loop/DEPLOY_RUNBOOK.md first, a tenant with no tenant_channel_limits row sends UNCAPPED; (3) claude login for unattended watchdog autonomy."
+}

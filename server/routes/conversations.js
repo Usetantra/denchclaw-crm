@@ -6,9 +6,16 @@ const { v4: uuidv4 } = require('uuid');
 const { query } = require('../db/index');
 const { requireAuth, getUserCompanyId } = require('../middleware/auth');
 const contactDb = require('../db/models/contacts');
-const { getPipelineConfig, getPipelineTransitions } = require('../db/pipeline');
+// CP-M union (D4): both sides added imports here. The branch needs sequenceDb +
+// isManualStage for the inbound-reply auto-advance (the CP1 mode gate and B2's
+// enrollment hook); main needs scoring + Resend for the inbox composer and the
+// inbox-fed lead score. All of it survives.
+const sequenceDb = require('../db/models/sequences');
+const { getPipelineConfig, getPipelineTransitions, isManualStage } = require('../db/pipeline');
 const { recordEngagement } = require('../lib/scoring');
 const resendEmail = require('../lib/email-resend');
+// CP-M D11: A5's suppression list, needed by the composer's deliver path below.
+const limitsDb = require('../db/models/limits');
 
 // Inbound reply → engagement event (per channel), so the Unified AI Inbox feeds
 // the same lead score the activity feed does. Channels with no scoring reply
@@ -161,6 +168,54 @@ router.post('/conversations/:id/messages', async (req, res) => {
     // Real delivery via the channel's provider adapter (currently email → Resend).
     // Only fires for an outbound email when the composer asks to deliver AND a
     // provider is configured; otherwise the message is just recorded (demo mode).
+    // CP-M D11 — the merge itself opened this hole, so the merge closes it.
+    // Main's composer delivers mail directly and consulted `suppressions` not at
+    // all; the branch enforced A5 only in the dispatcher's claim path and at
+    // pipeline entry. Unioned, a human could hit "send" and mail a contact who
+    // has withdrawn consent — a compliance hole, not a style issue, and one no
+    // existing test would catch (A5's tests only exercise branch paths).
+    //
+    // Same function and semantics the dispatcher uses (dispatch.js's claim
+    // scan): it matches a GLOBAL suppression (channel IS NULL) or one for THIS
+    // channel. Gated on the request's intent to deliver rather than on whether a
+    // provider happens to be configured, so the answer can't silently change
+    // with deployment config. A `deliver:false` call still records normally —
+    // only actually sending is refused.
+    //
+    // The check is ADDRESS-keyed, not just conversation-keyed. Suppression lives
+    // on a contact, but the address this route delivers to is caller-supplied
+    // (`metadata.to`, and cc/bcc) and defaults to the conversation's contact only
+    // when omitted. Checking `conv.contact_id` alone left the hole open: post a
+    // message on an UNSUPPRESSED contact's conversation with a SUPPRESSED
+    // contact's address in `metadata.to`, and the mail goes out. So every
+    // address this request would actually deliver to is mapped back to a contact
+    // in this tenant and checked too. An address belonging to no contact cannot
+    // be suppressed (suppressions are contact-keyed), so it passes.
+    if (deliver && direction === 'outbound') {
+      const suspects = new Map([[conv.contact_id, 'conversation contact']]);
+      if (channel === 'email') {
+        const addrs = [metadata.to, metadata.cc, metadata.bcc]
+          .flatMap(v => (Array.isArray(v) ? v : (v ? [v] : [])));
+        for (const raw of addrs) {
+          const m = String(raw || '').match(/<([^>]+)>/);
+          const addr = (m ? m[1] : String(raw || '')).trim().toLowerCase();
+          if (!addr) continue;
+          const target = await contactDb.getByEmail(addr, companyId);
+          if (target && !suspects.has(target.id)) suspects.set(target.id, `recipient ${addr}`);
+        }
+      }
+      for (const [suspectId, why] of suspects) {
+        if (await limitsDb.isSuppressed(companyId, suspectId, channel)) {
+          console.warn(`[Conversations] composer delivery refused — ${why} (${suspectId}) is suppressed on '${channel}'`);
+          return res.status(403).json({
+            error: 'contact is suppressed on this channel — delivery refused',
+            contact_id: suspectId,
+            channel,
+          });
+        }
+      }
+    }
+
     let deliveredId = null;
     if (deliver && direction === 'outbound' && channel === 'email' && resendEmail.isConfigured()) {
       let toAddr = metadata.to;
@@ -256,7 +311,13 @@ router.post('/conversations/:id/messages', async (req, res) => {
           if (pipeline) {
             const currentStage = contact.marketing_stage || 'sourced';
             const allowed = getPipelineTransitions(pipeline, currentStage);
-            if (allowed.includes('responded')) {
+            // CP1 mode gate: this auto-advance is programmatic by definition
+            // (it doesn't go through /advance, so the `automated` body flag
+            // never applies here) — a mode:'manual' target stage must never
+            // be set by it. Legacy marketing configs carry no mode, so this
+            // is a no-op today; it exists so a funnel-typed/overridden config
+            // that marks 'responded' manual is respected.
+            if (allowed.includes('responded') && !isManualStage(pipeline, 'responded')) {
               await query(
                 `UPDATE contacts SET marketing_stage = 'responded', deal_stage = 'responded',
                   updated_at = now() WHERE id = $1 AND company_id = $2`,
@@ -268,6 +329,11 @@ router.post('/conversations/:id/messages', async (req, res) => {
                 channel: channel || null,
                 data: { pipeline_key: 'marketing', from: currentStage, to: 'responded' },
               }, companyId);
+              // GOAL B2: this is a real marketing-pipeline transition outside
+              // crm.js's /advance authority — the roadmap names "the existing
+              // stage authority" broadly, and this inbound-reply auto-advance
+              // is one of its paths too. Called after the UPDATE above persists.
+              await sequenceDb.enrollForTriggerStage(companyId, conv.contact_id, 'marketing', 'responded');
             }
           }
         } catch (_e) { /* non-blocking — message already persisted */ }

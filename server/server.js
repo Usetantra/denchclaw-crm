@@ -36,11 +36,44 @@ const conversationsRouter = require('./routes/conversations');
 const analyticsRouter = require('./routes/analytics');
 const companiesRouter = require('./routes/companies');
 const pipelinesRouter = require('./routes/pipelines');
+const tenantsRouter = require('./routes/tenants');
+const channelJobsRouter = require('./routes/channel-jobs');
+const sequencesRouter = require('./routes/sequences');
+const apiKeysRouter = require('./routes/api-keys');
+const inboxRouter = require('./routes/inbox');
+const templatesRouter = require('./routes/templates');
+const executorsRouter = require('./routes/executors');
+const automationsRouter = require('./routes/automations');
 const webhooksRouter = require('./routes/webhooks');
+const marketingRouter = require('./routes/marketing');
+const marketingPublicRouter = require('./routes/marketing-public');
+
+// CP-M union: this block conflicted because main added the /webhooks mount
+// exactly where the branch added its four /api/crm routers. Selecting either
+// side would have unmounted a whole feature with no test failure — inbound
+// email, or all of A3/B1/B3/B7 at once. Both survive.
 app.use('/webhooks', webhooksRouter); // provider → CRM (no internal key; secret-checked)
+// CP-B public marketing surface — mounted OUTSIDE requireAuth and mounted TWICE
+// on purpose. `/m` is the short, shareable prefix that goes into a prospect's
+// invite link (`/m/i/<token>`), and it is deliberately not under `/api/` so a
+// blanket "everything under /api needs a key" rule at the proxy can stay true.
+// `/webhooks/marketing` is the same router at the path an operator will look for
+// it, alongside the inbound-email webhook and the engines' own convention.
+// DEPLOY NOTE: nginx must proxy BOTH prefixes for the invite links to resolve.
+app.use('/m', marketingPublicRouter);
+app.use('/webhooks/marketing', marketingPublicRouter);
+app.use('/api/crm/marketing', marketingRouter);
 app.use('/api/crm/chat', chatRouter);
 app.use('/api/crm/companies', companiesRouter);
 app.use('/api/crm/pipelines', pipelinesRouter);
+app.use('/api/crm/tenants', tenantsRouter);
+app.use('/api/crm/channel-jobs', channelJobsRouter);
+app.use('/api/crm/sequences', sequencesRouter);
+app.use('/api/crm/api-keys', apiKeysRouter);
+app.use('/api/crm/inbox', inboxRouter);
+app.use('/api/crm/templates', templatesRouter);
+app.use('/api/crm/executors', executorsRouter);
+app.use('/api/crm/automations', automationsRouter);
 app.use('/api/crm', conversationsRouter);
 app.use('/api/crm', analyticsRouter);
 app.use('/api/crm', crmRouter);
