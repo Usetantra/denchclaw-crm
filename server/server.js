@@ -43,6 +43,7 @@ app.use('/api/crm/linkedin', require('./routes/linkedin'));
 app.use('/api/crm/compliance', require('./routes/compliance'));
 app.use('/api/crm/channels', require('./routes/channels'));
 app.use('/api/crm/templates', require('./routes/templates'));
+app.use('/api/crm/sequences', require('./routes/sequences'));
 app.use('/api/crm/companies', companiesRouter);
 app.use('/api/crm/pipelines', pipelinesRouter);
 app.use('/api/crm', conversationsRouter);
@@ -69,6 +70,11 @@ async function start() {
   // and makes shared-Postgres pressure worse.
   app.listen(PORT, () => console.log(`[DenchClaw CRM] listening on :${PORT}`));
   await initDatabase();
+  // Goal B3: the always-on sequence dispatcher ticks scheduled steps → sends.
+  // Starts after the DB is ready; self-disables without an INTERNAL_API_KEY or
+  // when SEQUENCE_DISPATCHER=off. A tick failure never crashes the process.
+  try { require('./lib/sequence-dispatcher').start(); }
+  catch (e) { console.error('[DenchClaw CRM] dispatcher failed to start (non-fatal):', e.message); }
 }
 
 start().catch(err => {

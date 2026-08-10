@@ -327,6 +327,7 @@
   <button data-tab="inbox">Inbox</button>
   <button data-tab="analytics">Analytics</button>
   <button data-tab="templates">Templates</button>
+  <button data-tab="sequences">Sequences</button>
   <button data-tab="settings">Settings</button>
 </div></div>
 
@@ -503,6 +504,17 @@
   </div>
   <div id="templates-list"><div class="muted">loading…</div></div>
   </div><!-- /view-templates -->
+
+  <!-- ── SEQUENCES ───────────────────────────────────────────────────────── -->
+  <div id="view-sequences" style="display:none">
+  <div class="sechead"><span class="eyebrow">Sequences</span><span class="rule"></span></div>
+  <div class="toolbar" style="margin-bottom:14px">
+    <span class="muted" style="font-size:12px">Multi-channel drips. A contact entering the trigger stage is auto-enrolled; the dispatcher sends each step through the compliance gate.</span>
+    <span class="spacer" style="flex:1"></span>
+    <button class="btn primary" id="new-sequence">+ New sequence</button>
+  </div>
+  <div id="sequences-list"><div class="muted">loading…</div></div>
+  </div><!-- /view-sequences -->
 </main>
 
 <div class="modal-overlay" id="modal"><div class="modal">
@@ -1303,7 +1315,7 @@ async function load(){
 // ── Tab switching ─────────────────────────────────────────────────────────────
 function setTab(tab){
   document.querySelectorAll(".tabbar button").forEach(b=>b.classList.toggle("active",b.dataset.tab===tab));
-  ["dashboard","board","contacts","companies","pipelines","inbox","analytics","templates","settings"].forEach(v=>{
+  ["dashboard","board","contacts","companies","pipelines","inbox","analytics","templates","sequences","settings"].forEach(v=>{
     const el=$(`#view-${v}`);if(el)el.style.display=v===tab?"":"none";
   });
   // Every tab refetches on entry so numbers are always live (get() is no-store).
@@ -1317,6 +1329,7 @@ function setTab(tab){
   if(tab==="pipelines")loadPipelinesTab();
   if(tab==="settings")loadSettings();
   if(tab==="templates")loadTemplates();
+  if(tab==="sequences")loadSequences();
 }
 $(".tabbar").addEventListener("click",e=>{const b=e.target.closest("button[data-tab]");if(!b)return;setTab(b.dataset.tab);});
 
@@ -1501,6 +1514,161 @@ async function templateVersions(t){
         <div class="muted" style="font-size:12px;white-space:pre-wrap">${esc((s&&s.body)||"")}</div></div>`;}).join("")
     :`<div class="muted">No prior versions — this is v${t.version}.</div>`,
     `<button class="btn" onclick="closeModal()">Close</button>`);
+}
+
+// ── Sequences (multi-channel drips) ───────────────────────────────────────────
+const SEQ_STATUS_COLOR={draft:"#475467",active:"#067647",paused:"#b54708",archived:"#98a2b3"};
+const SEQ_CHANNELS=["email","whatsapp","sms","linkedin","wait"];
+let _seqList=[],_seqSteps=[];
+async function loadSequences(){
+  const box=document.getElementById("sequences-list");
+  try{_seqList=(await get("sequences?includeArchived=true")).sequences||[];}
+  catch(e){box.innerHTML=`<div class="empty">${esc(e.message)}</div>`;return;}
+  if(!_seqList.length){box.innerHTML=`<div class="empty">No sequences yet. Create one to auto-nurture contacts as they hit a pipeline stage.</div>`;return;}
+  box.innerHTML=`<table><thead><tr><th>Name</th><th>Status</th><th>Trigger</th><th>Steps</th><th></th></tr></thead><tbody>${
+    _seqList.map(s=>{
+      const trig=s.trigger_stage?`${esc(s.trigger_pipeline_key||"any")} · <b>${esc(s.trigger_stage)}</b>`:'<span class="muted">manual</span>';
+      return `<tr data-sid="${s.id}" style="cursor:pointer">
+        <td><b>${esc(s.name)}</b>${s.description?`<div class="muted" style="font-size:11px">${esc(s.description)}</div>`:""}</td>
+        <td><span class="status-pill" style="background:${SEQ_STATUS_COLOR[s.status]||"#475467"}22;color:${SEQ_STATUS_COLOR[s.status]||"#475467"}">${esc(s.status)}</span></td>
+        <td style="font-size:12px">${trig}</td>
+        <td>${(s.steps||[]).length}</td>
+        <td style="text-align:right">${seqActions(s)}</td>
+      </tr>`;}).join("")
+  }</tbody></table>`;
+  box.querySelectorAll("tr[data-sid]").forEach(tr=>tr.addEventListener("click",e=>{
+    if(e.target.closest("button"))return;sequenceModal(_seqList.find(x=>String(x.id)===tr.dataset.sid));}));
+  box.querySelectorAll("button[data-sact]").forEach(b=>b.addEventListener("click",async e=>{
+    e.stopPropagation();const id=b.dataset.sid,act=b.dataset.sact;
+    try{
+      if(act==="enrollments")return sequenceEnrollments(_seqList.find(x=>String(x.id)===id));
+      if(act==="activate"){await post(`sequences/${id}/status`,{status:"active"});toast("Activated");}
+      if(act==="pause"){await post(`sequences/${id}/status`,{status:"paused"});toast("Paused");}
+      if(act==="archive"){if(!confirm("Archive this sequence? Active enrollments keep running until they exit."))return;await post(`sequences/${id}/status`,{status:"archived"});toast("Archived");}
+      loadSequences();
+    }catch(err){toast(err.message,true);}
+  }));
+}
+function seqActions(s){
+  const b=(act,label)=>`<button class="act-btn" data-sact="${act}" data-sid="${s.id}">${label}</button>`;
+  const a=[b("enrollments","Enrollments")];
+  if(s.status!=="active")a.push(b("activate","Activate"));
+  if(s.status==="active")a.push(b("pause","Pause"));
+  if(s.status!=="archived")a.push(b("archive","Archive"));
+  return a.join(" ");
+}
+document.getElementById("new-sequence").addEventListener("click",()=>sequenceModal(null));
+
+function stepRowHtml(st,i){
+  const tpls=(waApprovedTemplates||[]);
+  const tplOpts=`<option value="">— none —</option>`+tpls.map(t=>`<option value="${t.id}" ${st.template_id===t.id?"selected":""}>${esc(t.name)}</option>`).join("");
+  return `<div class="seq-step" data-i="${i}" style="border:1px solid var(--hair);border-radius:8px;padding:10px;margin-bottom:8px">
+    <div class="cvrow" style="align-items:flex-end">
+      <div class="cvf" style="max-width:120px"><label>Step ${i+1} · channel</label>
+        <select class="ss-channel">${SEQ_CHANNELS.map(c=>`<option value="${c}" ${st.channel===c?"selected":""}>${c}</option>`).join("")}</select></div>
+      <div class="cvf" style="max-width:130px"><label>Wait before (min)</label><input class="ss-delay" type="number" min="0" value="${st.delay_minutes||0}"></div>
+      <div class="cvf" style="max-width:130px"><label>Category</label>
+        <select class="ss-category"><option value="">—</option>${["marketing","utility","authentication","transactional"].map(c=>`<option value="${c}" ${st.category===c?"selected":""}>${c}</option>`).join("")}</select></div>
+      <button type="button" class="act-btn ss-del" title="remove step">✕</button>
+    </div>
+    <div class="ss-fields"></div>
+  </div>`;
+}
+function renderStepFields(row){
+  const ch=row.querySelector(".ss-channel").value;
+  const i=+row.dataset.i, st=_seqSteps[i]||{};
+  const f=row.querySelector(".ss-fields");
+  if(ch==="wait"){f.innerHTML=`<div class="muted" style="font-size:12px">Pure delay — no message sent.</div>`;return;}
+  let html="";
+  if(ch==="email")html+=`<div class="cvf"><label>Subject</label><input class="ss-subject" value="${esc(st.subject||"")}"></div>`;
+  if(ch==="whatsapp"){
+    const tpls=(waApprovedTemplates||[]);
+    html+=`<div class="cvf"><label>Approved template (for out-of-window)</label><select class="ss-template"><option value="">— none (free-form, in-window only) —</option>${tpls.map(t=>`<option value="${t.id}" ${st.template_id===t.id?"selected":""}>${esc(t.name)}</option>`).join("")}</select></div>`;
+  }
+  html+=`<div class="cvf"><label>Message body</label><textarea class="ss-body" placeholder="Message… use {{1}} for variables">${esc(st.body||"")}</textarea></div>`;
+  f.innerHTML=html;
+}
+function collectSteps(){
+  const rows=[...document.querySelectorAll("#seq-steps .seq-step")];
+  return rows.map(r=>{
+    const ch=r.querySelector(".ss-channel").value;
+    const st={channel:ch,delay_minutes:parseInt(r.querySelector(".ss-delay").value,10)||0,category:r.querySelector(".ss-category").value||null};
+    const subj=r.querySelector(".ss-subject");if(subj)st.subject=subj.value;
+    const tpl=r.querySelector(".ss-template");if(tpl&&tpl.value)st.template_id=tpl.value;
+    const body=r.querySelector(".ss-body");if(body)st.body=body.value;
+    return st;
+  });
+}
+function bindStepRow(row){
+  row.querySelector(".ss-channel").onchange=()=>{_seqSteps=collectSteps();renderStepFields(row);};
+  row.querySelector(".ss-del").onclick=()=>{_seqSteps=collectSteps();_seqSteps.splice(+row.dataset.i,1);renderSteps();};
+  renderStepFields(row);
+}
+function renderSteps(){
+  const box=document.getElementById("seq-steps");if(!box)return;
+  box.innerHTML=_seqSteps.map((st,i)=>stepRowHtml(st,i)).join("")||`<div class="muted" style="font-size:12px">No steps yet — add one.</div>`;
+  box.querySelectorAll(".seq-step").forEach(bindStepRow);
+}
+async function sequenceModal(s){
+  await ensureWaTemplates(); // for the whatsapp template pickers
+  const isNew=!s;s=s||{};
+  _seqSteps=(s.steps||[]).map(st=>({channel:st.channel,delay_minutes:st.delay_minutes,category:st.category,subject:st.subject,template_id:st.template_id,body:st.body}));
+  const q=s.quiet_hours||{},ex=s.exit_conditions||{};
+  openModal(isNew?"New sequence":`Sequence · ${esc(s.name||"")}`,
+    `<div class="cvrow">${field("Name","name",{value:s.name||"",placeholder:"Welcome drip"})}${field("Status","status",{type:"select",value:s.status||"draft",options:["draft","active","paused","archived"]})}</div>
+     ${field("Description","description",{value:s.description||"",placeholder:"optional"})}
+     <div class="cvrow">
+       ${field("Trigger pipeline","trigger_pipeline_key",{type:"select",value:s.trigger_pipeline_key||"",options:[{value:"",label:"— manual / any —"},{value:"marketing",label:"marketing"},{value:"sales",label:"sales"}]})}
+       ${field("Trigger stage","trigger_stage",{value:s.trigger_stage||"",placeholder:"e.g. segmented (blank = manual)"})}
+     </div>
+     <div class="cvrow">
+       ${field("Quiet hours tz","q_tz",{value:q.tz||"",placeholder:"e.g. America/New_York"})}
+       ${field("Quiet start","q_start",{value:q.start||"",placeholder:"20:00"})}
+       ${field("Quiet end","q_end",{value:q.end||"",placeholder:"08:00"})}
+     </div>
+     <div class="cvf"><label>Exit when</label><div style="display:flex;gap:16px;font-size:13px">
+       <label style="display:flex;gap:6px;align-items:center"><input type="checkbox" id="ex_reply" ${ex.on_reply?"checked":""}> contact replies</label>
+       <label style="display:flex;gap:6px;align-items:center"><input type="checkbox" id="ex_stage" ${ex.on_stage_change?"checked":""}> stage changes</label>
+       <label style="display:flex;gap:6px;align-items:center"><input type="checkbox" id="allow_reenroll" ${s.allow_reenroll?"checked":""}> allow re-enroll</label>
+     </div></div>
+     <div class="sechead" style="margin:14px 0 8px"><span class="eyebrow">Steps</span><span class="rule"></span><button type="button" class="btn sm" id="seq-add-step">+ Step</button></div>
+     <div id="seq-steps"></div>
+     <div id="seq-errs" class="cv-li-status" style="color:#b42318;margin-top:6px"></div>`,
+    `<button class="btn" onclick="closeModal()">Close</button>${isNew?"":`<button class="btn sm danger" id="seq-delete">Delete</button>`}<button class="btn primary" id="seq-save">${isNew?"Create":"Save"}</button>`);
+  renderSteps();
+  document.getElementById("seq-add-step").onclick=()=>{_seqSteps=collectSteps();_seqSteps.push({channel:"email",delay_minutes:0});renderSteps();};
+  const delBtn=document.getElementById("seq-delete");
+  if(delBtn)delBtn.onclick=async()=>{if(!confirm("Delete this sequence and its enrollments?"))return;try{await del("sequences/"+s.id);closeModal();toast("Deleted");loadSequences();}catch(e){toast(e.message,true);}};
+  document.getElementById("seq-save").onclick=async()=>{
+    const v=formValues();
+    const payload={
+      name:v.name,description:v.description||null,status:v.status||"draft",
+      trigger_pipeline_key:v.trigger_pipeline_key||null,trigger_stage:v.trigger_stage||null,
+      quiet_hours:(v.q_start&&v.q_end)?{tz:v.q_tz||"UTC",start:v.q_start,end:v.q_end}:{},
+      exit_conditions:{on_reply:$("#ex_reply").checked,on_stage_change:$("#ex_stage").checked},
+      allow_reenroll:$("#allow_reenroll").checked,
+      steps:collectSteps(),
+    };
+    try{
+      if(isNew)await post("sequences",payload);else await patch("sequences/"+s.id,payload);
+      closeModal();toast("Saved");loadSequences();
+    }catch(e){
+      if(e.errors&&e.errors.length)$("#seq-errs").innerHTML=e.errors.map(esc).join("<br>");else toast(e.message,true);
+    }};
+}
+async function sequenceEnrollments(s){
+  let list=[];try{list=(await get(`sequences/${s.id}/enrollments`)).enrollments||[];}catch(e){return toast(e.message,true);}
+  openModal(`Enrollments · ${esc(s.name)}`,
+    list.length?`<table><thead><tr><th>Contact</th><th>Status</th><th>Step</th><th>Next action</th><th></th></tr></thead><tbody>${
+      list.map(e=>`<tr><td class="muted" style="font-size:12px">${esc(e.contact_id.slice(0,8))}…</td>
+        <td><span class="status-pill" style="background:#eef;color:#334">${esc(e.status)}</span></td>
+        <td>${e.current_step}</td>
+        <td class="muted" style="font-size:12px">${e.next_action_at?fmtDate(e.next_action_at):"—"}</td>
+        <td style="text-align:right">${e.status==="active"?`<button class="act-btn" data-exit="${e.id}">Exit</button>`:""}</td></tr>`).join("")
+    }</tbody></table>`:`<div class="muted">No enrollments yet.</div>`,
+    `<button class="btn" onclick="closeModal()">Close</button>`);
+  document.querySelectorAll("[data-exit]").forEach(b=>b.onclick=async()=>{
+    try{await post(`sequences/enrollments/${b.dataset.exit}/exit`,{reason:"manual"});toast("Exited");sequenceEnrollments(s);}catch(e){toast(e.message,true);}});
 }
 
 // ── Boot ──────────────────────────────────────────────────────────────────────

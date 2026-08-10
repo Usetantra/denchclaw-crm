@@ -15,6 +15,7 @@ const channelsModel = require('../db/models/channels');
 const templatesModel = require('../db/models/templates');
 const gate = require('../lib/compliance-gate');
 const segments = require('../lib/segments');
+const sequenceTriggers = require('../lib/sequence-triggers');
 
 // Inbound reply → engagement event (per channel), so the Unified AI Inbox feeds
 // the same lead score the activity feed does. Channels with no scoring reply
@@ -359,6 +360,10 @@ router.post('/conversations/:id/messages', async (req, res) => {
           });
         } catch (_e) { /* non-blocking — message already persisted */ }
 
+        // A reply exits any sequence configured to stop on reply (B2 exit hook).
+        try { await sequenceTriggers.onReply(companyId, conv.contact_id); }
+        catch (e) { console.error('[Sequences] onReply failed:', e.message); }
+
         // Stage advance: responded is only reachable from engaged per the marketing pipeline.
         try {
           const pipeline = await getPipelineConfig(companyId, 'marketing');
@@ -377,6 +382,9 @@ router.post('/conversations/:id/messages', async (req, res) => {
                 channel: channel || null,
                 data: { pipeline_key: 'marketing', from: currentStage, to: 'responded' },
               }, companyId);
+              // Entering 'responded' may (un)enroll sequences too.
+              try { await sequenceTriggers.onStageEnter(companyId, conv.contact_id, 'marketing', 'responded'); }
+              catch (e) { console.error('[Sequences] onStageEnter(responded) failed:', e.message); }
             }
           }
         } catch (_e) { /* non-blocking — message already persisted */ }

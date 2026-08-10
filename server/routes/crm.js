@@ -27,6 +27,7 @@ const CHANNEL_SENDERS = (() => {
   catch (e) { console.warn('[CRM] CHANNEL_SENDERS is not valid JSON — ignoring'); return {}; }
 })();
 const channelsModel = require('../db/models/channels');
+const sequenceTriggers = require('../lib/sequence-triggers');
 router.get('/channel-senders', async (req, res) => {
   const merged = { ...CHANNEL_SENDERS };
   try {
@@ -684,7 +685,13 @@ router.post('/contacts/:id/advance', async (req, res) => {
         data: { pipeline_key, from: currentStage, to: stage, reason: reason || null },
       });
 
-      return res.json({ contact_id: contact.id, pipeline_key, stage, previous: currentStage, changed: true });
+      // B2: entering a stage may enroll into / exit from sequences. Never let a
+      // trigger failure break the transition itself.
+      let sequences;
+      try { sequences = await sequenceTriggers.onStageEnter(companyId, contact.id, pipeline_key, stage); }
+      catch (e) { console.error('[Sequences] stage trigger (marketing) failed:', e.message); }
+
+      return res.json({ contact_id: contact.id, pipeline_key, stage, previous: currentStage, changed: true, ...(sequences ? { sequences } : {}) });
     }
 
     if (pipeline_key === 'sales') {
@@ -733,9 +740,15 @@ router.post('/contacts/:id/advance', async (req, res) => {
         marketing_recycled = await recycleContactToMarketingNurture(contact.id, companyId, { dealId: deal.id, actor: actor || 'system' });
       }
 
+      // B2: sequence enrollment / exit on entering this sales stage.
+      let sequences;
+      try { sequences = await sequenceTriggers.onStageEnter(companyId, contact.id, pipeline_key, stage); }
+      catch (e) { console.error('[Sequences] stage trigger (sales) failed:', e.message); }
+
       return res.json({
         contact_id: contact.id, deal_id: deal.id, pipeline_key, stage, previous: currentStage, changed: true,
         ...(marketing_recycled !== undefined ? { marketing_recycled } : {}),
+        ...(sequences ? { sequences } : {}),
       });
     }
 
