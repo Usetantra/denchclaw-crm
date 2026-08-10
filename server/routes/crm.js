@@ -19,16 +19,31 @@ router.use(requireAuth);
 // (JSON env); a default is provided so the inbox composer's From selector is
 // populated and functional locally. The composer only ever shows these — a user
 // never free-types a From.
+// Env-configured senders (email/LinkedIn are connected via their own flows). No
+// fake defaults for whatsapp/sms — those come from the DB once connected in
+// Settings → Channels, so an unconnected channel honestly shows "not connected".
 const CHANNEL_SENDERS = (() => {
-  try { return process.env.CHANNEL_SENDERS ? JSON.parse(process.env.CHANNEL_SENDERS) : null; }
-  catch (e) { console.warn('[CRM] CHANNEL_SENDERS is not valid JSON — using defaults'); return null; }
-})() || {
-  email:    [{ identity: 'hello@usetantra.com', label: 'Tantra · hello@usetantra.com',        default: true }],
-  whatsapp: [{ identity: '+14155550142',        label: 'Tantra WhatsApp · +1 415 555 0142',   default: true }],
-  sms:      [{ identity: '+14155550142',        label: 'Tantra SMS · +1 415 555 0142',        default: true }],
-  linkedin: [{ identity: 'tantra-growth',       label: 'Tantra Growth (LinkedIn)',            default: true }],
-};
-router.get('/channel-senders', (req, res) => res.json({ senders: CHANNEL_SENDERS }));
+  try { return process.env.CHANNEL_SENDERS ? JSON.parse(process.env.CHANNEL_SENDERS) : {}; }
+  catch (e) { console.warn('[CRM] CHANNEL_SENDERS is not valid JSON — ignoring'); return {}; }
+})();
+const channelsModel = require('../db/models/channels');
+router.get('/channel-senders', async (req, res) => {
+  const merged = { ...CHANNEL_SENDERS };
+  try {
+    const companyId = getUserCompanyId(req);
+    const rows = await channelsModel.listSenders(companyId);
+    const byChannel = {};
+    for (const s of rows) {
+      (byChannel[s.channel] = byChannel[s.channel] || []).push({
+        identity: s.identifier, label: s.label || s.identifier, default: s.is_default,
+        registration_status: s.registration_status, country: s.country,
+      });
+    }
+    // DB senders are the source of truth for a channel when present.
+    for (const [ch, list] of Object.entries(byChannel)) merged[ch] = list;
+  } catch (e) { console.warn('[CRM] channel-senders DB merge failed:', e.message); }
+  res.json({ senders: merged });
+});
 
 // No-op validator — engines send well-formed data; validation at API boundary
 const validate = () => (req, res, next) => next();

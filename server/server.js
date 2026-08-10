@@ -40,6 +40,9 @@ const webhooksRouter = require('./routes/webhooks');
 app.use('/webhooks', webhooksRouter); // provider → CRM (no internal key; secret-checked)
 app.use('/api/crm/chat', chatRouter);
 app.use('/api/crm/linkedin', require('./routes/linkedin'));
+app.use('/api/crm/compliance', require('./routes/compliance'));
+app.use('/api/crm/channels', require('./routes/channels'));
+app.use('/api/crm/templates', require('./routes/templates'));
 app.use('/api/crm/companies', companiesRouter);
 app.use('/api/crm/pipelines', pipelinesRouter);
 app.use('/api/crm', conversationsRouter);

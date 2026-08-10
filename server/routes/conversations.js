@@ -10,6 +10,11 @@ const { getPipelineConfig, getPipelineTransitions } = require('../db/pipeline');
 const { recordEngagement } = require('../lib/scoring');
 const resendEmail = require('../lib/email-resend');
 const linkedinUnipile = require('../lib/linkedin-unipile');
+const twilio = require('../lib/twilio');
+const channelsModel = require('../db/models/channels');
+const templatesModel = require('../db/models/templates');
+const gate = require('../lib/compliance-gate');
+const segments = require('../lib/segments');
 
 // Inbound reply → engagement event (per channel), so the Unified AI Inbox feeds
 // the same lead score the activity feed does. Channels with no scoring reply
@@ -218,6 +223,70 @@ router.post('/conversations/:id/messages', async (req, res) => {
       } catch (e) {
         console.error('[Conversations] linkedin delivery failed:', e.message);
         return res.status(502).json({ error: `LinkedIn delivery failed — ${e.message}` });
+      }
+    }
+    // WhatsApp / SMS delivery via Twilio — every send passes the compliance gate
+    // first (suppression → consent → WhatsApp 24h window / India DLT template).
+    if (deliver && direction === 'outbound' && (channel === 'whatsapp' || channel === 'sms')) {
+      const conn = await channelsModel.getConnection(companyId, 'twilio');
+      if (!conn || conn.status !== 'connected' || !conn.credentials) {
+        return res.status(409).json({ error: 'Twilio is not connected — connect it in Settings' });
+      }
+      const ct = await contactDb.getById(conv.contact_id, companyId);
+      const phone = ct && ct.phone ? String(ct.phone).replace(/^whatsapp:/i, '') : '';
+      if (!phone) return res.status(422).json({ error: 'contact has no phone number' });
+      const from = metadata.from;
+      if (!from) return res.status(400).json({ error: 'no sender selected for this channel' });
+      const to = channel === 'whatsapp' ? `whatsapp:${phone}` : phone;
+
+      const windowOpen = channel === 'whatsapp'
+        ? !!(ct.cs_window_expires_at && new Date(ct.cs_window_expires_at) > new Date())
+        : true;
+
+      // Resolve the template server-side from its id — never trust a client-sent
+      // status. Only an APPROVED template with a provider content id can be sent.
+      let tplRecord = null;
+      if (metadata.template_id) {
+        tplRecord = await templatesModel.get(companyId, metadata.template_id);
+        if (!tplRecord) return res.status(422).json({ error: 'selected template not found' });
+      }
+
+      const g = await gate.check({
+        companyId, channel, contact: ct, identifier: phone,
+        category: metadata.category || 'conversational', windowOpen,
+        template: tplRecord ? { status: tplRecord.status, provider_template_id: tplRecord.provider_template_id } : undefined,
+        destinationCountry: ct.destination_country,
+      });
+      if (!g.allowed) {
+        const httpCode = ['window_closed', 'template_not_approved', 'dlt_template_required'].includes(g.code) ? 409 : 403;
+        return res.status(httpCode).json({ error: g.reason, code: g.code, meta: g.meta });
+      }
+
+      try {
+        const sendArgs = {
+          creds: conn.credentials, from, to,
+          statusCallback: process.env.TWILIO_STATUS_CALLBACK || undefined,
+        };
+        // Template send → ContentSid + ContentVariables (Twilio uses the approved
+        // content, not free-text Body). Otherwise send the free-form body.
+        if (tplRecord && tplRecord.provider_template_id) {
+          sendArgs.contentSid = tplRecord.provider_template_id;
+          if (metadata.template_variables && Object.keys(metadata.template_variables).length) {
+            sendArgs.contentVariables = metadata.template_variables;
+          }
+          metadata.template_name = tplRecord.name;
+          metadata.billing_category = (tplRecord.current_category || tplRecord.category || '').toLowerCase() || undefined;
+        } else {
+          sendArgs.body = body;
+        }
+        const sent = await twilio.sendMessage(sendArgs);
+        deliveredId = sent.sid;
+        if (channel === 'sms') { const seg = segments.analyze(body || ''); metadata.encoding = seg.encoding; metadata.segments = seg.segments; }
+        if (!metadata.billing_category) metadata.billing_category = metadata.category || (channel === 'whatsapp' ? 'service' : undefined);
+        if (channel === 'whatsapp') metadata.window_state = windowOpen ? 'in_window' : 'out_of_window';
+      } catch (e) {
+        console.error('[Conversations]', channel, 'delivery failed:', e.message);
+        return res.status(502).json({ error: `${channel} delivery failed — ${e.message}` });
       }
     }
     const effectiveProviderId = deliveredId || provider_message_id;

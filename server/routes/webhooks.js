@@ -10,6 +10,8 @@ const express = require('express');
 const crypto = require('crypto');
 const router = express.Router();
 const contactDb = require('../db/models/contacts');
+const suppression = require('../db/models/suppression');
+const channelsModel = require('../db/models/channels');
 const { query } = require('../db/index');
 
 // Public identifier from a LinkedIn profile URL (linkedin.com/in/<ident>).
@@ -241,6 +243,116 @@ router.post('/linkedin/inbound', async (req, res) => {
   } catch (err) {
     console.error('[Webhooks] inbound linkedin error:', err.message);
     return res.status(500).json({ error: 'inbound processing failed' });
+  }
+});
+
+// ── Twilio (WhatsApp + SMS) ───────────────────────────────────────────────────
+// Twilio POSTs form-encoded events. Real Twilio traffic is authenticated by the
+// X-Twilio-Signature (validated against the tenant's auth token + the public URL
+// set in TWILIO_WEBHOOK_BASE_URL). Local simulation is authenticated by our shared
+// INBOUND_WEBHOOK_SECRET header instead. One of the two must pass — fail closed.
+const STOP_RE = /^(STOP|UNSUBSCRIBE|END|QUIT|CANCEL|STOPALL|REVOKE|OPTOUT)$/i;
+const START_RE = /^(START|UNSTOP|YES)$/i;
+
+function twilioSignatureValid(req, authToken) {
+  const baseUrl = process.env.TWILIO_WEBHOOK_BASE_URL;
+  if (!baseUrl || !authToken) return false;
+  const url = baseUrl.replace(/\/$/, '') + req.originalUrl;
+  const params = req.body || {};
+  const data = url + Object.keys(params).sort().map(k => k + params[k]).join('');
+  const expected = crypto.createHmac('sha1', authToken).update(Buffer.from(data, 'utf-8')).digest('base64');
+  const got = req.get('X-Twilio-Signature') || '';
+  try { return got.length === expected.length && crypto.timingSafeEqual(Buffer.from(got), Buffer.from(expected)); }
+  catch (_e) { return false; }
+}
+
+// Resolve the owning company from the business number (the Twilio To).
+async function companyForBusinessNumber(channel, to) {
+  const bare = String(to || '').replace(/^whatsapp:/i, '');
+  const r = await query(
+    `SELECT company_id FROM channel_senders WHERE channel=$1 AND (identifier=$2 OR identifier=$3) LIMIT 1`,
+    [channel, to, bare]
+  );
+  return r.rows[0] ? r.rows[0].company_id : DEFAULT_COMPANY;
+}
+
+// POST /webhooks/twilio/inbound — inbound WhatsApp/SMS + STOP/START/HELP.
+router.post('/twilio/inbound', async (req, res) => {
+  const twiml = (x) => res.type('text/xml').send(x || '<Response></Response>');
+  try {
+    const b = req.body || {};
+    const to = b.To || '';
+    const from = b.From || '';
+    const channel = /^whatsapp:/i.test(to) ? 'whatsapp' : 'sms';
+    const fromNum = String(from).replace(/^whatsapp:/i, '');
+    const company = await companyForBusinessNumber(channel, to);
+
+    // Auth: our sim secret OR a valid Twilio signature. Fail closed otherwise.
+    const simOk = SECRET && req.get('x-webhook-secret') === SECRET;
+    if (!simOk) {
+      const conn = await channelsModel.getConnection(company, 'twilio');
+      const token = conn && conn.credentials && conn.credentials.auth_token;
+      if (!twilioSignatureValid(req, token)) {
+        console.warn('[Webhooks] twilio inbound rejected — bad signature / no secret');
+        return res.status(403).type('text/xml').send('<Response></Response>');
+      }
+    }
+
+    // Opt-out / opt-in keywords (Twilio Advanced Opt-Out sets OptOutType).
+    const kw = String(b.Body || '').trim();
+    if (b.OptOutType === 'STOP' || STOP_RE.test(kw)) { await suppression.add(company, channel, fromNum, { reason: 'opt_out' }); return twiml(); }
+    if (b.OptOutType === 'START' || START_RE.test(kw)) { await suppression.resubscribe(company, channel, fromNum); return twiml(); }
+    if (b.OptOutType === 'HELP') return twiml(); // Twilio auto-replies HELP when configured
+
+    // Resolve/create the contact by phone, then record the inbound message.
+    let contact = null;
+    const found = await query(
+      `SELECT * FROM contacts WHERE company_id=$1 AND regexp_replace(coalesce(phone,''),'[^0-9]','','g') = regexp_replace($2,'[^0-9]','','g') AND deleted_at IS NULL LIMIT 1`,
+      [company, fromNum]
+    );
+    contact = found.rows[0] || null;
+    if (!contact) {
+      const created = await api('POST', '/api/crm/contacts', { name: b.ProfileName || fromNum, phone: fromNum, source: channel }, company);
+      contact = created.json;
+    }
+    if (!contact || !contact.id) return twiml();
+
+    // Inbound opens/refreshes the WhatsApp 24h customer-service window.
+    if (channel === 'whatsapp') {
+      await query(`UPDATE contacts SET cs_window_expires_at = now() + interval '24 hours', updated_at=now() WHERE id=$1 AND company_id=$2`,
+        [contact.id, company]);
+    }
+    // An inbound reply clears any prior suppression only via explicit START — not here.
+
+    const conv = await api('POST', '/api/crm/conversations', { contact_id: contact.id, channel }, company);
+    if (conv.json && conv.json.id) {
+      await api('POST', `/api/crm/conversations/${conv.json.id}/messages`, {
+        direction: 'inbound', channel, body: b.Body || '(no content)',
+        provider_message_id: b.MessageSid || undefined, metadata: { from: fromNum, to },
+      }, company);
+    }
+    return twiml();
+  } catch (err) {
+    console.error('[Webhooks] twilio inbound error:', err.message);
+    return res.status(500).type('text/xml').send('<Response></Response>');
+  }
+});
+
+// POST /webhooks/twilio/status — delivery status callbacks.
+router.post('/twilio/status', async (req, res) => {
+  try {
+    const b = req.body || {};
+    if (b.MessageSid) {
+      const cls = b.ErrorCode ? 'error' : (b.MessageStatus === 'delivered' || b.MessageStatus === 'read' ? 'ok' : null);
+      await query(
+        `UPDATE messages SET provider_status=$1, error_code=$2, error_class=COALESCE($3, error_class) WHERE provider_message_id=$4`,
+        [b.MessageStatus || null, b.ErrorCode || null, cls, b.MessageSid]
+      );
+    }
+    res.type('text/xml').send('<Response></Response>');
+  } catch (err) {
+    console.error('[Webhooks] twilio status error:', err.message);
+    res.status(200).type('text/xml').send('<Response></Response>');
   }
 });
 
