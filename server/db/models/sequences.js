@@ -122,6 +122,11 @@ async function getEnrollment(companyId, id) {
   return r.rows[0] || null;
 }
 
+async function getAction(companyId, id) {
+  const r = await query(`SELECT * FROM sequence_scheduled_actions WHERE company_id = $1 AND id = $2 LIMIT 1`, [companyId, id]);
+  return r.rows[0] || null;
+}
+
 // Enroll a contact and schedule step 1. Returns { enrollment, created }. Respects
 // the active-uniqueness index and the sequence's allow_reenroll policy. Only
 // enrolls into an ACTIVE sequence that has at least one step.
@@ -215,24 +220,32 @@ async function scheduleNextStep(companyId, enrollment, seq) {
   return r.rows[0] || null;
 }
 
-// Dispatcher: atomically claim up to `limit` due, pending actions (FOR UPDATE SKIP
-// LOCKED so concurrent ticks never grab the same row). Marks them 'claimed'-in-
-// flight by stamping claimed_at; returns the claimed rows for sending.
-async function claimDueActions(limit = 20) {
+// Atomically claim up to `limit` due, pending actions (FOR UPDATE SKIP LOCKED so
+// concurrent claimers never grab the same row). Marks them in-flight (claimed_at).
+// Options scope the claim by channel: includeChannels (only these — the executor
+// job API) or excludeChannels (everything but these — the built-in dispatcher
+// skipping externally-executed channels). Returns the claimed rows.
+async function claimDueActions(opts = {}) {
+  const { limit = 20, includeChannels = null, excludeChannels = null, company = null } = typeof opts === 'number' ? { limit: opts } : opts;
   const client = await getClient();
   try {
     await client.query('BEGIN');
+    const params = []; let where = `status = 'pending' AND run_at <= now()`;
+    if (company) { params.push(company); where += ` AND company_id = $${params.length}`; }
+    if (includeChannels && includeChannels.length) { params.push(includeChannels); where += ` AND channel = ANY($${params.length})`; }
+    if (excludeChannels && excludeChannels.length) { params.push(excludeChannels); where += ` AND channel <> ALL($${params.length})`; }
+    params.push(limit);
     const due = await client.query(
       `SELECT id FROM sequence_scheduled_actions
-        WHERE status = 'pending' AND run_at <= now()
+        WHERE ${where}
         ORDER BY run_at ASC
-        LIMIT $1 FOR UPDATE SKIP LOCKED`,
-      [limit]
+        LIMIT $${params.length} FOR UPDATE SKIP LOCKED`,
+      params
     );
     const ids = due.rows.map(r => r.id);
     if (!ids.length) { await client.query('COMMIT'); return []; }
     const claimed = await client.query(
-      `UPDATE sequence_scheduled_actions SET claimed_at = now(), updated_at = now()
+      `UPDATE sequence_scheduled_actions SET status = 'claimed', claimed_at = now(), updated_at = now()
         WHERE id = ANY($1) RETURNING *`,
       [ids]
     );
@@ -279,6 +292,17 @@ async function retryAction(companyId, actionId, minutes, error) {
   return true;
 }
 
+// Recover jobs claimed by a worker/executor that died before reporting a result:
+// after `minutes`, a still-claimed action returns to pending for re-claim.
+async function sweepStaleClaims(minutes = 15) {
+  const r = await query(
+    `UPDATE sequence_scheduled_actions SET status = 'pending', claimed_at = NULL, updated_at = now()
+      WHERE status = 'claimed' AND claimed_at < now() - ($1 || ' minutes')::interval`,
+    [String(minutes)]
+  );
+  return r.rowCount || 0;
+}
+
 // Defer an action without consuming a retry attempt (e.g. quiet hours). The step
 // stays pending and fires once `minutes` have passed.
 async function deferAction(companyId, actionId, minutes) {
@@ -307,6 +331,6 @@ async function activeForStageTrigger(companyId, pipelineKey, stage) {
 module.exports = {
   list, get, create, update, setStatus, remove,
   listSteps, setSteps,
-  listEnrollments, getEnrollment, enroll, exitEnrollment, exitContact,
-  scheduleNextStep, claimDueActions, completeAction, retryAction, deferAction, activeForStageTrigger,
+  listEnrollments, getEnrollment, getAction, enroll, exitEnrollment, exitContact,
+  scheduleNextStep, claimDueActions, completeAction, retryAction, deferAction, sweepStaleClaims, activeForStageTrigger,
 };

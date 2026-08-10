@@ -577,6 +577,75 @@ async function main() {
     }
   }
 
+  // ── Sequences engine (Goal B) — ungated, exercises enroll → dispatcher → exit ──
+  {
+    // Fresh contact for the drip.
+    const c = await req('POST', '/api/crm/contacts', { company: CO_A, body: { name: 'Drip', email: email('drip'), source: 'manual' } });
+    const dripId = c.json?.id;
+
+    // Active sequence, two wait steps (no external send), exit on reply.
+    const s = await req('POST', '/api/crm/sequences', {
+      company: CO_A,
+      body: { name: 'Contract Drip ' + RUN, status: 'active', exit_conditions: { on_reply: true },
+        steps: [{ channel: 'wait', delay_minutes: 0 }, { channel: 'wait', delay_minutes: 0 }] },
+    });
+    const seqId = s.json?.sequence?.id;
+    check('sequence create → active with 2 steps', 'B',
+      s.status === 200 && !!seqId && (s.json?.sequence?.steps?.length === 2), `status=${s.status} id=${seqId}`);
+
+    // Enroll before-activate guard is covered by the not-active path; here enroll into the active one.
+    const enr = await req('POST', `/api/crm/sequences/${seqId}/enroll`, { company: CO_A, body: { contact_id: dripId } });
+    check('enroll → active enrollment created', 'B',
+      enr.status === 200 && enr.json?.created === true && enr.json?.enrollment?.status === 'active', `status=${enr.status} body=${JSON.stringify(enr.json)}`);
+
+    // Re-enroll while active → not created again (idempotent).
+    const enr2 = await req('POST', `/api/crm/sequences/${seqId}/enroll`, { company: CO_A, body: { contact_id: dripId } });
+    check('re-enroll while active → not re-created', 'B', enr2.json?.created === false, `created=${enr2.json?.created}`);
+
+    // Drive the dispatcher deterministically: two ticks walk both wait steps.
+    await req('POST', '/api/crm/sequences/_tick', { company: CO_A });
+    await req('POST', '/api/crm/sequences/_tick', { company: CO_A });
+    const after = await req('GET', `/api/crm/sequences/${seqId}/enrollments`, { company: CO_A });
+    const e = (after.json?.enrollments || []).find(x => x.contact_id === dripId);
+    check('dispatcher advances both steps → completed', 'B',
+      e?.status === 'completed' && e?.current_step === 2, `status=${e?.status} step=${e?.current_step}`);
+
+    // Manual exit on a second enrollment (long delay so nothing sends first).
+    const c2 = await req('POST', '/api/crm/contacts', { company: CO_A, body: { name: 'Exiter', email: email('exiter'), source: 'manual' } });
+    const s2 = await req('POST', '/api/crm/sequences', {
+      company: CO_A, body: { name: 'Exit Drip ' + RUN, status: 'active', steps: [{ channel: 'wait', delay_minutes: 600 }] },
+    });
+    const seq2 = s2.json?.sequence?.id;
+    const en = await req('POST', `/api/crm/sequences/${seq2}/enroll`, { company: CO_A, body: { contact_id: c2.json?.id } });
+    const exit = await req('POST', `/api/crm/sequences/enrollments/${en.json?.enrollment?.id}/exit`, { company: CO_A, body: { reason: 'manual' } });
+    check('manual exit → enrollment exited', 'B', exit.status === 200 && exit.json?.enrollment?.status === 'exited', `status=${exit.status}`);
+
+    // Cross-tenant: co_b cannot see co_a's sequence.
+    const foreign = await req('GET', `/api/crm/sequences/${seqId}`, { company: CO_B });
+    check('sequence blocked cross-tenant (404)', 'B', foreign.status === 404, `status=${foreign.status} (should be 404)`);
+
+    // Executor job API (B4): a whatsapp step is left for an external executor to
+    // claim + ack (server started with SEQUENCE_EXTERNAL_CHANNELS=whatsapp so the
+    // built-in dispatcher skips it). Enrollment advances on the reported result.
+    const cx = await req('POST', '/api/crm/contacts', { company: CO_A, body: { name: 'Exec', email: email('exec'), phone: '+15550100' + (RUN % 900 + 100), source: 'manual' } });
+    const sx = await req('POST', '/api/crm/sequences', {
+      company: CO_A, body: { name: 'Exec Drip ' + RUN, status: 'active', steps: [{ channel: 'whatsapp', delay_minutes: 0, category: 'utility', body: 'hi from executor' }] },
+    });
+    const seqX = sx.json?.sequence?.id;
+    await req('POST', `/api/crm/sequences/${seqX}/enroll`, { company: CO_A, body: { contact_id: cx.json?.id } });
+    const claim = await req('POST', '/api/crm/sequences/jobs/claim', { company: CO_A, body: { channel: 'whatsapp', limit: 5 } });
+    const job = (claim.json?.jobs || []).find(j => j.contact.id === cx.json?.id);
+    check('executor claims a due whatsapp job with payload', 'B',
+      claim.status === 200 && !!job && job.message?.body === 'hi from executor', `status=${claim.status} job=${JSON.stringify(job)}`);
+    if (job) {
+      const rr = await req('POST', `/api/crm/sequences/jobs/${job.job_id}/result`, { company: CO_A, body: { status: 'sent', provider_message_id: 'REF-test' } });
+      const enrx = await req('GET', `/api/crm/sequences/${seqX}/enrollments`, { company: CO_A });
+      const ex = (enrx.json?.enrollments || []).find(x => x.contact_id === cx.json?.id);
+      check('executor result advances enrollment → completed', 'B',
+        rr.status === 200 && ex?.status === 'completed', `result=${rr.status} enrollment=${ex?.status}`);
+    }
+  }
+
   console.log(results.join('\n'));
   console.log(`\n${pass} passed, ${fail} failed  (PHASE=${PHASE})\n`);
   process.exit(fail === 0 ? 0 : 1);

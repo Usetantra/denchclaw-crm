@@ -15,6 +15,10 @@ const INTERNAL_KEY = process.env.INTERNAL_API_KEY;
 const TICK_MS = Math.max(5000, parseInt(process.env.SEQUENCE_TICK_MS, 10) || 30000);
 const BATCH = Math.max(1, parseInt(process.env.SEQUENCE_BATCH, 10) || 20);
 const MAX_ATTEMPTS = Math.max(1, parseInt(process.env.SEQUENCE_MAX_ATTEMPTS, 10) || 5);
+// Channels an external engine executor owns (B4). The built-in dispatcher leaves
+// their jobs in the queue for the executor to claim via /sequences/jobs/claim.
+// Default: none — the built-in dispatcher handles every channel (today's behavior).
+const EXTERNAL_CHANNELS = (process.env.SEQUENCE_EXTERNAL_CHANNELS || '').split(',').map(s => s.trim()).filter(Boolean);
 
 let timer = null;
 let running = false;
@@ -134,7 +138,8 @@ async function tick() {
   const senderCache = new Map();
   let processed = 0, errors = 0;
   try {
-    const due = await seq.claimDueActions(BATCH);
+    await seq.sweepStaleClaims(15); // recover jobs whose worker/executor died mid-flight
+    const due = await seq.claimDueActions({ limit: BATCH, excludeChannels: EXTERNAL_CHANNELS.length ? EXTERNAL_CHANNELS : null });
     for (const a of due) {
       try { await processAction(a, senderCache); processed++; }
       catch (e) { errors++; console.error('[Dispatcher] action', a.id, 'failed:', e.message); try { await seq.retryAction(a.company_id, a.id, 15, e.message); } catch (_e) {} }

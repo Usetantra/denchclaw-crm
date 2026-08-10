@@ -7,8 +7,68 @@ const express = require('express');
 const router = express.Router();
 const { requireAuth, getUserCompanyId } = require('../middleware/auth');
 const seq = require('../db/models/sequences');
+const contactDb = require('../db/models/contacts');
+const dispatcher = require('../lib/sequence-dispatcher');
 
 router.use(requireAuth);
+
+// ── Executor job API (B4) ─────────────────────────────────────────────────────
+// External engine executors own a channel (SEQUENCE_EXTERNAL_CHANNELS) and pull
+// its due jobs here, do the send themselves, then post the result back. The
+// built-in dispatcher skips those channels, so exactly one worker handles each.
+// Claims are per-tenant, in-flight-marked ('claimed'), and reaped if unacked.
+const RESULT_STATUS = { sent: 'sent', delivered: 'sent', failed: 'failed', skipped: 'skipped' };
+
+router.post('/jobs/claim', async (req, res) => {
+  try {
+    const companyId = getUserCompanyId(req);
+    const channel = req.body && req.body.channel;
+    if (!channel) return res.status(400).json({ error: 'channel required' });
+    const limit = Math.min(parseInt(req.body && req.body.limit, 10) || 10, 50);
+    const actions = await seq.claimDueActions({ company: companyId, includeChannels: [channel], limit });
+    const jobs = [];
+    for (const a of actions) {
+      const contact = await contactDb.getById(a.contact_id, companyId);
+      const sequence = await seq.get(companyId, a.sequence_id);
+      const step = ((sequence && sequence.steps) || []).find(s => s.id === a.step_id) || {};
+      jobs.push({
+        job_id: a.id, channel: a.channel, step_order: a.step_order, run_at: a.run_at, attempts: a.attempts,
+        contact: contact
+          ? { id: contact.id, name: contact.name, email: contact.email, phone: contact.phone, wa_id: contact.wa_id, destination_country: contact.destination_country }
+          : { id: a.contact_id },
+        message: {
+          body: step.body || null, subject: step.subject || null, template_id: step.template_id || null,
+          category: step.category || null, template_variables: (step.metadata && step.metadata.template_variables) || null,
+        },
+      });
+    }
+    res.json({ jobs });
+  } catch (e) { console.error('[Sequences] jobs/claim', e.message); res.status(500).json({ error: 'failed' }); }
+});
+
+router.post('/jobs/:id/result', async (req, res) => {
+  try {
+    const companyId = getUserCompanyId(req);
+    const status = RESULT_STATUS[(req.body && req.body.status) || ''];
+    if (!status) return res.status(400).json({ error: 'status must be sent|delivered|failed|skipped' });
+    const a = await seq.getAction(companyId, req.params.id);
+    if (!a) return res.status(404).json({ error: 'job not found' });
+    await seq.completeAction(companyId, a, {
+      status,
+      result: { provider_message_id: (req.body && req.body.provider_message_id) || null, via: 'executor' },
+      error: (req.body && req.body.error) || null,
+    });
+    res.json({ ok: true });
+  } catch (e) { console.error('[Sequences] jobs/result', e.message); res.status(500).json({ error: 'failed' }); }
+});
+
+// Force one dispatcher tick now (ops: drain due steps on demand; tests: make the
+// send loop deterministic instead of waiting for the interval). Company-agnostic —
+// the dispatcher processes all due actions — but gated behind internal auth.
+router.post('/_tick', async (req, res) => {
+  try { res.json(await dispatcher.tick()); }
+  catch (e) { console.error('[Sequences] manual tick', e.message); res.status(500).json({ error: 'failed' }); }
+});
 
 const CHANNELS = new Set(['email', 'whatsapp', 'sms', 'linkedin', 'wait']);
 
