@@ -1516,7 +1516,10 @@ async function findOrCreateContact(email, defaults = {}) {
   // non-empty emails must never merge, even if they share a phone or LinkedIn
   // profile (real case: two prospects on one device / one profile scraped for
   // several dot-alias emails). Mirrors the automation_core BUG-1 fix.
-  if (!contact && !email && (defaults.phone || defaults.linkedin_url)) {
+  // The phone/linkedin dedupe fallback scans the tenant's contacts — it MUST be
+  // company-scoped. Without a companyId we skip it (and create fresh) rather than
+  // let contactDb.list(null, …) match across every tenant (gate 4).
+  if (!contact && !email && companyId && (defaults.phone || defaults.linkedin_url)) {
     const allContacts = await contactDb.list(companyId, {});
     if (!contact && defaults.phone) {
       const normalized = defaults.phone.replace(/\D/g, '');

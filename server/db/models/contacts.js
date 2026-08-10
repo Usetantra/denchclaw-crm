@@ -99,10 +99,12 @@ async function listPaginated(companyId, filters = {}) {
 // legitimately need any row use getByIdUnscoped (kept private to this module).
 async function getById(id, companyId) {
   if (companyId === undefined || companyId === null) {
-    // Defensive (gate 4): request handlers must always pass companyId. If we ever
-    // reach here from a route, it's a cross-tenant leak vector — surface it loudly.
-    console.warn('[contacts.getById] called without companyId — returning UNSCOPED row; pass companyId from the route.');
-    return getByIdUnscoped(id);
+    // Fail closed (gate 4): request handlers must always pass companyId. Reaching
+    // here from a route would be a cross-tenant leak vector, so we refuse rather
+    // than return an unscoped row. Internal callers that legitimately need any
+    // tenant's row call getByIdUnscoped explicitly.
+    console.warn('[contacts.getById] called without companyId — refusing (returning null); pass companyId from the route.');
+    return null;
   }
   const result = await query(
     `SELECT * FROM contacts WHERE id = $1 AND company_id = $2 AND deleted_at IS NULL LIMIT 1`,
@@ -243,11 +245,10 @@ async function getActivity(contactId, limit = 50, companyId) {
     );
     return result.rows;
   }
-  const result = await query(
-    `SELECT * FROM contact_activity WHERE contact_id = $1 ORDER BY created_at DESC LIMIT $2`,
-    [contactId, limit]
-  );
-  return result.rows;
+  // Fail closed (gate 4): route handlers always pass companyId. Without it we
+  // refuse rather than return another tenant's activity for a guessed contact id.
+  console.warn('[contacts.getActivity] called without companyId — refusing (returning []); pass companyId from the route.');
+  return [];
 }
 
 async function getStats(companyId) {
