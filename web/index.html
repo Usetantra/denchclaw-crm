@@ -980,6 +980,11 @@ function renderConvActions(c){
 function renderThread(msgs){
   const box=$("#cv-msgs");
   if(!msgs.length){box.innerHTML=`<div class="msg bot">No messages yet.</div>`;return;}
+  // Provider delivery status (written by the Twilio status webhook) on outbound rows.
+  const deliveryBadge=m=>{const s=m.provider_status;if(!s)return "";
+    const col=/read|delivered/i.test(s)?"#067647":/fail|undeliv/i.test(s)?"#b42318":"#98a2b3";
+    const t=m.error_code?` title="error ${esc(m.error_code)}"`:"";
+    return ` · <span style="color:${col};font-weight:600"${t}>${esc(s)}${m.error_code?" ("+esc(m.error_code)+")":""}</span>`;};
   box.innerHTML=msgs.map((m,i)=>{
     const out=m.direction==="outbound";
     const who=out?(m.ai_generated?"AI":"You"):"Contact";
@@ -1001,7 +1006,7 @@ function renderThread(msgs){
       }
     }
     return `<div class="msg ${out?"user":"bot"}">${replyRef}${subj}${esc(m.body||"—")}
-      <div class="mmeta">${esc(who)}${out&&m.ai_generated?`<span class="ai-tag">AI</span>`:""} · ${esc(m.channel||"")}${m.intent?" · "+esc(m.intent):""}${cc} · ${new Date(m.created_at).toLocaleString()}</div>
+      <div class="mmeta">${esc(who)}${out&&m.ai_generated?`<span class="ai-tag">AI</span>`:""} · ${esc(m.channel||"")}${m.intent?" · "+esc(m.intent):""}${cc} · ${new Date(m.created_at).toLocaleString()}${out?deliveryBadge(m):""}</div>
     </div>`;
   }).join("");
   box.scrollTop=box.scrollHeight;
