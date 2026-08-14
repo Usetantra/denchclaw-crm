@@ -15,6 +15,7 @@
     --serif:"Fraunces",Georgia,serif;
     --hot:#b42318;--hot-bg:#fef3f2;--warm:#b54708;--warm-bg:#fffaeb;
     --neutral:#4a4a4a;--neutral-bg:#f4f4f4;--cold:#175cd3;--cold-bg:#eff4ff;--live:#067647;--live-bg:#ecfdf3;
+    --violet:#5925dc;--violet-bg:#f4f3ff;
     /* Raised surfaces (cards/modals/inputs) — distinct from --bg so dark mode
        can lift them above the page instead of every surface just inverting flat. */
     --surface:#ffffff;--surface-2:#f4f5f7;--surface-3:#eceef1;--surface-4:#f7f8fa;
@@ -31,6 +32,7 @@
       --hair:#2a2a2d;--hair-2:#1e1e21;
       --hot:#ff6a5e;--hot-bg:#3a1414;--warm:#f0a83c;--warm-bg:#332108;
       --neutral:#c8c8c8;--neutral-bg:#242427;--cold:#7aaeff;--cold-bg:#101c33;--live:#3ecf8e;--live-bg:#0d2b1e;
+      --violet:#b8a3ff;--violet-bg:#211a3d;
       --surface:#19191c;--surface-2:#1c1c1f;--surface-3:#212124;--surface-4:#242428;
       --canvas-border:#2f2f33;
       --accent-bg:#f2f2f0;--accent-fg:#0a0a0a;--accent-fg-rgb:10,10,10;
@@ -389,7 +391,7 @@
   .ib-msg{padding:8px 12px;display:flex;flex-direction:column;gap:3px;max-width:78%}
   .ib-msg.out{margin-left:auto;align-items:flex-end}
   .ib-bub{padding:8px 11px;border-radius:10px;font-size:13px;white-space:pre-wrap;word-break:break-word;
-    border:1px solid var(--hair);background:#fff}
+    border:1px solid var(--hair);background:var(--surface)}
   .ib-msg.out .ib-bub{background:var(--hair-2)}
   .ib-meta{font-size:10px;color:var(--ink-4);display:flex;gap:6px;align-items:center;flex-wrap:wrap}
   .ib-undeliv .ib-bub{border-style:dashed;border-color:#f79009}
@@ -406,16 +408,16 @@
   .chip-tag{background:var(--hair-2);color:var(--ink-3);border-color:var(--hair)}
   .chip-x{cursor:pointer;opacity:.5;font-weight:700}
   .chip-x:hover{opacity:1}
-  .ib-menu{position:absolute;z-index:60;background:#fff;border:1px solid var(--hair);border-radius:var(--radius);
+  .ib-menu{position:absolute;z-index:60;background:var(--surface);border:1px solid var(--hair);border-radius:var(--radius);
     box-shadow:0 8px 24px rgba(0,0,0,.12);min-width:210px;overflow:hidden}
   .ib-menu button{display:block;width:100%;text-align:left;border:none;background:none;padding:8px 12px;
-    font-family:var(--sans);font-size:12px;cursor:pointer}
+    font-family:var(--sans);font-size:12px;cursor:pointer;color:var(--ink-2)}
   .ib-menu button:hover{background:var(--hair-2)}
   .ib-tabs{display:flex;gap:0;border:1px solid var(--hair);border-radius:var(--radius);overflow:hidden;width:fit-content}
   .ib-tabs button{border:none;background:none;font-family:var(--sans);font-size:11px;font-weight:600;
     padding:5px 12px;cursor:pointer;border-right:1px solid var(--hair)}
   .ib-tabs button:last-child{border-right:none}
-  .ib-tabs button.active{background:var(--ink);color:#fff}
+  .ib-tabs button.active{background:var(--accent-bg);color:var(--accent-fg)}
   .ib-empty{padding:40px 20px;text-align:center;color:var(--ink-4);font-size:13px}
   .ib-empty svg{opacity:.35;margin-bottom:10px}
 </style>
@@ -432,7 +434,7 @@
   <button data-tab="contacts">Contacts</button>
   <button data-tab="companies">Companies</button>
   <button data-tab="sequences">Sequences</button>
-  <button data-tab="inbox">Inbox</button>
+  <button data-tab="inbox">Conversations</button>
   <button data-tab="marketing">Marketing</button>
   <button data-tab="analytics">Analytics</button>
   <button data-tab="settings">Settings</button>
@@ -588,7 +590,7 @@
   <div id="view-inbox" style="display:none">
   <!-- CP-I: the unified Inbox. Contact-centred, every channel in one thread.
        Additive — main's per-channel conversation table is preserved below. -->
-  <div class="sechead"><span class="eyebrow">Inbox</span><span class="rule"></span></div>
+  <div class="sechead"><span class="eyebrow">Conversations</span><span class="rule"></span></div>
   <div class="ib-wrap">
     <div class="ib-col">
       <div class="ib-head">
@@ -755,6 +757,8 @@
       <button class="mclose" id="m-close" title="Close" aria-label="Close">×</button>
     </div>
     <div class="fgrid" id="m-fields"></div>
+    <div class="sechead" style="margin:8px 0 10px"><span class="eyebrow">Tags</span><span class="rule"></span></div>
+    <div id="m-tags" style="display:flex;flex-wrap:wrap;gap:6px;align-items:center;margin-bottom:18px"></div>
     <div class="sechead" style="margin:8px 0 10px"><span class="eyebrow">Custom fields</span><span class="rule"></span></div>
     <div id="m-custom"></div>
     <button class="btn sm" id="m-custom-add" style="margin:8px 0 18px">+ Add field</button>
@@ -923,10 +927,6 @@ async function openContact(id){
       ["Marketing stage",nice(c.marketing_stage)],
       ["Opportunity stage (legacy)",nice(c.deal_stage)],
       ["Score (numeric)",String(c.lead_score_numeric??0)],
-      // CP-I D11: real tag CHIPS, not a comma-joined string. A tag chip is
-      // removable-looking and neutral; a stage chip (below) never is. ibTagChip
-      // escapes its own content, hence the raw flag.
-      ["Tags",(c.tags||[]).length?(c.tags||[]).map(ibTagChip).join(" "):"—",true],
       ["UTM source",c.utm_source||"—"],["UTM medium",c.utm_medium||"—"],["UTM campaign",c.utm_campaign||"—"],
       ["Last contacted",c.last_contacted?fmtDate(c.last_contacted):"—"],
       ["Created",fmtDate(c.created_at)],["Contact ID",c.id],
@@ -953,10 +953,12 @@ async function openContact(id){
       const newCustom=collectCustomFields();
       const oldCustom=(c.metadata&&c.metadata.custom_fields)||{};
       if(JSON.stringify(newCustom)!==JSON.stringify(oldCustom))upd.metadata={custom_fields:newCustom};
+      if(JSON.stringify(mTags)!==JSON.stringify(c.tags||[]))upd.tags=mTags;
       if(!Object.keys(upd).length)return toast("No changes to save");
       try{await patch(`contacts/${id}`,upd);toast("Saved");openContact(id);loadContacts&&loadContacts();}
       catch(e){toast(e.message,true);}
     };
+    renderTags(c.tags||[]);
     // Custom fields — arbitrary key/value pairs the operator defines per-contact,
     // namespaced under metadata.custom_fields so they never collide with the
     // other writers already sharing this contact's metadata bag (e.g. the
@@ -969,6 +971,26 @@ async function openContact(id){
   }catch(e){$("#m-name").textContent="Error";$("#m-sub").textContent="";
     showRetry($("#m-feed"),e.message,()=>openContact(id),{cls:"fitem muted"});}
 }
+// ── Tags (contact drawer) — per-contact add/remove, not just the bulk
+// "apply one tag to many contacts" action in the Contacts list toolbar.
+let mTags=[];
+function renderTags(tags){
+  mTags=[...(tags||[])];
+  $("#m-tags").innerHTML=
+    mTags.map((t,i)=>`<span class="chip chip-tag">${esc(t)} <span class="chip-x" data-tag-rm="${i}">×</span></span>`).join("")
+    +`<input id="m-tag-add" placeholder="+ Add tag…" style="border:1px solid var(--hair);border-radius:999px;padding:3px 10px;font-size:11px;font-family:var(--sans);outline:none;background:var(--surface);color:var(--ink);width:110px">`;
+  $("#m-tag-add").addEventListener("keydown",e=>{
+    if(e.key!=="Enter")return;e.preventDefault();
+    const v=e.target.value.trim();if(!v)return;
+    if(!mTags.includes(v))mTags.push(v);
+    renderTags(mTags);
+  });
+}
+$("#m-tags").addEventListener("click",e=>{
+  const rm=e.target.closest("[data-tag-rm]");if(!rm)return;
+  mTags.splice(+rm.dataset.tagRm,1);renderTags(mTags);
+});
+
 // ── Custom fields (contact drawer) ────────────────────────────────────────────
 function renderCustomFields(fields){
   const entries=Object.entries(fields||{});
@@ -1332,13 +1354,13 @@ function renderIbThread(d){
       // "Sequence" = the CRM sent it autonomously (a CP2 scheduled_action).
       // "AI-assisted" = a human reviewed an AI draft and clicked Send.
       // Different facts — never conflate them.
-      m.automated?`<span class="chip" style="background:#f791091f;color:#b54708;border-color:#f7900940">Sequence</span>`:"",
-      m.ai_generated?`<span class="chip" style="background:#7a5af81f;color:#5925dc;border-color:#7a5af840">AI-assisted</span>`:"",
+      m.automated?`<span class="chip" style="background:var(--warm-bg);color:var(--warm)">Sequence</span>`:"",
+      m.ai_generated?`<span class="chip" style="background:var(--violet-bg);color:var(--violet)">AI-assisted</span>`:"",
     ].filter(Boolean).join(" ");
     return `<div class="ib-msg ${out?"out":"in"}${m.delivered===false?" ib-undeliv":""}">
       <div class="ib-bub">${esc(m.body||"")}</div>
       <div class="ib-meta">${badges}<span>${esc(new Date(m.created_at).toLocaleString())}</span>
-      ${m.delivered===false?`<span style="color:#b54708">${esc(m.delivery_note||"Logged — not delivered")}</span>`:""}</div>
+      ${m.delivered===false?`<span style="color:var(--warm)">${esc(m.delivery_note||"Logged — not delivered")}</span>`:""}</div>
     </div>`;}).join("")||`<div class="ib-empty">No messages yet.</div>`;
   $("#ib-thread").innerHTML=`<div style="padding:8px 0">${rows}</div>`;
   $("#ib-thread").scrollTop=$("#ib-thread").scrollHeight;
@@ -1357,17 +1379,20 @@ function renderIbThread(d){
 
 function renderIbRail(d){
   const c=d.contact||{};
-  const sc=(Object.prototype.hasOwnProperty.call(SCORE_COLORS,c.lead_score)&&SCORE_COLORS[c.lead_score])||"#98a2b3";
+  // Score names line up with the theme-aware --hot/--warm/--neutral/--cold
+  // tokens directly, so the chip stays legible in dark mode instead of a
+  // fixed hex tuned for a light background.
+  const scVar=({hot:"--hot",warm:"--warm",neutral:"--neutral",cold:"--cold"})[c.lead_score]||"--neutral";
   $("#ib-rail").innerHTML=`
     <div style="padding:12px">
       <div style="font-weight:700;font-size:14px">${esc(c.name||"(unnamed)")}</div>
       <div class="muted" style="font-size:12px">${esc([c.title,c.company_name].filter(Boolean).join(" · ")||"—")}</div>
       <div class="muted" style="font-size:12px;margin-top:2px">${esc(c.email||"")}</div>
       <div style="margin-top:10px;display:flex;gap:5px;align-items:center;flex-wrap:wrap">
-        <span class="chip" style="background:${sc}1a;color:${sc};border-color:${sc}40">${esc(c.lead_score||"—")}</span>
+        <span class="chip" style="background:var(${scVar}-bg);color:var(${scVar})">${esc(c.lead_score||"—")}</span>
         <span class="muted" style="font-size:11px">score ${esc(String(c.lead_score_numeric??0))}</span>
       </div>
-      ${d.suppressed_globally?`<div style="margin-top:10px;font-size:11px;color:#b42318;border:1px solid #f0443840;background:#f044381a;padding:6px 8px;border-radius:6px">
+      ${d.suppressed_globally?`<div style="margin-top:10px;font-size:11px;color:var(--hot);border:1px solid var(--hot);background:var(--hot-bg);padding:6px 8px;border-radius:6px">
         Suppressed on all channels${d.suppressed_reason?` — ${esc(d.suppressed_reason)}`:""}</div>`:""}
       <div class="eyebrow" style="margin:14px 0 6px">Stage</div>
       ${(d.deals||[]).length
