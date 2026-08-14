@@ -63,6 +63,9 @@ function normalizeStages(input, prev) {
       // true/false are deliberate values (false CLEARS an inherited flag,
       // symmetric with mode's incoming-wins rule); anything else = unset.
       terminal: s.terminal === true ? true : (s.terminal === false ? false : undefined),
+      // A positive integer opts in; 0/absent/non-numeric = unset (falls through
+      // to inheriting the previous saved value below, same as mode/terminal).
+      reminder_days: Number.isFinite(Number(s.reminder_days)) && Number(s.reminder_days) > 0 ? Number(s.reminder_days) : undefined,
     });
   });
   if (!out.length) return null;
@@ -88,6 +91,7 @@ function normalizeStages(input, prev) {
       key: s.key, name: s.name, color: s.color, transitions: tr,
       ...(mode ? { mode } : {}),
       ...(terminal ? { terminal: true } : {}),
+      ...(s.reminder_days ? { reminder_days: s.reminder_days } : {}),
     };
   });
 }
@@ -98,6 +102,7 @@ function withColors(stages) {
     transitions: s.transitions || [],
     ...(s.mode ? { mode: s.mode } : {}),
     ...(s.terminal === true ? { terminal: true } : {}),
+    ...(s.reminder_days ? { reminder_days: s.reminder_days } : {}),
   }));
 }
 

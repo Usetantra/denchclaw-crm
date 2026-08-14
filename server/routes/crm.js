@@ -21,6 +21,7 @@ const { ENGAGEMENT_WEIGHTS, recordEngagement } = require('../lib/scoring');
 // CP-B: the contact-entity advance, shared with marketing-stage ingestion so the
 // mode/transition/entry gates have exactly one implementation.
 const { advanceContactStage, manualStageRefusal, isAutomatedRequest } = require('../lib/stage-authority');
+const { maybeCreateStageReminder } = require('../lib/stage-reminders');
 
 const { requireAuth, getUserCompanyId } = require('../middleware/auth');
 
@@ -861,6 +862,11 @@ router.post('/contacts/:id/advance', async (req, res) => {
     // GOAL B2: a real (non-idempotent) stage transition auto-enrolls the
     // contact into any active sequence configured to trigger on this stage.
     const sequenceEnrollments = await sequenceDb.enrollForTriggerStage(companyId, contact.id, pipeline_key, stage);
+
+    await maybeCreateStageReminder({
+      companyId, contactId: contact.id, dealId: deal.id, contactName: contact.name, dealTitle: deal.title,
+      pipeline, pipelineKey: pipeline_key, stage,
+    });
 
     return res.json({
       contact_id: contact.id, deal_id: deal.id, pipeline_key, stage, previous: currentStage, changed: true,

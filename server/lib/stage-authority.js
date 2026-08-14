@@ -42,6 +42,7 @@ const { query } = require('../db/index');
 const { getPipelineTransitions, isManualStage, mayAutomationSetStage } = require('../db/pipeline');
 const sequenceDb = require('../db/models/sequences');
 const limitDb = require('../db/models/limits');
+const { maybeCreateStageReminder } = require('./stage-reminders');
 
 /**
  * Is this request a programmatic caller?
@@ -232,6 +233,11 @@ async function advanceContactStage({
   // reaching this line is the whole point of CP-B — an observed registration
   // must start the same follow-up ladder a hand-typed one starts.
   const sequenceEnrollments = await sequenceDb.enrollForTriggerStage(companyId, contact.id, pipelineKey, stage);
+
+  await maybeCreateStageReminder({
+    companyId, contactId: contact.id, contactName: contact.name,
+    pipeline, pipelineKey, stage,
+  });
 
   return {
     ok: true, changed: true, code: 'advanced', previous: currentStage, stage,

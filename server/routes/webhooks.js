@@ -387,4 +387,63 @@ router.post('/twilio/status', async (req, res) => {
   }
 });
 
+// ── Inbound lead webhooks ("add prospects from other tools") ─────────────────
+// POST /webhooks/leads/:token — no INTERNAL_API_KEY needed; the per-webhook
+// token in the URL IS the auth (server/db/models/lead-webhooks.js), so a
+// no-code tool that can only fire a plain POST (Zapier, Make, a website form)
+// can still integrate. Accepts common field-name variants so the caller
+// doesn't need to match our exact schema.
+const leadWebhooksDb = require('../db/models/lead-webhooks');
+
+function pick(body, ...names) {
+  for (const n of names) {
+    if (body[n] !== undefined && body[n] !== null && String(body[n]).trim() !== '') return String(body[n]).trim();
+  }
+  return undefined;
+}
+
+router.post('/leads/:token', async (req, res) => {
+  try {
+    const hook = await leadWebhooksDb.getByToken(req.params.token);
+    // Same shape whether the token is unknown or disabled — a prober learns
+    // nothing about which is true, and a disabled webhook still tells its
+    // owner "your token is fine, you turned it off" via a distinct message.
+    if (!hook) return res.status(404).json({ error: 'unknown webhook' });
+    if (!hook.enabled) return res.status(403).json({ error: 'this webhook is disabled' });
+
+    const b = req.body || {};
+    const name = pick(b, 'name', 'full_name', 'fullName') ||
+      [pick(b, 'first_name', 'firstName'), pick(b, 'last_name', 'lastName')].filter(Boolean).join(' ') || undefined;
+    const email = pick(b, 'email', 'email_address', 'emailAddress');
+    const phone = pick(b, 'phone', 'phone_number', 'phoneNumber', 'mobile');
+    if (!name && !email && !phone) {
+      return res.status(400).json({ error: 'at least one of name, email, or phone is required' });
+    }
+    const company_name = pick(b, 'company', 'company_name', 'companyName', 'organization');
+    const title = pick(b, 'title', 'job_title', 'jobTitle', 'position');
+    const rawTags = b.tags;
+    const tags = [...new Set([
+      ...(hook.default_tags || []),
+      ...(Array.isArray(rawTags) ? rawTags : typeof rawTags === 'string' ? rawTags.split(',').map(s => s.trim()).filter(Boolean) : []),
+    ])];
+
+    const created = await api('POST', '/api/crm/contacts', {
+      name, email, phone, company: company_name, title,
+      source: pick(b, 'source') || hook.default_source,
+      tags: tags.length ? tags : undefined,
+      metadata: { lead_webhook_id: hook.id, lead_webhook_label: hook.label || undefined },
+    }, hook.company_id);
+
+    if (created.status !== 200 && created.status !== 201) {
+      console.error('[Webhooks] lead webhook contact creation failed:', hook.id, created.status, JSON.stringify(created.json));
+      return res.status(502).json({ error: 'failed to create contact', upstream_status: created.status });
+    }
+    await leadWebhooksDb.touch(hook.id);
+    res.status(201).json({ ok: true, contact_id: created.json.id });
+  } catch (err) {
+    console.error('[Webhooks] leads/:token error:', err.message);
+    res.status(500).json({ error: 'failed to process lead' });
+  }
+});
+
 module.exports = router;

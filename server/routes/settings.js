@@ -9,6 +9,7 @@ const { requireAuth, getUserCompanyId } = require('../middleware/auth');
 const businessProfile = require('../db/models/business-profile');
 const customFields = require('../db/models/custom-fields');
 const tagsDb = require('../db/models/tags');
+const leadWebhooksDb = require('../db/models/lead-webhooks');
 
 router.use(requireAuth);
 
@@ -126,6 +127,66 @@ router.delete('/tags', async (req, res) => {
   } catch (e) {
     console.error('[Settings] DELETE tags', e.message);
     res.status(500).json({ error: 'failed to delete tag' });
+  }
+});
+
+// ── Inbound lead webhooks (Integrations) ────────────────────────────────────
+router.get('/lead-webhooks', async (req, res) => {
+  try {
+    const companyId = getUserCompanyId(req);
+    res.json({ webhooks: await leadWebhooksDb.list(companyId) });
+  } catch (e) {
+    console.error('[Settings] GET lead-webhooks', e.message);
+    res.status(500).json({ error: 'failed to load webhooks' });
+  }
+});
+
+router.post('/lead-webhooks', async (req, res) => {
+  try {
+    const companyId = getUserCompanyId(req);
+    const { label, default_source, default_tags } = req.body || {};
+    const webhook = await leadWebhooksDb.create(companyId, { label, defaultSource: default_source, defaultTags: default_tags });
+    res.status(201).json({ webhook });
+  } catch (e) {
+    console.error('[Settings] POST lead-webhooks', e.message);
+    res.status(500).json({ error: 'failed to create webhook' });
+  }
+});
+
+router.patch('/lead-webhooks/:id', async (req, res) => {
+  try {
+    const companyId = getUserCompanyId(req);
+    const { label, enabled, default_source, default_tags } = req.body || {};
+    const webhook = await leadWebhooksDb.update(companyId, req.params.id, { label, enabled, defaultSource: default_source, defaultTags: default_tags });
+    if (!webhook) return res.status(404).json({ error: 'webhook not found' });
+    res.json({ webhook });
+  } catch (e) {
+    console.error('[Settings] PATCH lead-webhooks/:id', e.message);
+    res.status(500).json({ error: 'failed to update webhook' });
+  }
+});
+
+router.post('/lead-webhooks/:id/regenerate', async (req, res) => {
+  try {
+    const companyId = getUserCompanyId(req);
+    const webhook = await leadWebhooksDb.regenerateToken(companyId, req.params.id);
+    if (!webhook) return res.status(404).json({ error: 'webhook not found' });
+    res.json({ webhook });
+  } catch (e) {
+    console.error('[Settings] POST lead-webhooks/:id/regenerate', e.message);
+    res.status(500).json({ error: 'failed to rotate token' });
+  }
+});
+
+router.delete('/lead-webhooks/:id', async (req, res) => {
+  try {
+    const companyId = getUserCompanyId(req);
+    const n = await leadWebhooksDb.remove(companyId, req.params.id);
+    if (!n) return res.status(404).json({ error: 'webhook not found' });
+    res.json({ ok: true });
+  } catch (e) {
+    console.error('[Settings] DELETE lead-webhooks/:id', e.message);
+    res.status(500).json({ error: 'failed to delete webhook' });
   }
 });
 

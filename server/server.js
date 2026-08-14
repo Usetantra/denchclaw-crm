@@ -81,6 +81,7 @@ app.use('/api/crm/compliance', require('./routes/compliance'));
 app.use('/api/crm/channels', require('./routes/channels'));
 app.use('/api/crm/channel-templates', require('./routes/channel-templates'));
 app.use('/api/crm/settings', require('./routes/settings'));
+app.use('/api/crm/tasks', require('./routes/tasks'));
 app.use('/api/crm/executors', executorsRouter);
 app.use('/api/crm/automations', automationsRouter);
 app.use('/api/crm', conversationsRouter);

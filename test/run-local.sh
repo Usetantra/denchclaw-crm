@@ -144,6 +144,7 @@ SUITES=(
   "unit-cpy-automation-gate|node test/unit-cpy-automation-gate.mjs"
   "unit-cpm2-channel-compliance|env INBOUND_WEBHOOK_SECRET=$IB_SECRET node test/unit-cpm2-channel-compliance.mjs"
   "unit-cpm3-settings|node test/unit-cpm3-settings.mjs"
+  "unit-cpm4-tasks-webhooks|node test/unit-cpm4-tasks-webhooks.mjs"
 )
 
 TOTAL_SUITES=${#SUITES[@]}
