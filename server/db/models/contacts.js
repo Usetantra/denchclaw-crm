@@ -8,10 +8,10 @@ const { query } = require('../index');
 // Sortable columns for the Contacts list — a fixed whitelist, never the raw
 // query value, so `sort` can never become a SQL-injection vector.
 const SORTABLE_COLUMNS = {
-  name: 'name', company_name: 'company_name', email: 'email',
+  name: 'name', company_name: 'company_name', email: 'email', phone: 'phone', title: 'title',
   deal_stage: 'deal_stage', marketing_stage: 'marketing_stage',
   lead_score_numeric: 'lead_score_numeric', source: 'source',
-  created_at: 'created_at', updated_at: 'updated_at',
+  next_follow_up: 'next_follow_up', created_at: 'created_at', updated_at: 'updated_at',
 };
 function orderByClause(sort, dir) {
   const col = SORTABLE_COLUMNS[sort] || 'updated_at';

@@ -356,7 +356,11 @@
   .pl-item .scope.contact{background:var(--cold-bg);color:var(--cold)}
   .pl-item .scope.deal{background:var(--warm-bg);color:var(--warm)}
   .pipe-editor{border:1px solid var(--hair);border-radius:10px;padding:18px}
-  .stage-row{display:flex;align-items:center;gap:10px;padding:8px 9px;border:1px solid var(--hair);border-radius:8px;margin-bottom:8px;background:#fff}
+  .stage-row{display:flex;align-items:center;gap:10px;padding:8px 9px;border:1px solid var(--hair);border-radius:8px;margin-bottom:8px;background:var(--surface)}
+  .col-row{display:flex;align-items:center;gap:10px;padding:7px 9px;border:1px solid var(--hair);border-radius:8px;margin-bottom:6px;background:var(--surface)}
+  .col-row .handle{cursor:grab;color:var(--ink-5);font-size:16px;user-select:none}
+  .col-row label{flex:1;font-size:13px;color:var(--ink-2);cursor:pointer;display:flex;align-items:center;gap:8px}
+  .col-row.dragging{opacity:.4}
   .stage-row.dragging{opacity:.4}
   .stage-row .handle{cursor:grab;color:var(--ink-5);font-size:16px;user-select:none}
   .stage-row input.sname{flex:1;border:1px solid transparent;border-radius:5px;padding:6px 8px;font-size:13px;font-family:var(--sans)}
@@ -510,6 +514,7 @@
       <select id="smart-list-sel" title="Smart lists — your saved filter combinations"><option value="">All contacts</option></select>
       <button class="btn sm" id="save-smart-list" title="Save the current search/filters as a smart list">☆ Save view</button>
       <button class="btn sm" id="del-smart-list" title="Delete the selected smart list" style="display:none">Delete view</button>
+      <button class="btn sm" id="edit-columns" title="Choose and reorder columns">⚙ Columns</button>
       <span class="spacer"></span>
       <button class="btn" id="import-contacts">↑ Import CSV</button>
       <button class="btn primary" id="new-contact">+ New contact</button>
@@ -2166,7 +2171,45 @@ let cList=[],cSel=new Set(),_srcFilled=false;
 const CONTACT_PAGE_SIZE=50;
 let cOffset=0,cTotal=0;
 let cSort="updated_at",cDir="desc";
-const CONTACT_COLUMNS=[["name","Name"],["company_name","Company"],["email","Email"],["marketing_stage","Stage"],["lead_score_numeric","Score"],["source","Source"],["created_at","Created"]];
+
+// ── Column arrange/hide — every available column, a renderer for its cell, and
+// a persisted (per-browser) order + visibility set. Not every column is
+// server-sortable (tags is an array — no meaningful single-column order), so
+// CONTACT_COL_SORTABLE is its own whitelist mirroring the backend's.
+const ALL_CONTACT_COLUMNS=[
+  ["name","Name"],["company_name","Company"],["email","Email"],["phone","Phone"],["title","Title"],
+  ["marketing_stage","Stage"],["lead_score_numeric","Score"],["source","Source"],["tags","Tags"],
+  ["next_follow_up","Next follow-up"],["created_at","Created"],["updated_at","Updated"],
+];
+const CONTACT_COL_SORTABLE=new Set(["name","company_name","email","phone","title","marketing_stage","lead_score_numeric","source","next_follow_up","created_at","updated_at"]);
+const CONTACT_COL_RENDER={
+  name:c=>`<b>${esc(c.name||"—")}</b>`,
+  company_name:c=>`<span class="co">${esc(c.company_name||"")}</span>`,
+  email:c=>`<span class="email">${esc(c.email||"")}</span>`,
+  phone:c=>esc(c.phone||""),
+  title:c=>esc(c.title||""),
+  marketing_stage:c=>`<span style="text-transform:capitalize">${esc(nice(c.marketing_stage||c.deal_stage||""))}</span>`,
+  lead_score_numeric:c=>`<span class="score ${esc(c.lead_score||"neutral")}">${esc(c.lead_score||"—")}</span>`,
+  source:c=>`<span class="src">${esc(c.source||"")}</span>`,
+  tags:c=>(c.tags||[]).length?(c.tags||[]).map(ibTagChip).join(" "):"",
+  next_follow_up:c=>c.next_follow_up?fmtDate(c.next_follow_up):"—",
+  created_at:c=>`<span class="muted">${fmtDate(c.created_at)}</span>`,
+  updated_at:c=>`<span class="muted">${fmtDate(c.updated_at)}</span>`,
+};
+const DEFAULT_CONTACT_COLS=["name","company_name","email","marketing_stage","lead_score_numeric","source","created_at"];
+const CONTACT_COLS_KEY="denchclaw_contact_columns";
+function getContactColumns(){
+  let saved=null;try{saved=JSON.parse(localStorage.getItem(CONTACT_COLS_KEY));}catch{}
+  if(!Array.isArray(saved)||!saved.length)return ALL_CONTACT_COLUMNS.map(([key])=>({key,visible:DEFAULT_CONTACT_COLS.includes(key)}));
+  // Merge forward: a column added to ALL_CONTACT_COLUMNS after a user already
+  // saved a config must still show up (hidden by default) rather than vanish.
+  const known=new Set(saved.map(s=>s.key));
+  const merged=saved.filter(s=>ALL_CONTACT_COLUMNS.some(([k])=>k===s.key));
+  ALL_CONTACT_COLUMNS.forEach(([key])=>{if(!known.has(key))merged.push({key,visible:false});});
+  return merged;
+}
+function setContactColumns(cols){localStorage.setItem(CONTACT_COLS_KEY,JSON.stringify(cols));}
+let contactColumns=getContactColumns();
 function contactQuery(){const p=new URLSearchParams();
   const s=$("#contact-search").value.trim();if(s)p.set("search",s);
   const sc=$("#filter-score").value;if(sc)p.set("score",sc);
@@ -2195,16 +2238,17 @@ function renderContactPager(){
 function renderContactList(){
   if(!cList.length){$("#contacts-list").innerHTML=`<div class="empty">No contacts match. <a class="linklike" id="empty-nc">Add one</a>.</div>`;
     $("#empty-nc")&&($("#empty-nc").onclick=()=>contactModal());updateContactBulk();return;}
+  const visCols=contactColumns.filter(c=>c.visible).map(c=>c.key);
+  const cols=visCols.length?visCols:DEFAULT_CONTACT_COLS; // never render a headerless table
+  const labelFor=key=>(ALL_CONTACT_COLUMNS.find(([k])=>k===key)||[key,key])[1];
   const rows=cList.map(c=>`<tr data-contact="${esc(c.id)}" style="cursor:pointer">
     <td class="checkcell"><input type="checkbox" class="csel" data-id="${esc(c.id)}"></td>
-    <td><b>${esc(c.name||"—")}</b></td><td class="co">${esc(c.company_name||"")}</td>
-    <td class="email">${esc(c.email||"")}</td>
-    <td style="text-transform:capitalize">${esc(nice(c.marketing_stage||c.deal_stage||""))}</td>
-    <td><span class="score ${esc(c.lead_score||"neutral")}">${esc(c.lead_score||"—")}</span></td>
-    <td><span class="src">${esc(c.source||"")}</span></td><td class="muted">${fmtDate(c.created_at)}</td>
+    ${cols.map(key=>`<td>${(CONTACT_COL_RENDER[key]||(c=>""))(c)}</td>`).join("")}
     <td class="checkcell"><button class="dots-btn" data-menu="${esc(c.id)}" aria-label="Row actions">⋮</button></td></tr>`).join("");
   const arrow=col=>col!==cSort?"":(cDir==="asc"?" ▲":" ▼");
-  const heads=CONTACT_COLUMNS.map(([col,label])=>`<th class="sortable" data-sort="${col}">${esc(label)}${arrow(col)}</th>`).join("");
+  const heads=cols.map(key=>CONTACT_COL_SORTABLE.has(key)
+    ?`<th class="sortable" data-sort="${key}">${esc(labelFor(key))}${arrow(key)}</th>`
+    :`<th>${esc(labelFor(key))}</th>`).join("");
   $("#contacts-list").innerHTML=`<table><thead><tr><th class="checkcell"><input type="checkbox" id="csel-all"></th>
     ${heads}<th></th></tr></thead><tbody>${rows}</tbody></table>`;
   updateContactBulk();
@@ -2261,6 +2305,40 @@ $("#del-smart-list").onclick=()=>{
   renderSmartListOptions();$("#del-smart-list").style.display="none";
   toast("Smart list deleted");
 };
+
+// ── Column arrange/hide modal ───────────────────────────────────────────────
+let colDrag=null;
+function renderColRows(){
+  $("#col-rows").innerHTML=contactColumns.map((c,i)=>{
+    const label=(ALL_CONTACT_COLUMNS.find(([k])=>k===c.key)||[c.key,c.key])[1];
+    return `<div class="col-row" draggable="true" data-idx="${i}">
+      <span class="handle">⠿</span>
+      <label><input type="checkbox" class="col-vis" data-idx="${i}" ${c.visible?"checked":""}>${esc(label)}</label>
+    </div>`;
+  }).join("");
+}
+$("#edit-columns").onclick=()=>{
+  openModal("Columns",
+    `<p class="muted" style="font-size:12px;margin:0 0 10px">Choose which columns show in the Contacts list, and drag to reorder them.</p>
+     <div id="col-rows"></div>
+     <button class="btn sm" id="col-reset" style="margin-top:4px">Reset to default</button>`,
+    `<button class="btn" onclick="closeModal()">Close</button><button class="btn primary" id="col-apply">Apply</button>`);
+  renderColRows();
+  $("#col-reset").onclick=()=>{contactColumns=ALL_CONTACT_COLUMNS.map(([key])=>({key,visible:DEFAULT_CONTACT_COLS.includes(key)}));renderColRows();};
+  $("#col-apply").onclick=()=>{setContactColumns(contactColumns);closeModal();renderContactList();toast("Columns updated");};
+};
+$("#modal-body").addEventListener("change",e=>{
+  if(!e.target.classList.contains("col-vis"))return;
+  contactColumns[+e.target.dataset.idx].visible=e.target.checked;
+});
+$("#modal-body").addEventListener("dragstart",e=>{const r=e.target.closest(".col-row");if(!r)return;colDrag=+r.dataset.idx;r.classList.add("dragging");});
+$("#modal-body").addEventListener("dragend",e=>{e.target.closest(".col-row")?.classList.remove("dragging");colDrag=null;});
+$("#modal-body").addEventListener("dragover",e=>{if(e.target.closest(".col-row")&&colDrag!=null)e.preventDefault();});
+$("#modal-body").addEventListener("drop",e=>{
+  const r=e.target.closest(".col-row");if(!r||colDrag==null)return;e.preventDefault();
+  const to=+r.dataset.idx;if(to===colDrag)return;
+  const [m]=contactColumns.splice(colDrag,1);contactColumns.splice(to,0,m);colDrag=null;renderColRows();
+});
 $("#save-smart-list").onclick=()=>{
   openModal("Save smart list",field("Name","name",{placeholder:"e.g. Hot leads this week"}),
     `<button class="btn" onclick="closeModal()">Cancel</button><button class="btn primary" id="save-sl-go">Save</button>`);
