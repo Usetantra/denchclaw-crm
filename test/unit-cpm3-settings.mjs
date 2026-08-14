@@ -133,6 +133,48 @@ async function main() {
     crossRename.status === 200 && crossRename.json?.contacts_updated === 0 && (t1Unaffected.json?.tags || []).includes('shared'),
     JSON.stringify([crossRename.json, t1Unaffected.json?.tags]));
 
+  // ── M3-7 — custom field definitions extend to Companies and Deals, not just
+  //          Contacts. Values live in each entity's own metadata.custom_fields.
+  const coFieldDef = await req('POST', '/api/crm/settings/custom-fields', { label: 'Account Tier', type: 'select', options: ['Bronze', 'Gold'], entity_type: 'company' });
+  check('M3-7 a company-entity field definition creates', coFieldDef.status === 201 && coFieldDef.json?.field?.entity_type === 'company', JSON.stringify(coFieldDef.json));
+  const contactFieldsList = await req('GET', '/api/crm/settings/custom-fields?entity_type=contact');
+  check('M3-7 it does NOT show up when listing contact-entity fields', !(contactFieldsList.json?.fields || []).some(f => f.id === coFieldDef.json.field.id), JSON.stringify(contactFieldsList.json));
+
+  const newCo = await req('POST', '/api/crm/companies', { name: 'M3 Co ' + RUN });
+  const coPatch = await req('PATCH', `/api/crm/companies/${newCo.json.id}`, { metadata: { custom_fields: { account_tier: 'Gold' } } });
+  check('M3-7 a company\'s custom field value round-trips', coPatch.json?.metadata?.custom_fields?.account_tier === 'Gold', JSON.stringify(coPatch.json?.metadata));
+  const coPatch2 = await req('PATCH', `/api/crm/companies/${newCo.json.id}`, { notes: 'unrelated update' });
+  check('M3-7 a company PATCH that does not mention metadata leaves custom_fields untouched', coPatch2.json?.metadata?.custom_fields?.account_tier === 'Gold', JSON.stringify(coPatch2.json?.metadata));
+
+  const dealFieldDef = await req('POST', '/api/crm/settings/custom-fields', { label: 'Contract Type', type: 'text', entity_type: 'deal' });
+  check('M3-7 a deal-entity field definition creates', dealFieldDef.status === 201 && dealFieldDef.json?.field?.entity_type === 'deal', JSON.stringify(dealFieldDef.json));
+  const dealContact = await contactDb.create({ name: 'M3 Deal Contact', email: `m3deal-${RUN}@ex.test`, company_id: CO });
+  const newDeal = await req('POST', '/api/crm/deals', { title: 'M3 Deal', contact_id: dealContact.id, value: 500 });
+  const dealPatch = await req('PATCH', `/api/crm/deals/${newDeal.json.id}`, { custom_fields: { contract_type: 'Annual' } });
+  check('M3-7 a deal\'s custom field value round-trips', dealPatch.json?.custom_fields?.contract_type === 'Annual', JSON.stringify(dealPatch.json?.custom_fields));
+  const dealGet = await req('GET', `/api/crm/deals/${newDeal.json.id}`);
+  check('M3-7 …and persists across a fresh GET', dealGet.json?.custom_fields?.contract_type === 'Annual', JSON.stringify(dealGet.json?.custom_fields));
+  const dealPatch2 = await req('PATCH', `/api/crm/deals/${newDeal.json.id}`, { notes: 'unrelated' });
+  check('M3-7 a deal PATCH that does not mention custom_fields leaves it untouched', dealPatch2.json?.custom_fields?.contract_type === 'Annual', JSON.stringify(dealPatch2.json?.custom_fields));
+  const dealPatch3 = await req('PATCH', `/api/crm/deals/${newDeal.json.id}`, { custom_fields: {} });
+  check('M3-7 explicitly sending an empty object actually clears it (whole-object replace, not a merge that can never delete)', Object.keys(dealPatch3.json?.custom_fields || { x: 1 }).length === 0, JSON.stringify(dealPatch3.json?.custom_fields));
+
+  // ── M3-8 — Contacts list filters BY custom field and BY tag ────────────────
+  const filterContact = await contactDb.create({ name: 'M3 Filter Target', email: `m3filter-${RUN}@ex.test`, company_id: CO, tags: ['segment-a'] });
+  await req('PATCH', `/api/crm/contacts/${filterContact.id}`, { metadata: { custom_fields: { plan_tier: 'Enterprise' } } });
+  const decoy = await contactDb.create({ name: 'M3 Filter Decoy', email: `m3decoy-${RUN}@ex.test`, company_id: CO, tags: ['segment-b'] });
+  await req('PATCH', `/api/crm/contacts/${decoy.id}`, { metadata: { custom_fields: { plan_tier: 'Starter' } } });
+
+  const cfMatch = await req('GET', `/api/crm/contacts?cf_key=plan_tier&cf_value=Enterprise`);
+  check('M3-8 cf_key/cf_value filters to the matching contact', (cfMatch.json?.contacts || []).some(c => c.id === filterContact.id), JSON.stringify(cfMatch.json?.contacts?.map(c => c.id)));
+  check('M3-8 …and excludes the non-matching one', !(cfMatch.json?.contacts || []).some(c => c.id === decoy.id), JSON.stringify(cfMatch.json?.contacts?.map(c => c.id)));
+  const cfPartial = await req('GET', `/api/crm/contacts?cf_key=plan_tier&cf_value=Enterp`);
+  check('M3-8 the custom-field filter is a "contains" match, not exact-only', (cfPartial.json?.contacts || []).some(c => c.id === filterContact.id), JSON.stringify(cfPartial.json?.contacts?.map(c => c.id)));
+
+  const tagMatch = await req('GET', `/api/crm/contacts?tags=segment-a`);
+  check('M3-8 tags= filters to the contact carrying that tag', (tagMatch.json?.contacts || []).some(c => c.id === filterContact.id), JSON.stringify(tagMatch.json?.contacts?.map(c => c.id)));
+  check('M3-8 …and excludes a contact with a different tag', !(tagMatch.json?.contacts || []).some(c => c.id === decoy.id), JSON.stringify(tagMatch.json?.contacts?.map(c => c.id)));
+
   console.log(results.join('\n'));
   console.log(`\n${pass} passed, ${fail} failed`);
   process.exit(fail ? 1 : 0);

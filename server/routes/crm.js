@@ -178,6 +178,7 @@ async function loadDeals(companyId, { limit = 500 } = {}) {
       pipeline_key: r.pipeline_key || null,
       notes: meta.notes || '',
       activity: meta.activity || [],
+      custom_fields: meta.custom_fields || {},
       companyId: r.company_id,
       created_at: r.created_at,
       updated_at: r.updated_at,
@@ -271,7 +272,7 @@ router.get('/contacts', async (req, res) => {
   try {
     const companyId = getUserCompanyId(req);
     if (!companyId) return res.status(401).json({ error: 'Authentication required' });
-    const { score, source, search, stage, limit, offset, tags, phone, sort, dir } = req.query;
+    const { score, source, search, stage, limit, offset, tags, phone, sort, dir, cf_key, cf_value } = req.query;
     const paginated = limit !== undefined || offset !== undefined;
 
     // tags overlap filter — accepts ?tags=a,b or repeated ?tags=a&tags=b.
@@ -288,6 +289,7 @@ router.get('/contacts', async (req, res) => {
       sort, dir,
       ...(tagList && tagList.length ? { tags: tagList } : {}),
       ...(phone ? { phone } : {}),
+      ...(cf_key ? { customFieldKey: cf_key, customFieldValue: cf_value } : {}),
       ...(paginated ? { limit, offset } : {}),
     });
 
@@ -1042,6 +1044,7 @@ router.get('/deals/:id', async (req, res) => {
       id: row.id, title: row.title, contact_id: row.contact_id,
       contact_name: meta.contact_name || '', value: parseFloat(row.value) || 0,
       stage: row.stage, notes: meta.notes || '', activity: meta.activity || [],
+      custom_fields: meta.custom_fields || {},
       companyId: row.company_id, created_at: row.created_at, updated_at: row.updated_at,
       closed_at: meta.closed_at || null,
     });
@@ -1065,6 +1068,7 @@ router.patch('/deals/:id', async (req, res) => {
       contact_name: meta.contact_name || '', value: parseFloat(row.value) || 0,
       stage: row.stage, pipeline_key: row.pipeline_key || null,
       notes: meta.notes || '', activity: meta.activity || [],
+      custom_fields: meta.custom_fields || {},
       companyId: row.company_id, created_at: row.created_at, updated_at: row.updated_at,
       closed_at: meta.closed_at || null,
     };
@@ -1074,6 +1078,11 @@ router.patch('/deals/:id', async (req, res) => {
     if (updates.title) deal.title = updates.title;
     if (updates.value !== undefined) deal.value = updates.value;
     if (updates.notes) deal.notes = updates.notes;
+    // Whole-object replace, not a per-key merge: the caller (the deal drawer)
+    // always sends the complete current custom_fields set, the same contract
+    // contacts.js uses — so removing a field in the UI actually removes it,
+    // rather than a deep-merge making a deleted key un-deletable.
+    if (updates.custom_fields !== undefined) deal.custom_fields = updates.custom_fields;
     if (updates.contact_id) deal.contact_id = updates.contact_id;
     if (updates.contact_name) deal.contact_name = updates.contact_name;
     // Move a deal to a different pipeline (null / 'sales' => built-in sales).
@@ -1203,7 +1212,7 @@ router.patch('/deals/:id', async (req, res) => {
     const updateResult = await query(
       `UPDATE deals SET title=$1, value=$2, stage=$3, contact_id=$4, pipeline_key=$5, metadata=$6, updated_at=NOW() WHERE id=$7 AND company_id=$8`,
       [deal.title, deal.value, deal.stage, deal.contact_id, deal.pipeline_key,
-       JSON.stringify({ contact_name: deal.contact_name, notes: deal.notes, activity: deal.activity, closed_at: deal.closed_at }),
+       JSON.stringify({ contact_name: deal.contact_name, notes: deal.notes, activity: deal.activity, closed_at: deal.closed_at, custom_fields: deal.custom_fields }),
        deal.id, companyId]
     );
     // The row was deleted (or moved to another tenant) between the SELECT at

@@ -551,6 +551,9 @@
       <input class="search" id="contact-search" type="search" placeholder="Search name, email, company…">
       <select id="filter-score"><option value="">All scores</option><option>hot</option><option>warm</option><option>neutral</option><option>cold</option></select>
       <select id="filter-source"><option value="">All sources</option></select>
+      <select id="filter-tag"><option value="">All tags</option></select>
+      <select id="filter-cf-key"><option value="">Any custom field…</option></select>
+      <input id="filter-cf-value" placeholder="value" style="display:none;flex:0 0 120px;min-width:0;border:1px solid var(--hair);border-radius:6px;padding:8px 10px;font-size:12px;font-family:var(--sans)">
       <span class="spacer"></span>
       <span class="muted" style="font-size:11px">Select rows below for bulk actions (stage move, tag, export, delete) →</span>
     </div>
@@ -770,7 +773,12 @@
   <div id="settings-sub-fields" style="display:none">
     <div class="settings-card" style="max-width:760px">
       <h3>Custom Fields</h3>
-      <p class="muted" style="font-size:12px;margin:2px 0 16px;line-height:1.5">Define fields once here and they render as proper typed inputs (not just free text) in every contact's Custom fields section. Values live per-contact — deleting a definition stops offering the field, it doesn't erase anyone's data.</p>
+      <p class="muted" style="font-size:12px;margin:2px 0 16px;line-height:1.5">Define fields once here and they render as proper typed inputs (not just free text) in the matching entity's Custom fields section. Values live per-record — deleting a definition stops offering the field, it doesn't erase anyone's data.</p>
+      <div class="cv-chan" id="cf-entity-tabs" style="margin-bottom:14px">
+        <button type="button" data-entity="contact" class="active">Contacts</button>
+        <button type="button" data-entity="company">Companies</button>
+        <button type="button" data-entity="deal">Opportunities</button>
+      </div>
       <div id="cf-list"><div class="muted">loading…</div></div>
       <button class="btn sm primary" id="cf-add" style="margin-top:14px">+ New custom field</button>
     </div>
@@ -1108,17 +1116,17 @@ $("#m-task-add").addEventListener("click",()=>{
   };
 });
 
-// ── Custom fields (contact drawer) ────────────────────────────────────────────
-// Fields DEFINED in Settings render as a proper typed input (select/date/
-// number/checkbox); anything in metadata.custom_fields with no matching
-// definition (older ad-hoc entries, or a field whose definition was since
-// deleted — deleting a definition never erases the data) still renders as a
-// free-text key/value row below, never silently dropped.
-let contactCustomFieldDefs=[];
-function renderCustomFields(fields){
-  const values=fields||{};
-  const defKeys=new Set(contactCustomFieldDefs.map(d=>d.key));
-  const definedHtml=contactCustomFieldDefs.map(d=>{
+// ── Custom fields (generic — reused by the Contact drawer, Company modal, and
+// Deal detail modal) ──────────────────────────────────────────────────────────
+// Fields DEFINED in Settings (per entity_type) render as a proper typed input
+// (select/date/number/checkbox); anything in metadata.custom_fields with no
+// matching definition (older ad-hoc entries, or a field whose definition was
+// since deleted — deleting a definition never erases the data) still renders
+// as a free-text key/value row below, never silently dropped.
+function renderCustomFieldsInto(containerId,defs,values){
+  values=values||{};
+  const defKeys=new Set((defs||[]).map(d=>d.key));
+  const definedHtml=(defs||[]).map(d=>{
     const v=values[d.key];
     let input;
     if(d.type==="select"){
@@ -1137,36 +1145,51 @@ function renderCustomFields(fields){
       <div class="cvf"><label>Value</label><input class="cf-val" value="${esc(v==null?"":v)}" placeholder="value"></div>
       <button class="btn sm danger" data-cf-del style="flex:0 0 auto">Remove</button>
     </div>`).join("");
-  $("#m-custom").innerHTML=
+  $(`#${containerId}`).innerHTML=
     (definedHtml?`<div class="fgrid" style="margin-bottom:10px">${definedHtml}</div>`:"")
     +(adhocHtml||(!definedHtml?`<div class="muted" style="font-size:12px;margin-bottom:8px">No custom fields yet. Define one in Settings, or add an ad-hoc field below.</div>`:""));
 }
-function collectCustomFields(){
+function collectCustomFieldsFrom(containerId){
   const out={};
-  $("#m-custom").querySelectorAll(".cf-def-val").forEach(el=>{
+  const root=$(`#${containerId}`);
+  root.querySelectorAll(".cf-def-val").forEach(el=>{
     const k=el.dataset.key;
     if(el.type==="checkbox"){out[k]=el.checked?"true":"false";return;}
     const v=el.value.trim();
     if(v)out[k]=v;
   });
-  $("#m-custom").querySelectorAll(".cf-row").forEach(row=>{
+  root.querySelectorAll(".cf-row").forEach(row=>{
     const k=row.querySelector(".cf-key").value.trim();
     if(k)out[k]=row.querySelector(".cf-val").value.trim();
   });
   return out;
 }
-$("#m-custom").addEventListener("click",e=>{
-  if(e.target.closest("[data-cf-del]"))e.target.closest(".cf-row").remove();
-});
-$("#m-custom-add").addEventListener("click",()=>{
-  const row=document.createElement("div");
-  row.className="cvrow cf-row";row.style.cssText="margin-bottom:8px;align-items:flex-end";
-  row.innerHTML=`<div class="cvf"><label>Field name</label><input class="cf-key" placeholder="e.g. birthday"></div>
-    <div class="cvf"><label>Value</label><input class="cf-val" placeholder="value"></div>
-    <button class="btn sm danger" data-cf-del style="flex:0 0 auto">Remove</button>`;
-  $("#m-custom").appendChild(row);
-  row.querySelector(".cf-key").focus();
-});
+// Delegated once per container id — safe to call repeatedly for containers
+// that live inside the reusable #modal-body (company/deal), since it's always
+// the same element instance; the contact drawer's #m-custom is a static node.
+function wireCustomFieldsContainer(containerId,addBtnId){
+  const root=$(`#${containerId}`);
+  if(root&&!root.dataset.cfWired){
+    root.dataset.cfWired="1";
+    root.addEventListener("click",e=>{if(e.target.closest("[data-cf-del]"))e.target.closest(".cf-row").remove();});
+  }
+  const addBtn=$(`#${addBtnId}`);
+  if(addBtn)addBtn.onclick=()=>{
+    const row=document.createElement("div");
+    row.className="cvrow cf-row";row.style.cssText="margin-bottom:8px;align-items:flex-end";
+    row.innerHTML=`<div class="cvf"><label>Field name</label><input class="cf-key" placeholder="e.g. birthday"></div>
+      <div class="cvf"><label>Value</label><input class="cf-val" placeholder="value"></div>
+      <button class="btn sm danger" data-cf-del style="flex:0 0 auto">Remove</button>`;
+    $(`#${containerId}`).appendChild(row);
+    row.querySelector(".cf-key").focus();
+  };
+}
+// Thin contact-drawer-specific wrappers — every existing call site
+// (openContact's Save handler, etc.) keeps working unchanged.
+let contactCustomFieldDefs=[];
+function renderCustomFields(fields){renderCustomFieldsInto("m-custom",contactCustomFieldDefs,fields);}
+function collectCustomFields(){return collectCustomFieldsFrom("m-custom");}
+wireCustomFieldsContainer("m-custom","m-custom-add");
 async function loadOlderActivity(){
   const id=$("#modal-wrap").dataset.contact;if(!id)return;
   const btn=$("#feed-more");if(btn){btn.disabled=true;btn.textContent="Loading…";}
@@ -1288,7 +1311,9 @@ function initBoardDnD(){
   board.addEventListener("click",e=>{
     if(dragInfo)return; // a drag just happened — not a click
     const card=e.target.closest(".gcard[data-contact]");
-    if(card&&card.dataset.contact)openContact(card.dataset.contact);
+    if(card&&card.dataset.contact)return openContact(card.dataset.contact);
+    const dealCard=e.target.closest('.gcard[data-type="deal"]');
+    if(dealCard&&dealCard.dataset.id)dealDetailModal(dealCard.dataset.id);
   });
   board.addEventListener("dragover",e=>{
     const col=e.target.closest(".gcol");if(!col||!dragInfo||col.dataset.type!==dragInfo.type)return;
@@ -2231,9 +2256,10 @@ async function loadBusinessProfile(){
 }
 
 // ── Custom Fields ─────────────────────────────────────────────────────────────
+let cfEntity="contact";
 async function loadCustomFields(){
   let fields=[];
-  try{fields=(await get("settings/custom-fields")).fields||[];}
+  try{fields=(await get(`settings/custom-fields?entity_type=${cfEntity}`)).fields||[];}
   catch(e){$("#cf-list").innerHTML=`<div class="empty">${esc(e.message)}</div>`;return;}
   const typeLabel={text:"Text",number:"Number",date:"Date",select:"Dropdown",checkbox:"Checkbox"};
   $("#cf-list").innerHTML=fields.length?`<table><thead><tr><th>Label</th><th>Type</th><th>Key</th><th></th></tr></thead><tbody>${
@@ -2243,14 +2269,21 @@ async function loadCustomFields(){
       <td class="muted" style="font-family:monospace;font-size:12px">${esc(f.key)}</td>
       <td style="text-align:right"><button class="btn sm danger" data-cf-del="${esc(f.id)}">Delete</button></td>
     </tr>`).join("")
-  }</tbody></table>`:`<div class="empty">No custom fields defined yet.</div>`;
+  }</tbody></table>`:`<div class="empty">No custom fields defined yet for this entity.</div>`;
   $("#cf-list").querySelectorAll("[data-cf-del]").forEach(b=>b.onclick=()=>{
-    confirmDelete("Delete this custom field? Existing contact values are kept but the field stops appearing.",async()=>{
+    confirmDelete("Delete this custom field? Existing records keep their value but the field stops appearing.",async()=>{
       await del("settings/custom-fields/"+b.dataset.cfDel);toast("Deleted");loadCustomFields();});
   });
 }
+$("#cf-entity-tabs").addEventListener("click",e=>{
+  const b=e.target.closest("button[data-entity]");if(!b)return;
+  cfEntity=b.dataset.entity;
+  $$("#cf-entity-tabs button").forEach(x=>x.classList.toggle("active",x===b));
+  loadCustomFields();
+});
 $("#cf-add").onclick=()=>{
-  openModal("New custom field",
+  const entityLabel={contact:"Contacts",company:"Companies",deal:"Opportunities"}[cfEntity];
+  openModal(`New custom field · ${entityLabel}`,
     field("Label","label",{placeholder:"e.g. Birthday"})+
     field("Type","type",{type:"select",value:"text",options:[
       {value:"text",label:"Text"},{value:"number",label:"Number"},{value:"date",label:"Date"},
@@ -2261,7 +2294,7 @@ $("#cf-add").onclick=()=>{
   $("#cf-save").onclick=async()=>{
     const v=formValues();if(!v.label)return toast("Label required",true);
     const options=(v.options||"").split(",").map(s=>s.trim()).filter(Boolean);
-    try{await post("settings/custom-fields",{label:v.label,type:v.type,options});closeModal();toast("Field created");loadCustomFields();}
+    try{await post("settings/custom-fields",{label:v.label,type:v.type,options,entity_type:cfEntity});closeModal();toast("Field created");loadCustomFields();}
     catch(e){toast(e.message,true);}
   };
 };
@@ -2644,14 +2677,30 @@ function contactQuery(){const p=new URLSearchParams();
   const s=$("#contact-search").value.trim();if(s)p.set("search",s);
   const sc=$("#filter-score").value;if(sc)p.set("score",sc);
   const so=$("#filter-source").value;if(so)p.set("source",so);
+  const tg=$("#filter-tag").value;if(tg)p.set("tags",tg);
+  const cfk=$("#filter-cf-key").value;
+  if(cfk){p.set("cf_key",cfk);const cfv=$("#filter-cf-value").value.trim();if(cfv)p.set("cf_value",cfv);}
   p.set("sort",cSort);p.set("dir",cDir);
   p.set("limit",CONTACT_PAGE_SIZE);p.set("offset",cOffset);
   return p.toString();}
+let _tagFilterFilled=false,_cfFilterFilled=false,contactFieldDefsCache=[];
 async function loadContacts(resetPage){
   if(resetPage)cOffset=0;
   showSkeleton($("#contacts-list"),6);
   try{
     if(!_srcFilled){$("#filter-source").insertAdjacentHTML("beforeend",SOURCES.map(s=>`<option value="${s}">${nice(s)}</option>`).join(""));_srcFilled=true;}
+    if(!_tagFilterFilled){
+      _tagFilterFilled=true;
+      try{const tags=(await get("settings/tags")).tags||[];
+        $("#filter-tag").insertAdjacentHTML("beforeend",tags.map(t=>`<option value="${esc(t.tag)}">${esc(t.tag)} (${t.contact_count})</option>`).join(""));
+      }catch{}
+    }
+    if(!_cfFilterFilled){
+      _cfFilterFilled=true;
+      try{contactFieldDefsCache=(await get("settings/custom-fields?entity_type=contact")).fields||[];
+        $("#filter-cf-key").insertAdjacentHTML("beforeend",contactFieldDefsCache.map(f=>`<option value="${esc(f.key)}">${esc(f.label)}</option>`).join(""));
+      }catch{}
+    }
     const r=await get(`contacts?${contactQuery()}`);
     cList=r.contacts||r.data||[];cTotal=r.total??cList.length;cSel.clear();renderContactList();renderContactPager();
   }catch(e){showRetry($("#contacts-list"),e.message,()=>loadContacts());}
@@ -2703,7 +2752,38 @@ $("#contacts-list").addEventListener("click",e=>{
   if(e.target.closest(".checkcell"))return; // checkbox / dots toggle, not open
   const tr=e.target.closest("tr[data-contact]");if(tr)openContact(tr.dataset.contact);
 });
-["#contact-search","#filter-score","#filter-source"].forEach(s=>$(s).addEventListener(s==="#contact-search"?"input":"change",debounce(()=>{$("#smart-list-sel").value="";loadContacts(true);},250)));
+["#contact-search","#filter-score","#filter-source","#filter-tag"].forEach(s=>$(s).addEventListener(s==="#contact-search"?"input":"change",debounce(()=>{$("#smart-list-sel").value="";loadContacts(true);},250)));
+// Custom-field filter: the value control always matches the chosen field's
+// type (a <select> with its own options for type=select, a plain text input
+// otherwise) — rebuilt from scratch on every change rather than mutated in
+// place, so switching FROM a select-type field back to a text-type one can't
+// leave a stray <select> behind.
+function rebuildCfValueControl(){
+  const key=$("#filter-cf-key").value;
+  const def=contactFieldDefsCache.find(f=>f.key===key);
+  const old=$("#filter-cf-value");
+  if(!key){
+    const input=document.createElement("input");
+    input.id="filter-cf-value";input.placeholder="value";input.style.cssText="display:none;flex:0 0 120px;min-width:0;border:1px solid var(--hair);border-radius:6px;padding:8px 10px;font-size:12px;font-family:var(--sans)";
+    old.replaceWith(input);
+    input.addEventListener("input",debounce(()=>loadContacts(true),300));
+    return;
+  }
+  if(def&&def.type==="select"){
+    const sel=document.createElement("select");
+    sel.id="filter-cf-value";sel.style.cssText="flex:0 0 140px;min-width:0;border:1px solid var(--hair);border-radius:6px;padding:8px 10px;font-size:12px;font-family:var(--sans)";
+    sel.innerHTML=`<option value="">— any —</option>`+(def.options||[]).map(o=>`<option value="${esc(o)}">${esc(o)}</option>`).join("");
+    old.replaceWith(sel);
+    sel.addEventListener("change",()=>loadContacts(true));
+  }else{
+    const input=document.createElement("input");
+    input.id="filter-cf-value";input.placeholder=def&&def.type==="date"?"YYYY-MM-DD":"value";
+    input.style.cssText="flex:0 0 120px;min-width:0;border:1px solid var(--hair);border-radius:6px;padding:8px 10px;font-size:12px;font-family:var(--sans)";
+    old.replaceWith(input);
+    input.addEventListener("input",debounce(()=>loadContacts(true),300));
+  }
+}
+$("#filter-cf-key").addEventListener("change",()=>{rebuildCfValueControl();loadContacts(true);});
 $("#new-contact").onclick=()=>contactModal();
 
 // ── Smart lists — saved (search, score, source, sort, dir) combos, per browser.
@@ -3006,16 +3086,24 @@ async function openCompanyDetail(id){
 $("#company-search").addEventListener("input",debounce(()=>loadCompanies(true),250));
 $("#new-company").onclick=()=>companyModal();
 $("#company-bulk-del").onclick=()=>confirmDelete(`Delete ${coSel.size} compan${coSel.size>1?"ies":"y"}?`,async()=>{await post("companies/bulk",{action:"delete",ids:[...coSel]});toast("Deleted");loadCompanies();});
-function companyModal(c){
+async function companyModal(c){
   const edit=!!c;
+  let companyFieldDefs=[];
+  if(edit){try{companyFieldDefs=(await get("settings/custom-fields?entity_type=company")).fields||[];}catch{}}
   openModal(edit?"Edit company":"New company",
     field("Name","name",{value:c?.name})+
     `<div class="field-row">${field("Industry","industry",{value:c?.industry})}${field("Size","size",{value:c?.size,placeholder:"e.g. 11-50"})}</div>`+
     `<div class="field-row">${field("Website","website",{value:c?.website})}${field("Location","location",{value:c?.location})}</div>`+
-    field("Notes","notes",{type:"textarea",value:c?.notes}),
+    field("Notes","notes",{type:"textarea",value:c?.notes})+
+    (edit?`<div class="sechead" style="margin:14px 0 10px"><span class="eyebrow">Custom fields</span><span class="rule"></span></div>
+      <div id="co-custom"></div>
+      <button type="button" class="btn sm" id="co-custom-add" style="margin-top:8px">+ Add field</button>`:""),
     `<button class="btn" onclick="closeModal()">Cancel</button><button class="btn primary" id="save-co">${edit?"Save":"Create"}</button>`);
+  if(edit){renderCustomFieldsInto("co-custom",companyFieldDefs,c?.metadata?.custom_fields);wireCustomFieldsContainer("co-custom","co-custom-add");}
   $("#save-co").onclick=async()=>{const v=formValues();if(!v.name)return toast("Name required",true);
-    try{if(edit)await patch(`companies/${c.id}`,v);else await post("companies",v);closeModal();toast(edit?"Saved":"Company created");loadCompanies();}
+    const body={name:v.name,industry:v.industry,size:v.size,website:v.website,location:v.location,notes:v.notes};
+    if(edit)body.metadata={custom_fields:collectCustomFieldsFrom("co-custom")};
+    try{if(edit)await patch(`companies/${c.id}`,body);else await post("companies",body);closeModal();toast(edit?"Saved":"Company created");loadCompanies();}
     catch(e){toast(e.message,true);}};
 }
 
@@ -3110,6 +3198,33 @@ $("#new-deal").onclick=async()=>{
     try{await post("deals",{title:v.title,value:parseFloat(v.value)||0,contact_id:v.contact_id,contact_name:picked?.name||picked?.email||"",company:picked?.company_name||"",stage:v.stage,pipeline_key:selDealPipe});closeModal();toast("Opportunity created");loadBoard();}
     catch(e){toast(e.message,true);}};
 };
+
+// ── Deal detail modal (click a deal card) ─────────────────────────────────────
+async function dealDetailModal(id){
+  openModal("Opportunity","<div class='muted'>loading…</div>","<button class=\"btn\" onclick=\"closeModal()\">Close</button>");
+  let d,dealFieldDefs=[];
+  try{
+    [d,dealFieldDefs]=await Promise.all([get(`deals/${id}`),get("settings/custom-fields?entity_type=deal").then(r=>r.fields||[]).catch(()=>[])]);
+  }catch(e){$("#modal-body").innerHTML=`<div class="empty">${esc(e.message)}</div>`;return;}
+  $("#modal-title").textContent=d.title||"Opportunity";
+  $("#modal-body").innerHTML=
+    `<div class="field-row">${field("Title","title",{value:d.title})}${field("Value ($)","value",{type:"number",value:d.value})}</div>
+     ${d.contact_name?`<p class="muted" style="font-size:12px;margin:0 0 10px">Contact: <b>${esc(d.contact_name)}</b> · Stage: <b>${esc(nice(d.stage))}</b> (drag the card on the board to change stage)</p>`:""}
+     ${field("Notes","notes",{type:"textarea",value:d.notes})}
+     <div class="sechead" style="margin:14px 0 10px"><span class="eyebrow">Custom fields</span><span class="rule"></span></div>
+     <div id="deal-custom"></div>
+     <button type="button" class="btn sm" id="deal-custom-add" style="margin-top:8px">+ Add field</button>`;
+  renderCustomFieldsInto("deal-custom",dealFieldDefs,d.custom_fields);
+  wireCustomFieldsContainer("deal-custom","deal-custom-add");
+  $("#modal-foot").innerHTML=`<button class="btn" onclick="closeModal()">Cancel</button><button class="btn primary" id="save-deal-detail">Save</button>`;
+  $("#save-deal-detail").onclick=async()=>{
+    const v=formValues();
+    try{
+      await patch(`deals/${id}`,{title:v.title,value:parseFloat(v.value)||0,notes:v.notes,custom_fields:collectCustomFieldsFrom("deal-custom")});
+      closeModal();toast("Saved");loadBoard();
+    }catch(e){toast(e.message,true);}
+  };
+}
 
 // ── Pipelines management ──────────────────────────────────────────────────────
 let PIPES=[],editPipeKey=null,editStages=[];

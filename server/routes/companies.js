@@ -31,6 +31,7 @@ function mapRow(r) {
     pipeline_value: parseFloat(r.pipeline_value) || 0,
     deal_count: r.deal_count ?? 0,
     deal_value: parseFloat(r.deal_value) || 0,
+    metadata: (typeof r.metadata === 'string' ? JSON.parse(r.metadata) : r.metadata) || {},
     created_at: r.created_at, updated_at: r.updated_at,
   };
 }
@@ -116,7 +117,7 @@ router.get('/:id', async (req, res) => {
 router.patch('/:id', async (req, res) => {
   try {
     const companyId = getUserCompanyId(req);
-    const { rows: found } = await query('SELECT id FROM companies WHERE id = $1 AND company_id = $2', [req.params.id, companyId]);
+    const { rows: found } = await query('SELECT id, metadata FROM companies WHERE id = $1 AND company_id = $2', [req.params.id, companyId]);
     if (!found.length) return res.status(404).json({ error: 'company not found' });
     const body = req.body || {};
     const sets = [];
@@ -124,6 +125,14 @@ router.patch('/:id', async (req, res) => {
     let i = 1;
     for (const f of EDITABLE) {
       if (body[f] !== undefined) { sets.push(`${f} = $${i++}`); params.push(f === 'name' ? String(body[f]).trim() : body[f]); }
+    }
+    // metadata is a shared JSONB bag (custom fields live under
+    // metadata.custom_fields) — MERGE at the top level like contacts.js does,
+    // never overwrite, so a partial PATCH can't wipe a key another writer owns.
+    if (body.metadata !== undefined) {
+      const existing = (typeof found[0].metadata === 'string' ? JSON.parse(found[0].metadata) : found[0].metadata) || {};
+      const merged = { ...existing, ...(body.metadata || {}) };
+      sets.push(`metadata = $${i++}`); params.push(JSON.stringify(merged));
     }
     if (!sets.length) return res.status(400).json({ error: 'no editable fields provided' });
     sets.push('updated_at = now()');

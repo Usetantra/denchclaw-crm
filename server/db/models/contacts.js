@@ -50,6 +50,17 @@ async function list(companyId, filters = {}) {
     conditions.push(`tags && $${idx++}`);
     params.push(Array.isArray(filters.tags) ? filters.tags : [filters.tags]);
   }
+  // Custom field filter — matches on the free-form string stored under
+  // metadata.custom_fields[key] (every value, regardless of the field's
+  // declared type, round-trips through here as a string — dates as
+  // 'YYYY-MM-DD', checkboxes as 'true'/'false'). ILIKE rather than exact
+  // match: a select/checkbox value picked from a dropdown still matches
+  // exactly (no wildcards in it), while free text becomes a "contains"
+  // search — useful for both without needing two separate query params.
+  if (filters.customFieldKey && filters.customFieldValue !== undefined && filters.customFieldValue !== '') {
+    conditions.push(`metadata->'custom_fields'->>$${idx++} ILIKE $${idx++}`);
+    params.push(filters.customFieldKey, `%${filters.customFieldValue}%`);
+  }
   if (filters.search) {
     conditions.push(`(name ILIKE $${idx} OR email ILIKE $${idx} OR company_name ILIKE $${idx})`);
     params.push(`%${filters.search}%`);
