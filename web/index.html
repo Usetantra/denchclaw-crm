@@ -625,8 +625,8 @@
           <button data-f="unread">Unread</button>
           <button data-f="starred">Starred</button>
         </div>
-        <div style="display:flex;gap:6px">
-          <select id="ib-channel" style="flex:0 0 auto;font-size:11px;padding:4px 6px;border:1px solid var(--hair);border-radius:var(--radius)">
+        <div style="display:flex;gap:6px;margin-bottom:6px">
+          <select id="ib-channel" style="flex:1 1 0;min-width:0;font-size:11px;padding:4px 6px;border:1px solid var(--hair);border-radius:var(--radius)">
             <option value="">All channels</option>
             <option value="email">Email</option>
             <option value="linkedin">LinkedIn</option>
@@ -634,13 +634,13 @@
             <option value="sms">SMS</option>
             <option value="ai_call">Call</option>
           </select>
-          <select id="ib-assignee-filter" style="flex:0 0 auto;font-size:11px;padding:4px 6px;border:1px solid var(--hair);border-radius:var(--radius)">
+          <select id="ib-assignee-filter" style="flex:1 1 0;min-width:0;font-size:11px;padding:4px 6px;border:1px solid var(--hair);border-radius:var(--radius)">
             <option value="">Anyone</option>
             <option value="human">Assigned to human</option>
             <option value="ai">Assigned to AI</option>
           </select>
-          <input id="ib-q" placeholder="Search people & messages" style="flex:1 1 auto;min-width:0;font-size:12px;padding:4px 8px;border:1px solid var(--hair);border-radius:var(--radius)">
         </div>
+        <input id="ib-q" placeholder="Search people &amp; messages" style="width:100%;box-sizing:border-box;font-size:12px;padding:5px 8px;border:1px solid var(--hair);border-radius:var(--radius)">
       </div>
       <div class="ib-scroll" id="ib-list"><div class="ib-empty">Loading…</div></div>
     </div>
@@ -1583,7 +1583,7 @@ async function renderIbComposer(d){
     </div>
     ${ibTab==="reply"?`<div style="display:flex;align-items:center;gap:8px;margin-bottom:8px;flex-wrap:wrap">
       <div class="cv-chan" id="ib-chan-pills">
-        ${chans.map(ch=>`<button type="button" data-ch="${esc(ch)}" class="${ch===ibChan?"active":""}" ${blocked.has(ch)?"disabled title=\"suppressed on this channel\"":""}>${esc(nice(ch))}${(d.deliverable_channels||[]).includes(ch)?"":" ·logs only"}</button>`).join("")}
+        ${chans.map(ch=>`<button type="button" data-ch="${esc(ch)}" class="${ch===ibChan?"active":""}" ${blocked.has(ch)?"disabled title=\"suppressed on this channel\"":""}>${esc(nice(ch))}${(d.deliverable_channels||[]).includes(ch)?"":" · logs only"}</button>`).join("")}
       </div>
       <span class="muted" style="font-size:11px" id="ib-from">${fromFor(ibChan)?"From: "+esc(fromFor(ibChan)):"⚠ no sender configured for "+esc(nice(ibChan))}</span>
     </div>`:""}
