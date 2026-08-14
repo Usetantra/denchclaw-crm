@@ -49,9 +49,10 @@ const CHANNELS = ['email', 'sms', 'whatsapp', 'linkedin', 'ai_call', 'call'];
 // last_read_at. routes/conversations.js stamps `last_message_at = now()` on
 // EVERY insert including outbound, so any predicate built on last_message_at
 // would re-flag a contact unread from the operator's own reply.
-async function listInbox(companyId, { filter = 'mine', channel = null, q = null, limit = 50, cursor = null } = {}) {
+async function listInbox(companyId, { filter = 'mine', channel = null, q = null, limit = 50, cursor = null, assignee = null } = {}) {
   if (!companyId) throw new Error('inbox.listInbox requires companyId');
   if (channel && !CHANNELS.includes(channel)) throw new Error(`inbox.listInbox: unknown channel '${channel}'`);
+  if (assignee && !ASSIGNEES.includes(assignee)) throw new Error(`inbox.listInbox: unknown assignee '${assignee}'`);
   const lim = Math.min(Math.max(parseInt(limit, 10) || 50, 1), 200);
 
   const params = [companyId];
@@ -85,6 +86,7 @@ async function listInbox(companyId, { filter = 'mine', channel = null, q = null,
   if (filterClause === undefined) throw new Error(`inbox.listInbox: unknown filter '${filter}'`);
 
   const channelClause = channel ? `AND ${p(channel)} = ANY(agg.channels)` : '';
+  const assigneeClause = assignee ? `AND ${p(assignee)} = ANY(agg.assignees)` : '';
   const searchClause = q
     ? `AND (ct.name ILIKE ${p('%' + q + '%')} OR ct.email ILIKE ${p('%' + q + '%')}
            OR EXISTS (SELECT 1 FROM conversations cvq
@@ -95,7 +97,7 @@ async function listInbox(companyId, { filter = 'mine', channel = null, q = null,
 
   const sql = `
     WITH conv AS (
-      SELECT cv.id, cv.contact_id, cv.channel, cv.starred, cv.last_read_at
+      SELECT cv.id, cv.contact_id, cv.channel, cv.starred, cv.last_read_at, cv.assignee
         FROM conversations cv
        WHERE cv.company_id = $1
     ),
@@ -146,6 +148,8 @@ async function listInbox(companyId, { filter = 'mine', channel = null, q = null,
              COALESCE((SELECT bool_or(pc.starred) FROM per_conv pc WHERE pc.contact_id = i.contact_id), false) AS starred,
              COALESCE((SELECT array_agg(DISTINCT pc.channel) FROM per_conv pc WHERE pc.contact_id = i.contact_id),
                       ARRAY[]::text[]) AS channels,
+             COALESCE((SELECT array_agg(DISTINCT cv3.assignee) FROM conv cv3 WHERE cv3.contact_id = i.contact_id),
+                      ARRAY[]::text[]) AS assignees,
              -- Ordered by (created_at, id) so two communications sharing a
              -- timestamp — plausible across two channels — resolve
              -- deterministically instead of flapping between page loads.
@@ -172,13 +176,13 @@ async function listInbox(companyId, { filter = 'mine', channel = null, q = null,
     )
     SELECT ct.id AS contact_id, ct.name, ct.email, ct.company_name, ct.tags,
            ct.lead_score, ct.lead_score_numeric, ct.marketing_stage, ct.deal_stage,
-           agg.is_unread, agg.starred, agg.channels,
+           agg.is_unread, agg.starred, agg.channels, agg.assignees,
            agg.last_direction, agg.last_channel, agg.last_body, agg.last_message_at,
            CASE agg.last_direction WHEN 'inbound' THEN 'mine' WHEN 'outbound' THEN 'theirs' ELSE NULL END AS turn
       FROM agg
       JOIN contacts ct ON ct.id = agg.contact_id AND ct.company_id = $1
      WHERE ct.deleted_at IS NULL
-       ${filterClause} ${channelClause} ${searchClause} ${cursorClause}
+       ${filterClause} ${channelClause} ${assigneeClause} ${searchClause} ${cursorClause}
      ORDER BY COALESCE(agg.last_message_at, '-infinity'::timestamptz) DESC, ct.id DESC
      LIMIT ${p(lim)}`;
 
@@ -357,6 +361,23 @@ async function setStarred(companyId, contactId, starred) {
   return result.rowCount;
 }
 
+// Mirrors setStarred exactly: a contact's unified thread can span several
+// conversations (one per channel, per the header note), so "assign this
+// contact to me" reassigns every one of them rather than inventing a
+// contact-level assignee column that would drift from the per-conversation
+// truth conversations.js already reads and writes.
+const ASSIGNEES = ['ai', 'human'];
+async function setAssignee(companyId, contactId, assignee) {
+  if (!companyId) throw new Error('inbox.setAssignee requires companyId');
+  if (!ASSIGNEES.includes(assignee)) throw new Error(`inbox.setAssignee: assignee must be one of ${ASSIGNEES.join(', ')}`);
+  const result = await query(
+    `UPDATE conversations SET assignee = $3, updated_at = now()
+      WHERE company_id = $1 AND contact_id = $2`,
+    [companyId, contactId, assignee]
+  );
+  return result.rowCount;
+}
+
 // ─── deal scope (D6) ─────────────────────────────────────────────────────────
 // "Open" has exactly one definition in this codebase: the deal's stage is NOT
 // one of its pipeline's terminal stages. That is what the dispatcher's stage
@@ -430,7 +451,7 @@ async function getContactContext(companyId, contactId) {
     [contactId, companyId]
   );
   const convs = await query(
-    `SELECT id, channel, status, starred, last_read_at, last_message_at
+    `SELECT id, channel, status, starred, assignee, last_read_at, last_message_at
        FROM conversations WHERE contact_id = $1 AND company_id = $2
       ORDER BY last_message_at DESC NULLS LAST`,
     [contactId, companyId]
@@ -439,7 +460,7 @@ async function getContactContext(companyId, contactId) {
 }
 
 module.exports = {
-  CHANNELS,
-  listInbox, getThread, markRead, setStarred,
+  CHANNELS, ASSIGNEES,
+  listInbox, getThread, markRead, setStarred, setAssignee,
   listOpenDeals, validateDealScope, getContactContext,
 };

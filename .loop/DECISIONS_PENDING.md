@@ -72,6 +72,21 @@ Operator may override and demand a CP4a re-open.**
 (the resolver is already reachable from there); or make readiness count queued unresolved rows so
 `sendable` cannot lie. A one-shot re-resolve endpoint unblocks operators but leaves the trap armed.
 
+**RESOLVED — 2026-08-01 06:14:56, commit `20b14e7`** ("fix(crm): one manual-stage gate, and authoring
+copy actually un-sticks a ladder"), about 10 minutes after this entry was filed. Both parts of the
+suggested fix landed, not just one: `server/db/models/dispatch.js`'s claim door now calls the new
+`templatesDb.reresolveUnresolvedJobs()` (`server/db/models/templates.js`) before claiming, so authoring
+copy after the fact really does un-stick a frozen job (closes F1); and
+`sequenceContentReadiness()` (`templates.js`) now also counts queued `pending`/`claimed` rows with
+`content_resolved=false`, so `sendable` can no longer lie (closes F2, comment explicitly marked "F2" in
+that function). Covered by a dedicated F1/F2 block in `test/unit-cp4a0-content.mjs` (freeze → readiness
+correctly refuses → copy alone unsticks it via the claim door → negative control proves a still-copyless
+job stays stuck). Re-verified independently this session: full suite 1102/1102 passing, 19/19 suites,
+including that block. This entry was left as an open ticket in the doc for a while after the fix
+shipped — recorded here so it isn't re-discovered and re-investigated as if still open. **F3 was not
+independently re-verified as fixed** and should be checked on its own before being assumed done, though
+its stated blocker (F1) is gone.
+
 **Why it matters for the GOALS:** this lands hardest on exactly the work the operator asked for —
 borrowing the outreach/nurturing engine automations will materialise jobs before their copy exists
 in the new content store, and every one of those ladders would be silently dead while readiness

@@ -127,12 +127,16 @@ router.get('/', async (req, res) => {
     if (channel && !inboxDb.CHANNELS.includes(channel)) {
       return res.status(400).json({ error: `unknown channel '${channel}'` });
     }
+    const assignee = req.query.assignee || null;
+    if (assignee && !inboxDb.ASSIGNEES.includes(assignee)) {
+      return res.status(400).json({ error: `assignee must be one of ${inboxDb.ASSIGNEES.join(', ')}` });
+    }
     const cursor = req.query.cursor || null;
     if (cursor && !/^[^|]+\|[0-9a-fA-F-]{36}$/.test(cursor)) {
       return res.status(400).json({ error: 'cursor must be the next_cursor value from a previous page' });
     }
     const rows = await inboxDb.listInbox(companyId, {
-      filter, channel, q: req.query.q || null,
+      filter, channel, assignee, q: req.query.q || null,
       limit: req.query.limit, cursor,
     });
     // Stage chip per row so the list is stage-aware without opening a thread.
@@ -279,6 +283,28 @@ router.patch('/:contactId/star', async (req, res) => {
   } catch (err) {
     console.error('[CRM] PATCH /inbox/:contactId/star error:', err.message);
     res.status(500).json({ error: 'failed to star' });
+  }
+});
+
+// ── PATCH /api/crm/inbox/:contactId/assignee ─────────────────────────────────
+// Mirrors PATCH /star exactly (see setAssignee's comment for why this reassigns
+// every one of the contact's conversations rather than a contact-level column).
+router.patch('/:contactId/assignee', async (req, res) => {
+  try {
+    const companyId = getUserCompanyId(req);
+    if (!companyId) return res.status(401).json({ error: 'Authentication required' });
+    const contact = await ownedContact(companyId, req.params.contactId);
+    if (!contact) return res.status(404).json({ error: 'contact not found' });
+    const assignee = req.body && req.body.assignee;
+    if (!inboxDb.ASSIGNEES.includes(assignee)) {
+      return res.status(400).json({ error: `assignee must be one of ${inboxDb.ASSIGNEES.join(', ')}` });
+    }
+    const n = await inboxDb.setAssignee(companyId, contact.id, assignee);
+    if (!n) return res.status(409).json({ error: 'contact has no conversation to assign yet' });
+    res.json({ ok: true, assignee, conversations_updated: n });
+  } catch (err) {
+    console.error('[CRM] PATCH /inbox/:contactId/assignee error:', err.message);
+    res.status(500).json({ error: 'failed to assign' });
   }
 });
 

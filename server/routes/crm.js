@@ -680,9 +680,13 @@ router.get('/contacts/:id/activity', async (req, res) => {
     const companyId = getUserCompanyId(req);
     const contact = await contactDb.getById(req.params.id, companyId);
     if (!contact) return res.status(404).json({ error: 'contact not found' });
-    const limit = parseInt(req.query.limit) || 50;
-    const activity = await contactDb.getActivity(req.params.id, limit, companyId);
-    res.json({ activity });
+    const limit = Math.min(parseInt(req.query.limit, 10) || 50, 500);
+    const offset = Math.max(parseInt(req.query.offset, 10) || 0, 0);
+    const [activity, total] = await Promise.all([
+      contactDb.getActivity(req.params.id, limit, companyId, offset),
+      contactDb.getActivityCount(req.params.id, companyId),
+    ]);
+    res.json({ activity, total, limit, offset });
   } catch (err) {
     console.error('[CRM] GET /contacts/:id/activity error:', err.message);
     res.status(500).json({ error: 'failed to load activity' });
@@ -1719,9 +1723,18 @@ router.post('/contacts/bulk-import', async (req, res) => {
   }
 
   let created = 0, updated = 0, errors = 0;
+  // Per-row detail so a failed import tells the operator WHICH rows failed and
+  // WHY, instead of a single aggregate count that leaves them re-uploading the
+  // whole file to find the bad rows by trial and error.
+  const results = [];
+  const rowLabel = (input) => input.email || input.name || '(unlabeled row)';
   for (const input of inputContacts) {
     try {
-      if (!input.email && !input.name) { errors++; continue; }
+      if (!input.email && !input.name) {
+        errors++;
+        results.push({ row: rowLabel(input), status: 'error', reason: 'no email or name' });
+        continue;
+      }
       const { contact, created: isNew } = await findOrCreateContact(input.email, {
         company_id: companyId,
         name: input.name,
@@ -1740,13 +1753,18 @@ router.post('/contacts/bulk-import', async (req, res) => {
       if (isNew) {
         await addContactActivity(contact.id, companyId, { type: 'prospect_loaded', message: `Loaded from bulk import (${input.source || 'list'})` });
         created++;
+        results.push({ row: rowLabel(input), status: 'created', contact_id: contact.id });
       } else {
         updated++;
+        results.push({ row: rowLabel(input), status: 'updated', contact_id: contact.id });
       }
-    } catch { errors++; }
+    } catch (e) {
+      errors++;
+      results.push({ row: rowLabel(input), status: 'error', reason: e.message || 'unknown error' });
+    }
   }
 
-  res.json({ ok: true, created, updated, errors, total: inputContacts.length });
+  res.json({ ok: true, created, updated, errors, total: inputContacts.length, results });
 });
 
 // (GET /contacts/export moved above the /contacts/:id route — ':id' was capturing 'export')

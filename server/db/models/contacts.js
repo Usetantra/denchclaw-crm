@@ -230,16 +230,27 @@ async function addActivity(contactId, entry, companyId) {
   return true;
 }
 
-async function getActivity(contactId, limit = 50, companyId) {
+async function getActivity(contactId, limit = 50, companyId, offset = 0) {
   if (!companyId) throw new Error('contacts.getActivity requires companyId');
   const result = await query(
     `SELECT ca.* FROM contact_activity ca
       WHERE ca.contact_id = $1
-        AND EXISTS (SELECT 1 FROM contacts c WHERE c.id = ca.contact_id AND c.company_id = $3)
-      ORDER BY ca.created_at DESC LIMIT $2`,
-    [contactId, limit, companyId]
+        AND EXISTS (SELECT 1 FROM contacts c WHERE c.id = ca.contact_id AND c.company_id = $4)
+      ORDER BY ca.created_at DESC LIMIT $2 OFFSET $3`,
+    [contactId, limit, offset, companyId]
   );
   return result.rows;
+}
+
+async function getActivityCount(contactId, companyId) {
+  if (!companyId) throw new Error('contacts.getActivityCount requires companyId');
+  const result = await query(
+    `SELECT COUNT(*)::int AS n FROM contact_activity ca
+      WHERE ca.contact_id = $1
+        AND EXISTS (SELECT 1 FROM contacts c WHERE c.id = ca.contact_id AND c.company_id = $2)`,
+    [contactId, companyId]
+  );
+  return result.rows[0].n;
 }
 
 async function getStats(companyId) {
@@ -279,5 +290,6 @@ module.exports = {
   update,
   addActivity,
   getActivity,
+  getActivityCount,
   getStats,
 };

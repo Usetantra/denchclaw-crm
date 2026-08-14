@@ -424,6 +424,39 @@ async function main() {
   check('I23 the chip now reflects the manual stage, outlined-mode', movedChip.key === 'no_show_followup_1' && movedChip.mode === 'manual',
     JSON.stringify([movedChip.key, movedChip.mode]));
 
+  // ── I24 — assignee (ai/human), mirrors setStarred's fan-out ────────────────
+  // A schema-level check (default is 'ai', per migrations/004) rather than one
+  // against `ava` — the test harness's own mkConv() helper hardcodes 'human' on
+  // every conversation it creates, so `ava`'s rows are never at the DB default.
+  const assigneeCol = await db.query(`SELECT column_default FROM information_schema.columns
+                                       WHERE table_name='conversations' AND column_name='assignee'`);
+  check('I24 conversations.assignee defaults to \'ai\' at the schema level',
+    (assigneeCol.rows[0]?.column_default || '').includes("'ai'"), JSON.stringify(assigneeCol.rows[0]));
+  const badAssignee = await req('PATCH', `/api/crm/inbox/${ava.id}/assignee`, { assignee: 'robot' });
+  check('I24 an unrecognised assignee is refused with 400', badAssignee.status === 400, String(badAssignee.status));
+  // ava already carries several conversations from earlier sections (I5's
+  // multi-channel replies), so the fan-out check counts them rather than
+  // assuming exactly two.
+  const avaConvCount = (await db.query(`SELECT count(*)::int n FROM conversations WHERE contact_id=$1`, [ava.id])).rows[0].n;
+  const setHuman = await req('PATCH', `/api/crm/inbox/${ava.id}/assignee`, { assignee: 'human' });
+  check('I24 PATCH /assignee succeeds and reports how many conversations it touched',
+    setHuman.status === 200 && setHuman.json?.conversations_updated === avaConvCount, JSON.stringify([setHuman.json, avaConvCount]));
+  const bothConvs = await db.query(`SELECT assignee FROM conversations WHERE contact_id=$1`, [ava.id]);
+  check('I24 EVERY one of the contact\'s conversations moved, not just one channel (mirrors starred)',
+    bothConvs.rows.every(r => r.assignee === 'human'), JSON.stringify(bothConvs.rows));
+  const assigneeFiltered = await listInbox('all', '&assignee=human');
+  check('I24 the assignee filter surfaces a contact reassigned to human',
+    !!rowFor(assigneeFiltered, ava.id), JSON.stringify((assigneeFiltered.json?.contacts || []).map(c => c.contact_id)));
+  const assigneeFilteredAi = await listInbox('all', '&assignee=ai');
+  check('I24 …and the SAME contact does not appear under the ai filter anymore',
+    !rowFor(assigneeFilteredAi, ava.id));
+  const badAssigneeFilter = await req('GET', `/api/crm/inbox?filter=all&assignee=robot`);
+  check('I24 an unrecognised assignee on the LIST route is refused with 400', badAssigneeFilter.status === 400, String(badAssigneeFilter.status));
+  const noConvYet = await mkContact('I24 No Conversation Yet');
+  const orphanAssign = await req('PATCH', `/api/crm/inbox/${noConvYet.id}/assignee`, { assignee: 'human' });
+  check('I24 assigning a contact with no conversation yet is a 409, not a silent no-op',
+    orphanAssign.status === 409, String(orphanAssign.status));
+
   // ── I14 — tenancy ─────────────────────────────────────────────────────────
   for (const [verb, path, body] of [
     ['GET', `/api/crm/inbox/${ava.id}/thread`, undefined],
@@ -432,6 +465,7 @@ async function main() {
     ['POST', `/api/crm/inbox/${ava.id}/draft`, { channel: 'email' }],
     ['POST', `/api/crm/inbox/${ava.id}/read`, {}],
     ['PATCH', `/api/crm/inbox/${ava.id}/star`, { starred: true }],
+    ['PATCH', `/api/crm/inbox/${ava.id}/assignee`, { assignee: 'human' }],
     ['GET', `/api/crm/inbox/${ava.id}/templates`, undefined],
   ]) {
     const r = await req(verb, path, body, CO2);

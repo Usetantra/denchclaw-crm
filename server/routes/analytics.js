@@ -157,6 +157,36 @@ router.get('/analytics/by-campaign', async (req, res) => {
   }
 });
 
+// GET /api/crm/analytics/timeseries?days=30
+// Day-by-day totals across all channels/campaigns, for a trend chart. Reads
+// campaign_event_rollups directly — it's already stored per-day, so no new
+// aggregation table is needed; days with no rollup rows are simply absent
+// (the caller zero-fills gaps for a continuous chart).
+router.get('/analytics/timeseries', async (req, res) => {
+  try {
+    const companyId = getUserCompanyId(req);
+    if (!companyId) return res.status(401).json({ error: 'Authentication required' });
+    const days = Math.min(parseInt(req.query.days, 10) || 30, 365);
+
+    const { rows } = await query(
+      `SELECT day::text AS day,
+         SUM(sends)::int   AS sends,
+         SUM(opens)::int   AS opens,
+         SUM(replies)::int AS replies,
+         SUM(mql_count)::int AS mqls
+       FROM campaign_event_rollups
+       WHERE company_id = $1 AND day >= CURRENT_DATE - ($2 || ' days')::interval
+       GROUP BY day
+       ORDER BY day ASC`,
+      [companyId, days]
+    );
+    return res.json({ days: rows });
+  } catch (err) {
+    console.error('[Analytics] GET /analytics/timeseries error:', err.message);
+    res.status(500).json({ error: 'failed to load timeseries analytics' });
+  }
+});
+
 // GET /api/crm/analytics/funnel?pipeline_key=marketing|sales
 // Stage counts for the dashboard funnel view.
 router.get('/analytics/funnel', async (req, res) => {

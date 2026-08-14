@@ -226,6 +226,36 @@ async function main() {
     check('activity bumps lead_score_numeric', '—', after > before, `before=${before} after=${after}`);
   }
 
+  // 12b — activity feed pagination (offset/limit + total count)
+  {
+    const c = await req('POST', '/api/crm/contacts', { company: CO_A, body: { name: 'Paginated', email: email('paginated'), source: 'manual' } });
+    const pid = c.json?.id;
+    for (let i = 0; i < 5; i++) {
+      await req('POST', `/api/crm/contacts/${pid}/activity`, { company: CO_A, body: { type: 'note', message: `note ${i}` } });
+    }
+    const page1 = await req('GET', `/api/crm/contacts/${pid}/activity?limit=2&offset=0`, { company: CO_A });
+    check('activity page 1 returns exactly `limit` rows', '—', (page1.json?.activity || []).length === 2, JSON.stringify(page1.json));
+    check('activity response carries the true total, not just this page\'s length', '—',
+      page1.json?.total >= 5, JSON.stringify(page1.json));
+    const page2 = await req('GET', `/api/crm/contacts/${pid}/activity?limit=2&offset=2`, { company: CO_A });
+    const ids1 = (page1.json?.activity || []).map(a => a.id);
+    const ids2 = (page2.json?.activity || []).map(a => a.id);
+    check('offset actually advances the window (no overlap between pages)', '—',
+      !ids2.some(id => ids1.includes(id)), JSON.stringify({ ids1, ids2 }));
+  }
+
+  // 12c — analytics timeseries: day-bucketed totals for the trend chart
+  {
+    const r = await req('GET', '/api/crm/analytics/timeseries?days=7', { company: CO_A });
+    check('timeseries 200s and returns a `days` array', '—',
+      r.status === 200 && Array.isArray(r.json?.days), `status=${r.status} body=${JSON.stringify(r.json)}`);
+    const badDays = await req('GET', '/api/crm/analytics/timeseries?days=99999', { company: CO_A });
+    check('timeseries clamps an absurd `days` value rather than scanning unbounded history', '—',
+      badDays.status === 200, `status=${badDays.status}`);
+    const noAuth = await fetch(`${BASE}/api/crm/analytics/timeseries?days=7`);
+    check('timeseries requires auth (401 with no key)', '—', noAuth.status === 401 || noAuth.status === 403, `status=${noAuth.status}`);
+  }
+
   // 13 — prospect_inbox enqueue (BASELINE: 404 no route; TARGET CP3: 201/200)
   {
     const r = await req('POST', '/api/crm/prospect-inbox', { company: CO_A, body: { contact_id: aId, target_engine: 'nurturing' } });

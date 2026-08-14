@@ -9,12 +9,32 @@
 <link href="https://fonts.googleapis.com/css2?family=Fraunces:ital,opsz,wght@0,9..144,300;0,9..144,400;0,9..144,500;1,9..144,400&family=Inter:wght@400;500;600&display=swap" rel="stylesheet">
 <style>
   :root{
-    --bg:#ffffff;--ink:#0a0a0a;--ink-2:#2a2a2a;--ink-3:#4a4a4a;--ink-4:#6b6b6b;--ink-5:#d0d0d0;
+    --bg:#ffffff;--bg-rgb:255,255,255;--ink:#0a0a0a;--ink-2:#2a2a2a;--ink-3:#4a4a4a;--ink-4:#6b6b6b;--ink-5:#d0d0d0;
     --hair:#ececec;--hair-2:#f4f4f4;--radius:2px;--nav-h:64px;--maxw:1120px;
     --sans:"Inter",-apple-system,BlinkMacSystemFont,"Helvetica Neue",Arial,sans-serif;
     --serif:"Fraunces",Georgia,serif;
     --hot:#b42318;--hot-bg:#fef3f2;--warm:#b54708;--warm-bg:#fffaeb;
-    --neutral:#4a4a4a;--neutral-bg:#f4f4f4;--cold:#175cd3;--cold-bg:#eff4ff;--live:#067647;
+    --neutral:#4a4a4a;--neutral-bg:#f4f4f4;--cold:#175cd3;--cold-bg:#eff4ff;--live:#067647;--live-bg:#ecfdf3;
+    /* Raised surfaces (cards/modals/inputs) — distinct from --bg so dark mode
+       can lift them above the page instead of every surface just inverting flat. */
+    --surface:#ffffff;--surface-2:#f4f5f7;--surface-3:#eceef1;--surface-4:#f7f8fa;
+    --canvas-border:#e4e6ea;
+    /* "Solid chip" pairing (primary buttons, avatars, toast, active pills) —
+       kept SEPARATE from --ink because --ink itself inverts in dark mode; a
+       component styled background:var(--ink);color:#fff would go invisible
+       (light-on-light) the moment --ink turns light-on-dark. */
+    --accent-bg:#0a0a0a;--accent-fg:#ffffff;--accent-fg-rgb:255,255,255;
+  }
+  @media(prefers-color-scheme:dark){
+    :root{
+      --bg:#0e0e10;--bg-rgb:14,14,16;--ink:#f2f2f0;--ink-2:#d8d8d6;--ink-3:#aeaeac;--ink-4:#8b8b8e;--ink-5:#45454a;
+      --hair:#2a2a2d;--hair-2:#1e1e21;
+      --hot:#ff6a5e;--hot-bg:#3a1414;--warm:#f0a83c;--warm-bg:#332108;
+      --neutral:#c8c8c8;--neutral-bg:#242427;--cold:#7aaeff;--cold-bg:#101c33;--live:#3ecf8e;--live-bg:#0d2b1e;
+      --surface:#19191c;--surface-2:#1c1c1f;--surface-3:#212124;--surface-4:#242428;
+      --canvas-border:#2f2f33;
+      --accent-bg:#f2f2f0;--accent-fg:#0a0a0a;--accent-fg-rgb:10,10,10;
+    }
   }
   *{box-sizing:border-box}
   body{margin:0;background:var(--bg);color:var(--ink);font:16px/1.6 var(--sans);-webkit-font-smoothing:antialiased}
@@ -22,7 +42,7 @@
 
   header{height:var(--nav-h);display:flex;align-items:center;justify-content:space-between;
          padding:0 32px;border-bottom:1px solid var(--hair);position:sticky;top:0;
-         background:rgba(255,255,255,.92);backdrop-filter:saturate(180%) blur(8px);z-index:10}
+         background:rgba(var(--bg-rgb),.92);backdrop-filter:saturate(180%) blur(8px);z-index:10}
   .brand{display:flex;align-items:baseline;gap:12px}
   .brand .mark{font-family:var(--serif);font-weight:400;font-style:italic;font-size:22px;letter-spacing:.06em}
   .brand .sub{font-size:11px;letter-spacing:.18em;text-transform:uppercase;color:var(--ink-4)}
@@ -30,7 +50,7 @@
   .status .dot{width:7px;height:7px;border-radius:50%;background:var(--ink-5)}
   .status.ok .dot{background:var(--live)} .status.err .dot{background:var(--hot)}
 
-  .tabbar{border-bottom:1px solid var(--hair);background:#fff;position:sticky;top:var(--nav-h);z-index:9}
+  .tabbar{border-bottom:1px solid var(--hair);background:var(--bg);position:sticky;top:var(--nav-h);z-index:9}
   .tabbar-inner{max-width:var(--maxw);margin:0 auto;padding:0 32px;display:flex}
   .tabbar button{border:none;background:none;font-family:var(--sans);font-size:13px;font-weight:600;color:var(--ink-4);
         padding:14px 2px;margin-right:26px;cursor:pointer;border-bottom:2px solid transparent;letter-spacing:.02em}
@@ -80,16 +100,16 @@
   .muted{color:var(--ink-4)}
 
   /* Kanban board */
-  .board-tabs{display:inline-flex;gap:3px;background:#f1f2f4;border:1px solid var(--hair);border-radius:8px;padding:3px;margin-bottom:14px}
+  .board-tabs{display:inline-flex;gap:3px;background:var(--surface-2);border:1px solid var(--hair);border-radius:8px;padding:3px;margin-bottom:14px}
   .board-tabs button{border:none;background:none;font-family:var(--sans);font-size:12px;font-weight:600;letter-spacing:.02em;
         color:var(--ink-4);padding:7px 17px;border-radius:6px;cursor:pointer}
-  .board-tabs button.active{background:#fff;color:var(--ink);box-shadow:0 1px 2px rgba(16,24,40,.1)}
+  .board-tabs button.active{background:var(--surface);color:var(--ink);box-shadow:0 1px 2px rgba(16,24,40,.1)}
 
-  .board{background:#f4f5f7;border:1px solid #e4e6ea;border-radius:10px;padding:14px;margin-bottom:10px;
+  .board{background:var(--surface-2);border:1px solid var(--canvas-border);border-radius:10px;padding:14px;margin-bottom:10px;
         display:flex;gap:12px;overflow-x:auto;align-items:flex-start}
   .board.grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(220px,1fr));gap:12px}
-  .gcol{flex:0 0 240px;max-width:240px;background:#eceef1;border-radius:10px;display:flex;flex-direction:column;max-height:640px}
-  .gcol .ghead{padding:11px 12px 10px;border-top:3px solid var(--sc,#9ca3af);border-radius:10px 10px 0 0;background:#f7f8fa}
+  .gcol{flex:0 0 240px;max-width:240px;background:var(--surface-3);border-radius:10px;display:flex;flex-direction:column;max-height:640px}
+  .gcol .ghead{padding:11px 12px 10px;border-top:3px solid var(--sc,#9ca3af);border-radius:10px 10px 0 0;background:var(--surface-4)}
   .gcol .ghead .gname{font-size:11px;font-weight:700;letter-spacing:.05em;text-transform:uppercase;color:var(--ink-2);
         display:flex;align-items:center;gap:7px}
   .gcol .ghead .gname .cdot{width:8px;height:8px;border-radius:50%;background:var(--sc,#9ca3af);flex-shrink:0}
@@ -99,16 +119,17 @@
   .gcol.drop-ok{outline:2px solid var(--live);outline-offset:-2px}
   .gcol.drop-no{outline:2px solid var(--hot);outline-offset:-2px}
 
-  .gcard{background:#fff;border:1px solid #e4e6ea;border-left:3px solid var(--cc,#9ca3af);border-radius:8px;
+  .gcard{background:var(--surface);border:1px solid var(--canvas-border);border-left:3px solid var(--cc,#9ca3af);border-radius:8px;
         padding:10px 11px;margin-bottom:8px;box-shadow:0 1px 2px rgba(16,24,40,.06);cursor:grab}
   .gcard:last-child{margin-bottom:0}
   .gcard:hover{box-shadow:0 4px 10px rgba(16,24,40,.13)}
   .gcard:active{cursor:grabbing} .gcard.dragging{opacity:.4} .gcard.static{cursor:default}
+  .gcard:focus-visible{outline:2px solid var(--cold);outline-offset:1px}
   .gcard .gtitle{font-weight:600;font-size:13px;line-height:1.3;color:var(--ink)}
   .gcard .gsub{color:var(--ink-4);font-size:12px;margin-top:1px}
   .gcard .gval{font-size:13px;font-weight:700;color:var(--live);margin-top:4px}
   .gcard .gmeta{display:flex;align-items:center;gap:6px;margin-top:8px;flex-wrap:wrap}
-  .avatar{width:20px;height:20px;border-radius:50%;background:var(--ink);color:#fff;font-size:9px;font-weight:600;
+  .avatar{width:20px;height:20px;border-radius:50%;background:var(--accent-bg);color:var(--accent-fg);font-size:9px;font-weight:600;
         display:inline-flex;align-items:center;justify-content:center;letter-spacing:.02em;flex-shrink:0}
   .gsrc{font-size:10px;color:var(--ink-4);text-transform:uppercase;letter-spacing:.06em}
   .gempty{color:var(--ink-5);font-size:12px;text-align:center;padding:12px 0}
@@ -118,7 +139,7 @@
   .filter-tabs button{border:none;background:none;font-family:var(--sans);font-size:12px;font-weight:600;letter-spacing:.04em;
         color:var(--ink-4);padding:8px 18px;cursor:pointer;border-right:1px solid var(--hair)}
   .filter-tabs button:last-child{border-right:none}
-  .filter-tabs button.active{background:var(--ink);color:#fff}
+  .filter-tabs button.active{background:var(--accent-bg);color:var(--accent-fg)}
   .filter-tabs button:hover:not(.active){background:var(--hair-2)}
   .ch-badge{font-size:10px;font-weight:600;letter-spacing:.06em;text-transform:uppercase;
             padding:2px 7px;border-radius:3px;background:var(--cold-bg);color:var(--cold)}
@@ -140,6 +161,13 @@
   .funnel-count{font-size:12px;font-weight:700;color:var(--ink-2);text-align:right}
   .a-grid{display:grid;grid-template-columns:1fr 1fr;gap:28px}
   @media(max-width:700px){.a-grid{grid-template-columns:1fr}}
+  #a-trend{border:1px solid var(--hair);border-radius:var(--radius);padding:14px}
+  #a-trend svg{display:block;width:100%;height:auto}
+  #a-trend .tpt{fill:var(--ink);stroke:var(--bg);stroke-width:1.5}
+  #a-trend .tline{fill:none;stroke:var(--ink);stroke-width:2}
+  #a-trend .taxis{stroke:var(--hair);stroke-width:1}
+  #a-trend .tlabel{font:10px var(--sans);fill:var(--ink-4)}
+  #a-trend .tempty{color:var(--ink-5);font-size:12px;text-align:center;padding:30px 0}
   .rate{font-size:11px;color:var(--ink-4)}
 
   /* Contact detail modal */
@@ -147,7 +175,7 @@
               align-items:flex-start;justify-content:center;padding:6vh 16px}
   .modal-wrap.open{display:flex}
   .modal-open{overflow:hidden}
-  .modal{background:#fff;border-radius:10px;max-width:760px;width:100%;max-height:84vh;overflow-y:auto;overscroll-behavior:contain;
+  .modal{background:var(--surface);border-radius:10px;max-width:760px;width:100%;max-height:84vh;overflow-y:auto;overscroll-behavior:contain;
          box-shadow:0 24px 60px rgba(16,24,40,.28);padding:26px 28px}
   .modal .mhead{display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:18px}
   .modal .mhead h2{font-family:var(--serif);font-weight:400;font-size:26px;margin:0;line-height:1.2}
@@ -166,7 +194,7 @@
   .feed .fitem .ftype{display:inline-block;font-size:10px;font-weight:700;letter-spacing:.06em;text-transform:uppercase;
         padding:2px 8px;border-radius:999px;background:var(--cold-bg);color:var(--cold);margin-right:8px}
   .feed .fitem .ftype[data-cat="stage"]{background:var(--warm-bg);color:var(--warm)}
-  .feed .fitem .ftype[data-cat="engage"]{background:#ecfdf3;color:var(--live)}
+  .feed .fitem .ftype[data-cat="engage"]{background:var(--live-bg);color:var(--live)}
   .feed .fitem .ftype[data-cat="note"]{background:var(--neutral-bg);color:var(--neutral)}
   /* Contact drawer: wide panel; the whole drawer scrolls (so nothing is ever
      clipped/unreachable) and the feed is a large box inside it. Scoped to
@@ -177,13 +205,13 @@
   .notebar input{flex:1;border:1px solid var(--hair);border-radius:var(--radius);padding:9px 12px;font-size:13px;
         outline:none;font-family:var(--sans)}
   .notebar input:focus{border-color:var(--ink)}
-  .notebar button{background:var(--ink);border:none;color:#fff;border-radius:var(--radius);padding:0 16px;
+  .notebar button{background:var(--accent-bg);border:none;color:var(--accent-fg);border-radius:var(--radius);padding:0 16px;
         font-size:11px;letter-spacing:.1em;text-transform:uppercase;font-weight:600;cursor:pointer;font-family:var(--sans)}
   #contacts tbody tr{cursor:pointer}
   #contacts tbody tr:hover{background:var(--hair-2)}
 
   /* Toast */
-  .toast{position:fixed;bottom:22px;left:50%;transform:translateX(-50%);background:var(--ink);color:#fff;
+  .toast{position:fixed;bottom:22px;left:50%;transform:translateX(-50%);background:var(--accent-bg);color:var(--accent-fg);
          padding:11px 18px;border-radius:var(--radius);font-size:13px;z-index:50;opacity:0;
          transition:opacity .2s;pointer-events:none;max-width:560px;text-align:center}
   .toast.show{opacity:1} .toast.err{background:var(--hot)}
@@ -197,7 +225,7 @@
   .chat .chead b{font-family:var(--serif);font-style:italic;font-weight:400;font-size:16px;letter-spacing:.02em}
   .msgs{flex:1;overflow-y:auto;padding:18px;display:flex;flex-direction:column;gap:12px}
   .msg{max-width:88%;padding:11px 13px;border-radius:var(--radius);font-size:14px;line-height:1.55;white-space:pre-wrap;word-wrap:break-word}
-  .msg.user{align-self:flex-end;background:var(--ink);color:#fff}
+  .msg.user{align-self:flex-end;background:var(--accent-bg);color:var(--accent-fg)}
   .msg.bot{align-self:flex-start;background:var(--hair-2);border:1px solid var(--hair);color:var(--ink-2)}
   .msg.bot.typing{color:var(--ink-4);font-style:italic}
   .suggest{display:flex;flex-wrap:wrap;gap:7px;padding:0 18px 12px}
@@ -208,7 +236,7 @@
   .composer input{flex:1;background:var(--bg);border:1px solid var(--hair);border-radius:var(--radius);color:var(--ink);
         padding:11px 13px;font-size:14px;outline:none;font-family:var(--sans)}
   .composer input:focus{border-color:var(--ink)}
-  .composer button{background:var(--ink);border:none;color:#fff;border-radius:var(--radius);padding:0 18px;
+  .composer button{background:var(--accent-bg);border:none;color:var(--accent-fg);border-radius:var(--radius);padding:0 18px;
         font-size:11px;letter-spacing:.14em;text-transform:uppercase;font-weight:600;cursor:pointer;font-family:var(--sans)}
   /* Conversation thread drawer — chat layout: fixed head/actions/composer, msgs fills+scrolls */
   #conv-wrap .modal{max-width:720px;height:88vh;max-height:88vh;display:flex;flex-direction:column;overflow:hidden;padding:0}
@@ -217,14 +245,14 @@
   #conv-wrap .msgs{flex:1 1 auto;min-height:0;background:var(--hair-2)}
   #conv-wrap .composer{flex:0 0 auto;flex-direction:column;align-items:stretch;gap:9px;padding:12px 16px;max-height:52vh;overflow-y:auto}
   .cv-chan{display:flex;gap:6px;flex-wrap:wrap}
-  .cv-chan button{border:1px solid var(--hair);background:#fff;color:var(--ink-3);font-size:11px;font-weight:600;letter-spacing:.03em;padding:5px 12px;border-radius:999px;cursor:pointer;font-family:var(--sans);text-transform:capitalize}
-  .cv-chan button.active{background:var(--ink);color:#fff;border-color:var(--ink)}
+  .cv-chan button{border:1px solid var(--hair);background:var(--surface);color:var(--ink-3);font-size:11px;font-weight:600;letter-spacing:.03em;padding:5px 12px;border-radius:999px;cursor:pointer;font-family:var(--sans);text-transform:capitalize}
+  .cv-chan button.active{background:var(--accent-bg);color:var(--accent-fg);border-color:var(--accent-bg)}
   .cv-fields{display:flex;flex-direction:column;gap:7px}
   .cv-fields .cvf{display:flex;flex-direction:column;gap:3px}
   .cv-fields .cvrow{display:flex;gap:8px}
   .cv-fields .cvrow .cvf{flex:1;min-width:0}
   .cv-fields label{font-size:9px;letter-spacing:.08em;text-transform:uppercase;color:var(--ink-4);font-weight:700}
-  .cv-fields input,.cv-fields textarea,.cv-fields select{border:1px solid var(--hair);border-radius:6px;padding:8px 10px;font-size:13px;font-family:var(--sans);outline:none;background:#fff;color:var(--ink);width:100%;box-sizing:border-box}
+  .cv-fields input,.cv-fields textarea,.cv-fields select{border:1px solid var(--hair);border-radius:6px;padding:8px 10px;font-size:13px;font-family:var(--sans);outline:none;background:var(--surface);color:var(--ink);width:100%;box-sizing:border-box}
   .cv-fields input:focus,.cv-fields textarea:focus,.cv-fields select:focus{border-color:var(--ink)}
   .cv-fields select[disabled]{color:var(--ink-4);background:var(--hair-2)}
   .cv-fields textarea{min-height:68px;resize:vertical;line-height:1.5}
@@ -247,25 +275,34 @@
   .toolbar{display:flex;gap:10px;align-items:center;flex-wrap:wrap;margin-bottom:14px}
   .toolbar .search{flex:0 0 240px;border:1px solid var(--hair);border-radius:6px;padding:9px 12px;font-size:13px;outline:none;font-family:var(--sans)}
   .toolbar .search:focus{border-color:var(--ink)}
-  .toolbar select{border:1px solid var(--hair);border-radius:6px;padding:8px 10px;font-size:12px;color:var(--ink-2);background:#fff;cursor:pointer;font-family:var(--sans)}
+  .toolbar select{border:1px solid var(--hair);border-radius:6px;padding:8px 10px;font-size:12px;color:var(--ink-2);background:var(--surface);cursor:pointer;font-family:var(--sans)}
   .toolbar .spacer{flex:1}
-  .btn{font-family:var(--sans);font-size:12px;font-weight:600;letter-spacing:.02em;padding:8px 14px;border-radius:6px;cursor:pointer;border:1px solid var(--hair);background:#fff;color:var(--ink-2)}
+  .btn{font-family:var(--sans);font-size:12px;font-weight:600;letter-spacing:.02em;padding:8px 14px;border-radius:6px;cursor:pointer;border:1px solid var(--hair);background:var(--surface);color:var(--ink-2)}
   .btn:hover{border-color:var(--ink-4)}
-  .btn.primary{background:var(--ink);color:#fff;border-color:var(--ink)}
-  .btn.danger{background:var(--hot);color:#fff;border-color:var(--hot)}
+  .btn.primary{background:var(--accent-bg);color:var(--accent-fg);border-color:var(--accent-bg)}
+  .btn.danger{background:var(--hot);color:var(--accent-fg);border-color:var(--hot)}
   .btn.sm{padding:5px 10px;font-size:11px}
   .checkcell{width:34px;text-align:center} .checkcell input{cursor:pointer}
   .rowact{display:flex;gap:6px;justify-content:flex-end}
   tbody tr:hover{background:var(--hair-2)}
   .linklike{color:var(--cold);cursor:pointer;text-decoration:none} .linklike:hover{text-decoration:underline}
-  .bulkbar{display:none;align-items:center;gap:12px;background:var(--ink);color:#fff;border-radius:8px;padding:9px 14px;margin-bottom:12px;font-size:13px}
+  .bulkbar{display:none;align-items:center;gap:12px;background:var(--accent-bg);color:var(--accent-fg);border-radius:8px;padding:9px 14px;margin-bottom:12px;font-size:13px}
   .bulkbar.show{display:flex} .bulkbar .spacer{flex:1} .bulkbar span{font-weight:600}
-  .bulkbar .btn{background:rgba(255,255,255,.14);border-color:transparent;color:#fff} .bulkbar .btn:hover{background:rgba(255,255,255,.26)}
-  .bulkbar .btn.danger{background:var(--hot)}
+  .bulkbar .btn{background:rgba(var(--accent-fg-rgb),.14);border-color:transparent;color:var(--accent-fg)} .bulkbar .btn:hover{background:rgba(var(--accent-fg-rgb),.26)}
+  .bulkbar .btn.danger{background:var(--hot);color:var(--accent-fg)}
+
+  .pager{display:flex;align-items:center;gap:10px;margin-top:14px;font-size:12px;color:var(--ink-4)}
+  .pager button:disabled{opacity:.4;cursor:default}
+
+  .skel{display:flex;flex-direction:column;gap:8px}
+  .skel-bar{height:34px;border-radius:var(--radius);
+    background:linear-gradient(90deg,var(--hair-2) 25%,var(--hair) 37%,var(--hair-2) 63%);
+    background-size:400% 100%;animation:skel-shimmer 1.4s ease infinite}
+  @keyframes skel-shimmer{0%{background-position:100% 50%}100%{background-position:0 50%}}
   .empty{padding:34px;text-align:center;color:var(--ink-5);font-size:13px;border:1px dashed var(--hair);border-radius:8px}
   .modal-overlay{position:fixed;inset:0;background:rgba(10,10,10,.45);display:none;align-items:flex-start;justify-content:center;z-index:100;padding:56px 16px;overflow-y:auto}
   .modal-overlay.show{display:flex}
-  .modal{background:#fff;border-radius:12px;width:100%;max-width:540px;box-shadow:0 20px 50px rgba(0,0,0,.25);overflow:hidden}
+  .modal{background:var(--surface);border-radius:12px;width:100%;max-width:540px;box-shadow:0 20px 50px rgba(0,0,0,.25);overflow:hidden}
   .modal .mhead{display:flex;justify-content:space-between;align-items:center;padding:17px 20px;border-bottom:1px solid var(--hair)}
   .modal .mhead h3{margin:0;font-family:var(--serif);font-weight:400;font-size:19px}
   .modal .mbody{padding:18px 20px;max-height:64vh;overflow-y:auto}
@@ -279,7 +316,7 @@
   .field-row{display:flex;gap:12px} .field-row .field{flex:1}
 
   /* Pipelines editor */
-  #deal-pipe-sel{border:1px solid var(--hair);border-radius:6px;padding:8px 10px;font-size:12px;color:var(--ink-2);background:#fff;cursor:pointer;font-family:var(--sans);font-weight:600}
+  #deal-pipe-sel{border:1px solid var(--hair);border-radius:6px;padding:8px 10px;font-size:12px;color:var(--ink-2);background:var(--surface);cursor:pointer;font-family:var(--sans);font-weight:600}
   .pipe-layout{display:grid;grid-template-columns:250px 1fr;gap:20px;align-items:start}
   @media(max-width:760px){.pipe-layout{grid-template-columns:1fr}}
   .pipe-list{border:1px solid var(--hair);border-radius:10px;overflow:hidden}
@@ -366,6 +403,7 @@
   <button data-tab="pipelines">Pipelines</button>
   <button data-tab="sequences">Sequences</button>
   <button data-tab="inbox">Inbox</button>
+  <button data-tab="marketing">Marketing</button>
   <button data-tab="analytics">Analytics</button>
 </div></div>
 
@@ -389,7 +427,7 @@
     </div>
 
     <aside class="chat">
-      <div class="chead"><span class="dot"></span><b>Chat with Tantra</b></div>
+      <div class="chead"><span class="dot"></span><b>Chat with Tantra</b><span style="flex:1"></span><button class="btn sm" id="chat-clear" title="Clear this conversation">Clear</button></div>
       <div class="msgs" id="msgs">
         <div class="msg bot">Hi — I'm Tantra. Ask me anything about your pipeline: contacts, stages, sources, follow-ups.</div>
       </div>
@@ -431,11 +469,13 @@
     </div>
     <div class="bulkbar" id="contact-bulk">
       <span id="contact-selN">0 selected</span><span class="spacer"></span>
+      <button class="btn" id="bulk-stage">Move stage…</button>
       <button class="btn" id="bulk-tag">Add tag…</button>
       <button class="btn" id="bulk-export">Export</button>
       <button class="btn danger" id="bulk-del">Delete</button>
     </div>
     <div id="contacts-list"><div class="muted">loading…</div></div>
+    <div id="contacts-pager" class="pager"></div>
   </div><!-- /view-contacts -->
 
   <!-- ── COMPANIES ──────────────────────────────────────────────────────── -->
@@ -451,6 +491,7 @@
       <button class="btn danger" id="company-bulk-del">Delete</button>
     </div>
     <div id="companies-list"><div class="muted">loading…</div></div>
+    <div id="companies-pager" class="pager"></div>
   </div><!-- /view-companies -->
 
   <!-- ── PIPELINES ──────────────────────────────────────────────────────── -->
@@ -505,6 +546,11 @@
             <option value="sms">SMS</option>
             <option value="ai_call">Call</option>
           </select>
+          <select id="ib-assignee-filter" style="flex:0 0 auto;font-size:11px;padding:4px 6px;border:1px solid var(--hair);border-radius:var(--radius)">
+            <option value="">Anyone</option>
+            <option value="human">Assigned to human</option>
+            <option value="ai">Assigned to AI</option>
+          </select>
           <input id="ib-q" placeholder="Search people & messages" style="flex:1 1 auto;min-width:0;font-size:12px;padding:4px 8px;border:1px solid var(--hair);border-radius:var(--radius)">
         </div>
       </div>
@@ -536,10 +582,51 @@
   </details>
   </div><!-- /view-inbox -->
 
+  <!-- ── MARKETING ──────────────────────────────────────────────────────── -->
+  <div id="view-marketing" style="display:none">
+  <div class="toolbar">
+    <h2 class="h1" style="margin-right:12px">Marketing</h2>
+    <span class="muted" style="font-size:11px">webinars · invites · attendance · the marketing funnel</span>
+    <span class="spacer"></span>
+    <button class="btn primary" id="new-webinar">+ New webinar</button>
+  </div>
+
+  <div class="a-section">
+    <h3>Funnel</h3>
+    <div class="funnel" id="mk-funnel"><div class="muted">loading…</div></div>
+  </div>
+
+  <div class="a-section">
+    <h3>Webinars</h3>
+    <div id="mk-webinars"><div class="muted">loading…</div></div>
+  </div>
+
+  <div class="a-section">
+    <h3>Recent events</h3>
+    <table id="mk-events">
+      <thead><tr><th>Contact</th><th>Webinar</th><th>Event</th><th>Channel</th><th>Outcome</th><th>When</th></tr></thead>
+      <tbody><tr><td colspan="6" class="muted">loading…</td></tr></tbody>
+    </table>
+  </div>
+  </div><!-- /view-marketing -->
+
   <!-- ── ANALYTICS ─────────────────────────────────────────────────────── -->
   <div id="view-analytics" style="display:none">
-  <div class="sechead"><span class="eyebrow">Analytics · Last 30 Days</span><span class="rule"></span></div>
+  <div class="sechead"><span class="eyebrow" id="a-range-label">Analytics · Last 30 Days</span><span class="rule"></span>
+    <div class="board-tabs" id="a-range">
+      <button data-days="7">7d</button><button data-days="30" class="active">30d</button><button data-days="90">90d</button>
+    </div>
+  </div>
   <div class="cards" id="a-cards" style="margin-bottom:32px"></div>
+
+  <div class="a-section">
+    <h3>Trend</h3>
+    <div class="board-tabs" id="a-metric" style="margin-bottom:12px">
+      <button data-metric="sends" class="active">Sends</button><button data-metric="opens">Opens</button>
+      <button data-metric="replies">Replies</button><button data-metric="mqls">MQLs</button>
+    </div>
+    <div id="a-trend"><div class="muted">loading…</div></div>
+  </div>
 
   <div class="a-grid">
     <div class="a-section">
@@ -572,7 +659,7 @@
 </main>
 
 <div class="modal-overlay" id="modal"><div class="modal">
-  <div class="mhead"><h3 id="modal-title">Title</h3><button class="xclose" id="modal-x">&times;</button></div>
+  <div class="mhead"><h3 id="modal-title">Title</h3><button class="xclose" id="modal-x" aria-label="Close dialog">&times;</button></div>
   <div class="mbody" id="modal-body"></div>
   <div class="mfoot" id="modal-foot"></div>
 </div></div>
@@ -584,7 +671,7 @@
   <div class="modal">
     <div class="mhead">
       <div><h2 id="m-name">—</h2><div class="msub" id="m-sub"></div></div>
-      <button class="mclose" id="m-close" title="Close">×</button>
+      <button class="mclose" id="m-close" title="Close" aria-label="Close">×</button>
     </div>
     <div class="fgrid" id="m-fields"></div>
     <div class="sechead" style="margin:8px 0 10px"><span class="eyebrow">Activity Feed</span><span class="rule"></span></div>
@@ -601,7 +688,7 @@
   <div class="modal conv-modal">
     <div class="mhead">
       <div><h2 id="cv-name">—</h2><div class="msub" id="cv-sub"></div></div>
-      <button class="mclose" id="cv-close" title="Close">×</button>
+      <button class="mclose" id="cv-close" title="Close" aria-label="Close">×</button>
     </div>
     <div class="conv-bar" id="cv-actions"></div>
     <div class="msgs" id="cv-msgs"><div class="msg bot">loading…</div></div>
@@ -665,6 +752,21 @@ let _toastT;
 function toast(msg,isErr){const t=$("#toast");t.textContent=msg;t.className="toast show"+(isErr?" err":"");
   clearTimeout(_toastT);_toastT=setTimeout(()=>{t.className="toast";},2800);}
 
+// Shared loading/error UI so every list/panel fails the same way: a skeleton
+// while pending, and a retry button (not a dead-end message) on failure.
+function showSkeleton(el,rows){
+  if(!el)return;
+  el.innerHTML=`<div class="skel">${Array.from({length:rows||3}).map(()=>'<div class="skel-bar"></div>').join("")}</div>`;
+}
+function showRetry(el,msg,retryFn,opts){
+  if(!el)return;
+  opts=opts||{};
+  el.innerHTML=opts.colspan
+    ?`<tr><td colspan="${opts.colspan}" class="muted">${esc(msg)} <button class="btn sm" id="_retrybtn">Retry</button></td></tr>`
+    :`<div class="${opts.cls||"empty"}">${esc(msg)}<div style="margin-top:8px"><button class="btn sm" id="_retrybtn">Retry</button></div></div>`;
+  el.querySelector("#_retrybtn").onclick=retryFn;
+}
+
 // ── Dashboard ────────────────────────────────────────────────────────────────
 function renderCards(s){
   const c=s.contacts||{},d=s.deals||{},ca=s.campaign_last_30d||{};
@@ -703,14 +805,17 @@ function renderContacts(list){
 }
 
 // ── Contact detail modal ─────────────────────────────────────────────────────
+const FEED_PAGE_SIZE=100;
+let feedItems=[],feedTotal=0;
 async function openContact(id){
   if(!id)return;
   const wrap=$("#modal-wrap");wrap.classList.add("open");wrap.dataset.contact=id;
   document.documentElement.classList.add("modal-open"); // lock background scroll
   $("#m-name").textContent="Loading…";$("#m-sub").textContent="";$("#m-fields").innerHTML="";
   $("#m-feed").innerHTML=`<div class="fitem muted">loading…</div>`;
+  feedItems=[];feedTotal=0;
   try{
-    const [c,act]=await Promise.all([get(`contacts/${id}`),get(`contacts/${id}/activity?limit=500`)]);
+    const [c,act]=await Promise.all([get(`contacts/${id}`),get(`contacts/${id}/activity?limit=${FEED_PAGE_SIZE}&offset=0`)]);
     $("#m-name").textContent=c.name||c.email||"—";
     $("#m-sub").textContent=[c.title,c.company_name].filter(Boolean).join(" · ");
     const fields=[
@@ -730,13 +835,26 @@ async function openContact(id){
     ];
     $("#m-fields").innerHTML=fields.map(([l,v,raw])=>`<div class="f"><div class="fl">${esc(l)}</div>
       <div class="fv">${raw?v:esc(v||"—")}</div></div>`).join("");
-    renderFeed(act.activity||[]);
-  }catch(e){$("#m-name").textContent="Error";$("#m-sub").textContent=e.message;}
+    feedItems=act.activity||[];feedTotal=act.total??feedItems.length;
+    renderFeed(feedItems,true);
+  }catch(e){$("#m-name").textContent="Error";$("#m-sub").textContent="";
+    showRetry($("#m-feed"),e.message,()=>openContact(id),{cls:"fitem muted"});}
 }
-function renderFeed(items){
+async function loadOlderActivity(){
+  const id=$("#modal-wrap").dataset.contact;if(!id)return;
+  const btn=$("#feed-more");if(btn){btn.disabled=true;btn.textContent="Loading…";}
+  try{
+    const act=await get(`contacts/${id}/activity?limit=${FEED_PAGE_SIZE}&offset=${feedItems.length}`);
+    feedItems=feedItems.concat(act.activity||[]);
+    const feed=$("#m-feed");const prevHeight=feed.scrollHeight,prevTop=feed.scrollTop;
+    renderFeed(feedItems,false);
+    feed.scrollTop=prevTop+(feed.scrollHeight-prevHeight); // keep the view anchored, not snapped to bottom
+  }catch(e){toast(e.message,true);}
+}
+function renderFeed(items,snapToBottom){
   const feed=$("#m-feed");
-  // Chat-style: oldest at top, newest at bottom, then snap to the bottom so the
-  // latest activity is in view and you scroll UP to read the history.
+  // Chat-style: oldest at top, newest at bottom, then (on first load) snap to
+  // the bottom so the latest activity is in view and you scroll UP for history.
   const sorted=(items||[]).slice().sort((a,b)=>
     new Date(a.created_at||a.timestamp||0)-new Date(b.created_at||b.timestamp||0));
   const cat=t=>{t=String(t||"");
@@ -744,11 +862,13 @@ function renderFeed(items){
     if(t==="note")return"note";
     if(/repl|open|click|watch|complete|book|payment|registered|cta|proposal|form|connection/.test(t))return"engage";
     return"event";};
-  feed.innerHTML=sorted.map(a=>`<div class="fitem">
+  const more=feedItems.length<feedTotal?`<div class="fitem" style="text-align:center"><button class="btn sm" id="feed-more">Load older (${feedTotal-feedItems.length} more)</button></div>`:"";
+  feed.innerHTML=more+(sorted.map(a=>`<div class="fitem">
     <span class="ftype" data-cat="${cat(a.type)}">${esc(nice(a.type||"event"))}</span>${esc(a.message||"")}
     <div class="fmeta">${a.channel?esc(a.channel)+" · ":""}${a.agent?esc(a.agent)+" · ":""}${new Date(a.created_at||a.timestamp).toLocaleString()}</div>
-  </div>`).join("")||`<div class="fitem muted">No activity yet.</div>`;
-  feed.scrollTop=feed.scrollHeight;
+  </div>`).join("")||`<div class="fitem muted">No activity yet.</div>`);
+  $("#feed-more")&&($("#feed-more").onclick=loadOlderActivity);
+  if(snapToBottom)feed.scrollTop=feed.scrollHeight;
 }
 function closeDrawer(){$("#modal-wrap").classList.remove("open");document.documentElement.classList.remove("modal-open");}
 $("#m-close").addEventListener("click",closeDrawer);
@@ -761,8 +881,9 @@ $("#m-noteform").addEventListener("submit",async e=>{
   try{
     await post(`contacts/${id}/activity`,{type:"note",message:msg,agent:"dashboard"});
     $("#m-note").value="";
-    const act=await get(`contacts/${id}/activity?limit=500`);
-    renderFeed(act.activity||[]);toast("Note added");
+    const act=await get(`contacts/${id}/activity?limit=${FEED_PAGE_SIZE}&offset=0`);
+    feedItems=act.activity||[];feedTotal=act.total??feedItems.length;
+    renderFeed(feedItems,true);toast("Note added");
   }catch(err){toast(err.message,true);}
 });
 $("#contacts").addEventListener("click",e=>{
@@ -851,17 +972,40 @@ function initBoardDnD(){
     e.preventDefault();
     const to=col.dataset.stage,{id,from,type}=dragInfo;clearHi();
     if(to===from)return;
-    try{
-      if(type==="contact")await post(`contacts/${id}/advance`,{pipeline_key:selDealPipe,stage:to});
-      else await patch(`deals/${id}`,{stage:to,pipeline_key:selDealPipe});
-      toast(`Moved to ${nice(to)}`);loadBoard();
-    }catch(err){
-      const allowed=err.allowed;
-      const msg=allowed
-        ?`Can't move ${nice(from)} → ${nice(to)}. Allowed: ${allowed.map(nice).join(", ")||"none"}`
-        :err.message;
-      toast(msg,true);loadBoard();
-    }
+    moveCard(type,id,from,to);
+  });
+  // Keyboard-equivalent for drag-and-drop: a focused card (tabindex="0", set
+  // in renderDealBoard/gcard) opens a stage picker on Enter/Space instead of
+  // requiring a mouse drag — same moveCard() the drop handler uses.
+  board.addEventListener("keydown",e=>{
+    if(e.key!=="Enter"&&e.key!==" ")return;
+    const card=e.target.closest('.gcard[tabindex="0"]');if(!card)return;
+    e.preventDefault();
+    openStagePicker(card.dataset.type,card.dataset.id,card.dataset.stage);
+  });
+}
+async function moveCard(type,id,from,to){
+  try{
+    if(type==="contact")await post(`contacts/${id}/advance`,{pipeline_key:selDealPipe,stage:to});
+    else await patch(`deals/${id}`,{stage:to,pipeline_key:selDealPipe});
+    toast(`Moved to ${nice(to)}`);loadBoard();
+  }catch(err){
+    const allowed=err.allowed;
+    const msg=allowed
+      ?`Can't move ${nice(from)} → ${nice(to)}. Allowed: ${allowed.map(nice).join(", ")||"none"}`
+      :err.message;
+    toast(msg,true);loadBoard();
+  }
+}
+function openStagePicker(type,id,from){
+  const stages=(currentDealDef&&currentDealDef.stages||[]).filter(s=>s.key!==from);
+  if(!stages.length)return;
+  openModal("Move to stage",
+    `<div style="display:flex;flex-direction:column;gap:6px">${stages.map(s=>
+      `<button class="btn" style="justify-content:flex-start;text-align:left" data-to="${esc(s.key)}">${esc(s.name)}</button>`).join("")}</div>`,
+    `<button class="btn" onclick="closeModal()">Cancel</button>`);
+  $("#modal-body").querySelectorAll("[data-to]").forEach(b=>{
+    b.onclick=()=>{closeModal();moveCard(type,id,from,b.dataset.to);};
   });
 }
 
@@ -892,7 +1036,7 @@ async function loadInbox(){
     const q=inboxFilter==="human"?"assignee=human&status=open":inboxFilter==="all"?"":inboxFilter==="closed"?"status=closed":"status=open";
     const data=await get(`conversations?${q}&limit=100`);
     renderInbox(data.conversations||[]);
-  }catch(e){$("#inbox-body").innerHTML=`<tr><td colspan="7" class="muted">Error: ${esc(e.message)}</td></tr>`;}
+  }catch(e){showRetry($("#inbox-body"),e.message,loadInbox,{colspan:7});}
 }
 async function convAct(id,action){
   try{
@@ -917,7 +1061,7 @@ $("#inbox-body").addEventListener("click",e=>{
 // Contact-centred. One row per person, one thread across every channel, and the
 // third pane is the contact record. `esc()` on every interpolated value — a
 // contact name and a message body are both attacker-controllable via ingest.
-let ibFilter="mine",ibChannel="",ibQ="",ibSel=null,ibCtx=null,ibTab="reply",ibDeal=null,ibQT=null;
+let ibFilter="mine",ibChannel="",ibQ="",ibSel=null,ibCtx=null,ibTab="reply",ibDeal=null,ibQT=null,ibAssignee="";
 // Whether the text currently in the composer came from Draft with AI. The
 // server records this on the message, so hardcoding it false — as the first
 // cut did — made every AI-assisted reply audit as purely human-authored and
@@ -960,9 +1104,10 @@ async function loadInboxUnified(){
   const host=$("#ib-list");if(!host)return;
   const qs=new URLSearchParams({filter:ibFilter});
   if(ibChannel)qs.set("channel",ibChannel);
+  if(ibAssignee)qs.set("assignee",ibAssignee);
   if(ibQ)qs.set("q",ibQ);
   let d;try{d=await get(`inbox?${qs}`);}
-  catch(e){host.innerHTML=`<div class="ib-empty">${esc(e.message)}</div>`;return;}
+  catch(e){showRetry(host,e.message,loadInboxUnified,{cls:"ib-empty"});return;}
   if(!d.contacts.length){
     host.innerHTML=`<div class="ib-empty">
       <svg width="42" height="42" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.3">
@@ -1014,6 +1159,7 @@ function renderIbThread(d){
       <b style="font-size:13px">${esc(c.name||c.email||"(unnamed)")}</b>
       <span class="muted" style="font-size:11px">${esc(c.email||"")}</span>
       <span style="flex:1"></span>
+      <button class="btn sm" id="ib-assign">${(d.conversations||[]).some(x=>x.assignee==="human")?"\u{1F464} Human":"\u{1F916} AI"}</button>
       <button class="btn sm" id="ib-star">${(d.conversations||[]).some(x=>x.starred)?"★ Starred":"☆ Star"}</button>
     </div>
     ${(d.deals||[]).length?`<div style="margin-top:6px;display:flex;gap:5px;flex-wrap:wrap;align-items:center">
@@ -1039,6 +1185,12 @@ function renderIbThread(d){
   const star=$("#ib-star");
   if(star)star.onclick=async()=>{
     try{await patch(`inbox/${ibSel}/star`,{starred:!(d.conversations||[]).some(x=>x.starred)});openIbContact(ibSel);}
+    catch(e){toast(e.message,true);}
+  };
+  const assignBtn=$("#ib-assign");
+  if(assignBtn)assignBtn.onclick=async()=>{
+    const next=(d.conversations||[]).some(x=>x.assignee==="human")?"ai":"human";
+    try{await patch(`inbox/${ibSel}/assignee`,{assignee:next});toast(`Assigned to ${next}`);openIbContact(ibSel);}
     catch(e){toast(e.message,true);}
   };
 }
@@ -1203,6 +1355,7 @@ $("#ib-list")?.addEventListener("click",e=>{
   const row=e.target.closest("[data-ib]");if(row)openIbContact(row.dataset.ib);
 });
 $("#ib-channel")?.addEventListener("change",e=>{ibChannel=e.target.value;loadInboxUnified();});
+$("#ib-assignee-filter")?.addEventListener("change",e=>{ibAssignee=e.target.value;loadInboxUnified();});
 $("#ib-q")?.addEventListener("input",e=>{clearTimeout(ibQT);const v=e.target.value;ibQT=setTimeout(()=>{ibQ=v;loadInboxUnified();},250);});
 $("#ib-composer")?.addEventListener("click",e=>{
   const b=e.target.closest("#ib-ctabs button[data-t]");if(!b||!ibCtx)return;
@@ -1224,7 +1377,8 @@ async function openConversation(id){
     await ensureChannelSenders();
     cvBody="";
     await loadChannelView(c.contact_id, c.channel, c.contact_name||c.contact_email);
-  }catch(e){$("#cv-name").textContent="Error";$("#cv-sub").textContent=e.message;}
+  }catch(e){$("#cv-name").textContent="Error";$("#cv-sub").textContent="";
+    showRetry($("#cv-msgs"),e.message,()=>openConversation(id),{cls:"msg bot"});}
 }
 // Show ONLY the selected channel's thread for a contact. Email tab → email only,
 // WhatsApp tab → whatsapp only, etc. No conversation on that channel yet → an
@@ -1404,14 +1558,17 @@ function renderFunnel(el,stages,order){
       <div class="funnel-count">${s.count||0}</div></div>`;
   }).join("")||`<div class="muted">No data.</div>`;
 }
+let aDays=30,aMetric="sends",aTimeseries=[];
 async function loadAnalytics(){
+  showSkeleton($("#a-cards"),1);showSkeleton($("#a-trend"),1);
   try{
-    const [stats,mkt,sales,byC,byCamp]=await Promise.all([
+    const [stats,mkt,sales,byC,byCamp,ts]=await Promise.all([
       get("stats"),
       get("analytics/funnel?pipeline_key=marketing"),
       get("analytics/funnel?pipeline_key=sales"),
-      get("analytics/by-channel?days=30"),
-      get("analytics/by-campaign?days=30"),
+      get(`analytics/by-channel?days=${aDays}`),
+      get(`analytics/by-campaign?days=${aDays}`),
+      get(`analytics/timeseries?days=${aDays}`),
     ]);
     const ca=stats.campaign_last_30d||{};
     const acards=[
@@ -1437,12 +1594,61 @@ async function loadAnalytics(){
       <td>${(r.mqls||0).toLocaleString()}</td>
       <td class="rate">${r.mql_rate||0}%</td></tr>`).join("")||`<tr><td colspan="5" class="muted">No data.</td></tr>`;
     $("#a-campaign tbody").innerHTML=campRows;
+    aTimeseries=ts.days||[];
+    renderTrendChart();
   }catch(e){
-    $("#a-cards").innerHTML=`<div class="muted" style="padding:18px">${esc(e.message)}</div>`;
+    showRetry($("#a-cards"),e.message,loadAnalytics);
+    showRetry($("#a-trend"),e.message,loadAnalytics);
   }
 }
+// Zero-fills every day in [today-aDays, today] from the sparse rollup rows,
+// then draws a dependency-free inline-SVG line chart (no charting lib in this
+// project by design — a single-file dashboard with no build step).
+function renderTrendChart(){
+  const byDay={};(aTimeseries||[]).forEach(r=>byDay[r.day]=r);
+  const points=[];
+  for(let i=aDays-1;i>=0;i--){
+    const d=new Date();d.setUTCHours(0,0,0,0);d.setUTCDate(d.getUTCDate()-i);
+    const key=d.toISOString().slice(0,10);
+    const row=byDay[key]||{};
+    points.push({day:key,value:Number(row[aMetric])||0});
+  }
+  const host=$("#a-trend");
+  if(!points.some(p=>p.value>0)){host.innerHTML=`<div class="tempty">No ${esc(aMetric)} in this range yet.</div>`;return;}
+  const W=760,H=180,PAD=28;
+  const max=Math.max(1,...points.map(p=>p.value));
+  const x=i=>PAD+(i/(points.length-1||1))*(W-PAD*2);
+  const y=v=>H-PAD-(v/max)*(H-PAD*2);
+  const path=points.map((p,i)=>`${i===0?"M":"L"}${x(i).toFixed(1)},${y(p.value).toFixed(1)}`).join(" ");
+  const everyN=Math.max(1,Math.ceil(points.length/8));
+  const labels=points.map((p,i)=>i%everyN===0||i===points.length-1
+    ?`<text class="tlabel" x="${x(i).toFixed(1)}" y="${H-6}" text-anchor="middle">${esc(p.day.slice(5))}</text>`:"").join("");
+  const dots=points.map((p,i)=>`<circle class="tpt" cx="${x(i).toFixed(1)}" cy="${y(p.value).toFixed(1)}" r="2.5"><title>${esc(p.day)}: ${p.value}</title></circle>`).join("");
+  host.innerHTML=`<svg viewBox="0 0 ${W} ${H}" preserveAspectRatio="xMidYMid meet">
+    <line class="taxis" x1="${PAD}" y1="${H-PAD}" x2="${W-PAD}" y2="${H-PAD}"/>
+    <path class="tline" d="${path}"/>${dots}${labels}
+  </svg>`;
+}
+$("#a-range").addEventListener("click",e=>{
+  const b=e.target.closest("button[data-days]");if(!b)return;
+  aDays=parseInt(b.dataset.days,10);
+  $$("#a-range button").forEach(x=>x.classList.toggle("active",x===b));
+  $("#a-range-label").textContent=`Analytics · Last ${aDays} Days`;
+  loadAnalytics();
+});
+$("#a-metric").addEventListener("click",e=>{
+  const b=e.target.closest("button[data-metric]");if(!b)return;
+  aMetric=b.dataset.metric;
+  $$("#a-metric button").forEach(x=>x.classList.toggle("active",x===b));
+  renderTrendChart();
+});
 
 // ── Chat ─────────────────────────────────────────────────────────────────────
+// Persisted to localStorage (not the server — this is a client-side convenience,
+// not an audit record) so a refresh doesn't lose an in-progress conversation,
+// which matters more now that chat has CRM write access and a lost thread means
+// losing track of what it was asked to do.
+const CHAT_STORAGE_KEY="denchclaw_chat_v1";
 const convo=[];
 const msgsEl=$("#msgs");
 function addMsg(role,text,cls){
@@ -1450,22 +1656,39 @@ function addMsg(role,text,cls){
   d.className="msg "+(role==="user"?"user":"bot")+(cls?(" "+cls):"");
   d.textContent=text;msgsEl.appendChild(d);msgsEl.scrollTop=msgsEl.scrollHeight;return d;
 }
+function saveChatHistory(){
+  try{localStorage.setItem(CHAT_STORAGE_KEY,JSON.stringify(convo.slice(-100)));}catch(_){}
+}
+function loadChatHistory(){
+  let saved=[];
+  try{saved=JSON.parse(localStorage.getItem(CHAT_STORAGE_KEY)||"[]");}catch(_){saved=[];}
+  if(!Array.isArray(saved))return;
+  for(const m of saved){
+    if(!m||(m.role!=="user"&&m.role!=="assistant")||typeof m.content!=="string")continue;
+    convo.push(m);addMsg(m.role==="user"?"user":"bot",m.content);
+  }
+}
 async function sendChat(text){
   text=(text||"").trim();if(!text)return;
   $("#send").disabled=true;$("#input").value="";
-  addMsg("user",text);convo.push({role:"user",content:text});
+  addMsg("user",text);convo.push({role:"user",content:text});saveChatHistory();
   const typing=addMsg("bot","Tantra is thinking…","typing");
   try{
     const r=await fetch(`${API}/chat`,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({messages:convo})});
     const j=await r.json().catch(()=>({}));
     if(!r.ok)throw new Error(j.error||`HTTP ${r.status}`);
     typing.remove();const reply=j.reply||"(no reply)";
-    addMsg("bot",reply);convo.push({role:"assistant",content:reply});
+    addMsg("bot",reply);convo.push({role:"assistant",content:reply});saveChatHistory();
   }catch(e){typing.remove();addMsg("bot","⚠️ "+e.message);}
   finally{$("#send").disabled=false;$("#input").focus();}
 }
 $("#composer").addEventListener("submit",e=>{e.preventDefault();sendChat($("#input").value);});
 $("#suggest").addEventListener("click",e=>{if(e.target.tagName==="BUTTON")sendChat(e.target.textContent);});
+$("#chat-clear").addEventListener("click",()=>{
+  convo.length=0;msgsEl.innerHTML="";
+  try{localStorage.removeItem(CHAT_STORAGE_KEY);}catch(_){}
+});
+loadChatHistory();
 
 // ── Main load ─────────────────────────────────────────────────────────────────
 async function load(){
@@ -1495,7 +1718,7 @@ async function load(){
 // ── Tab switching ─────────────────────────────────────────────────────────────
 function setTab(tab){
   document.querySelectorAll(".tabbar button").forEach(b=>b.classList.toggle("active",b.dataset.tab===tab));
-  ["dashboard","board","contacts","companies","pipelines","sequences","inbox","analytics"].forEach(v=>{
+  ["dashboard","board","contacts","companies","pipelines","sequences","inbox","marketing","analytics"].forEach(v=>{
     const el=$(`#view-${v}`);if(el)el.style.display=v===tab?"":"none";
   });
   // Every tab refetches on entry so numbers are always live (get() is no-store).
@@ -1508,6 +1731,7 @@ function setTab(tab){
   if(tab==="board")loadBoard();
   if(tab==="pipelines")loadPipelinesTab();
   if(tab==="sequences")loadSequencesTab();
+  if(tab==="marketing")loadMarketingTab();
 }
 $(".tabbar").addEventListener("click",e=>{const b=e.target.closest("button[data-tab]");if(!b)return;setTab(b.dataset.tab);});
 
@@ -1548,17 +1772,31 @@ function confirmDelete(msg,fn){openModal("Confirm",`<p style="margin:4px 0 0">${
 
 // ── Contacts ──────────────────────────────────────────────────────────────────
 let cList=[],cSel=new Set(),_srcFilled=false;
+const CONTACT_PAGE_SIZE=50;
+let cOffset=0,cTotal=0;
 function contactQuery(){const p=new URLSearchParams();
   const s=$("#contact-search").value.trim();if(s)p.set("search",s);
   const sc=$("#filter-score").value;if(sc)p.set("score",sc);
   const so=$("#filter-source").value;if(so)p.set("source",so);
+  p.set("limit",CONTACT_PAGE_SIZE);p.set("offset",cOffset);
   return p.toString();}
-async function loadContacts(){
+async function loadContacts(resetPage){
+  if(resetPage)cOffset=0;
+  showSkeleton($("#contacts-list"),6);
   try{
     if(!_srcFilled){$("#filter-source").insertAdjacentHTML("beforeend",SOURCES.map(s=>`<option value="${s}">${nice(s)}</option>`).join(""));_srcFilled=true;}
-    const r=await get(`contacts${contactQuery()?"?"+contactQuery():""}`);
-    cList=r.contacts||r.data||[];cSel.clear();renderContactList();
-  }catch(e){$("#contacts-list").innerHTML=`<div class="empty">${esc(e.message)}</div>`;}
+    const r=await get(`contacts?${contactQuery()}`);
+    cList=r.contacts||r.data||[];cTotal=r.total??cList.length;cSel.clear();renderContactList();renderContactPager();
+  }catch(e){showRetry($("#contacts-list"),e.message,()=>loadContacts());}
+}
+function renderContactPager(){
+  const from=cTotal?cOffset+1:0,to=Math.min(cOffset+CONTACT_PAGE_SIZE,cTotal);
+  $("#contacts-pager").innerHTML=cTotal<=CONTACT_PAGE_SIZE&&cOffset===0?"":
+    `<button class="btn sm" id="c-prev" ${cOffset===0?"disabled":""}>← Prev</button>
+     <span>${from}–${to} of ${cTotal}</span>
+     <button class="btn sm" id="c-next" ${cOffset+CONTACT_PAGE_SIZE>=cTotal?"disabled":""}>Next →</button>`;
+  $("#c-prev")&&($("#c-prev").onclick=()=>{cOffset=Math.max(0,cOffset-CONTACT_PAGE_SIZE);loadContacts();});
+  $("#c-next")&&($("#c-next").onclick=()=>{cOffset+=CONTACT_PAGE_SIZE;loadContacts();});
 }
 function renderContactList(){
   if(!cList.length){$("#contacts-list").innerHTML=`<div class="empty">No contacts match. <a class="linklike" id="empty-nc">Add one</a>.</div>`;
@@ -1587,7 +1825,7 @@ $("#contacts-list").addEventListener("click",e=>{
   if(e.target.closest(".checkcell"))return; // checkbox toggles selection, not open
   const tr=e.target.closest("tr[data-contact]");if(tr)openContact(tr.dataset.contact);
 });
-["#contact-search","#filter-score","#filter-source"].forEach(s=>$(s).addEventListener(s==="#contact-search"?"input":"change",debounce(loadContacts,250)));
+["#contact-search","#filter-score","#filter-source"].forEach(s=>$(s).addEventListener(s==="#contact-search"?"input":"change",debounce(()=>loadContacts(true),250)));
 $("#new-contact").onclick=()=>contactModal();
 
 // ── GHL-style CSV bulk import ─────────────────────────────────────────────────
@@ -1658,14 +1896,26 @@ $("#import-contacts").onclick=()=>{
     if(!contacts.length) return toast("Map an Email or Name column first",true);
     const btn=$("#imp-go"); btn.disabled=true; btn.textContent="Importing…";
     try{
-      let created=0,updated=0,errors=0,total=0; const CH=500;
+      let created=0,updated=0,errors=0,total=0,results=[]; const CH=500;
       for(let i=0;i<contacts.length;i+=CH){
         const r=await post("contacts/bulk-import",{contacts:contacts.slice(i,i+CH)});
         created+=r.created||0; updated+=r.updated||0; errors+=r.errors||0; total+=r.total||0;
+        results=results.concat(r.results||[]);
       }
-      closeModal();
-      toast(`Imported ${created} new · ${updated} updated${errors?` · ${errors} skipped`:""} (of ${total})`);
       loadContacts();
+      const failed=results.filter(x=>x.status==="error");
+      const summary=`<div class="eyebrow" style="margin-bottom:10px">${created} created · ${updated} updated${errors?` · ${errors} failed`:""} (of ${total})</div>`;
+      if(!failed.length){
+        openModal("Import complete",summary+`<p style="margin:6px 0 0;color:var(--ink-2)">Every row imported cleanly.</p>`,
+          `<button class="btn primary" onclick="closeModal()">Done</button>`);
+      }else{
+        // Per-row detail on failure — WHICH rows and WHY, instead of a single
+        // aggregate toast the operator would have to re-upload to diagnose.
+        const rows=failed.map(f=>`<tr><td>${esc(f.row)}</td><td class="muted">${esc(f.reason||"unknown error")}</td></tr>`).join("");
+        openModal("Import complete — some rows failed",
+          summary+`<div style="max-height:280px;overflow-y:auto"><table><thead><tr><th>Row</th><th>Reason</th></tr></thead><tbody>${rows}</tbody></table></div>`,
+          `<button class="btn primary" onclick="closeModal()">Done</button>`);
+      }
     }catch(e){ toast(e.message,true); btn.disabled=false; btn.textContent="Import"; }
   };
 };
@@ -1682,6 +1932,41 @@ function contactModal(c){
     catch(e){toast(e.message,true);}};
 }
 $("#bulk-del").onclick=()=>confirmDelete(`Delete ${cSel.size} contact(s)?`,async()=>{await post("contacts/bulk",{action:"delete",ids:[...cSel]});toast("Deleted");loadContacts();});
+// Bulk stage-move loops POST /contacts/:id/advance per contact — the same
+// state-machine-and-manual-stage-gated endpoint the Kanban drag uses — rather
+// than a bulk SQL UPDATE that would bypass those guards. Some contacts will
+// legitimately be refused (they're not all at the same starting stage), so
+// this reports a count rather than treating a partial result as a failure.
+$("#bulk-stage").onclick=async()=>{
+  let pipes=[];
+  try{pipes=((await get("pipelines")).pipelines||[]).filter(p=>p.applies_to==="contact");}
+  catch(e){return toast(e.message,true);}
+  if(!pipes.length)return toast("No contact-based pipelines configured",true);
+  const pipeOpts=pipes.map(p=>`<option value="${esc(p.key)}">${esc(p.name)}</option>`).join("");
+  openModal(`Move ${cSel.size} contact(s) to stage`,
+    `<div class="field"><label>Pipeline</label><select id="bs-pipe">${pipeOpts}</select></div>
+     <div class="field"><label>Target stage</label><select id="bs-stage"></select></div>
+     <p class="muted" style="font-size:12px;margin:8px 0 0">Contacts not legally allowed to move to this stage from their current one are skipped, not forced.</p>`,
+    `<button class="btn" onclick="closeModal()">Cancel</button><button class="btn primary" id="bs-go">Move</button>`);
+  const fillStages=()=>{
+    const p=pipes.find(x=>x.key===$("#bs-pipe").value);
+    $("#bs-stage").innerHTML=(p?.stages||[]).map(s=>`<option value="${esc(s.key)}">${esc(s.name)}</option>`).join("");
+  };
+  fillStages();
+  $("#bs-pipe").onchange=fillStages;
+  $("#bs-go").onclick=async()=>{
+    const pipeline_key=$("#bs-pipe").value,stage=$("#bs-stage").value;
+    const btn=$("#bs-go");btn.disabled=true;btn.textContent="Moving…";
+    let moved=0,skipped=0;
+    for(const id of [...cSel]){
+      try{await post(`contacts/${id}/advance`,{pipeline_key,stage});moved++;}
+      catch(e){skipped++;}
+    }
+    closeModal();
+    toast(`Moved ${moved}${skipped?` · ${skipped} skipped (illegal transition)`:""}`);
+    loadContacts();
+  };
+};
 $("#bulk-tag").onclick=()=>{openModal("Add tag",field("Tag","tag",{placeholder:"e.g. vip"}),`<button class="btn" onclick="closeModal()">Cancel</button><button class="btn primary" id="save-tag">Apply</button>`);
   $("#save-tag").onclick=async()=>{const v=formValues();if(!v.tag)return;try{await post("contacts/bulk",{action:"tag",ids:[...cSel],value:v.tag});closeModal();toast("Tag added");loadContacts();}catch(e){toast(e.message,true);}};};
 $("#bulk-export").onclick=()=>{const sel=cList.filter(c=>cSel.has(c.id));const cols=["name","email","phone","company_name","marketing_stage","lead_score","source","created_at"];
@@ -1690,10 +1975,27 @@ $("#bulk-export").onclick=()=>{const sel=cList.filter(c=>cSel.has(c.id));const c
 
 // ── Companies ─────────────────────────────────────────────────────────────────
 let coList=[],coSel=new Set();
-async function loadCompanies(){
-  try{const s=$("#company-search").value.trim();const r=await get(`companies${s?"?search="+encodeURIComponent(s):""}`);
-    coList=r.companies||[];coSel.clear();renderCompanyList();}
-  catch(e){$("#companies-list").innerHTML=`<div class="empty">${esc(e.message)}</div>`;}
+const COMPANY_PAGE_SIZE=50;
+let coOffset=0,coTotal=0;
+async function loadCompanies(resetPage){
+  if(resetPage)coOffset=0;
+  showSkeleton($("#companies-list"),6);
+  try{
+    const p=new URLSearchParams();
+    const s=$("#company-search").value.trim();if(s)p.set("search",s);
+    p.set("limit",COMPANY_PAGE_SIZE);p.set("offset",coOffset);
+    const r=await get(`companies?${p.toString()}`);
+    coList=r.companies||[];coTotal=r.total??coList.length;coSel.clear();renderCompanyList();renderCompanyPager();}
+  catch(e){showRetry($("#companies-list"),e.message,()=>loadCompanies());}
+}
+function renderCompanyPager(){
+  const from=coTotal?coOffset+1:0,to=Math.min(coOffset+COMPANY_PAGE_SIZE,coTotal);
+  $("#companies-pager").innerHTML=coTotal<=COMPANY_PAGE_SIZE&&coOffset===0?"":
+    `<button class="btn sm" id="co-prev" ${coOffset===0?"disabled":""}>← Prev</button>
+     <span>${from}–${to} of ${coTotal}</span>
+     <button class="btn sm" id="co-next" ${coOffset+COMPANY_PAGE_SIZE>=coTotal?"disabled":""}>Next →</button>`;
+  $("#co-prev")&&($("#co-prev").onclick=()=>{coOffset=Math.max(0,coOffset-COMPANY_PAGE_SIZE);loadCompanies();});
+  $("#co-next")&&($("#co-next").onclick=()=>{coOffset+=COMPANY_PAGE_SIZE;loadCompanies();});
 }
 function renderCompanyList(){
   if(!coList.length){$("#companies-list").innerHTML=`<div class="empty">No companies yet. <a class="linklike" id="empty-nco">Add one</a>.</div>`;
@@ -1741,7 +2043,7 @@ async function openCompanyDetail(id){
       <h3 class="h1" style="font-size:15px;margin:16px 0 6px">Opportunities (${(dl.deals||[]).length})</h3>${dealsHtml}`;
   }catch(e){$("#modal-body")&&($("#modal-body").innerHTML=`<div class="empty">${esc(e.message)}</div>`);}
 }
-$("#company-search").addEventListener("input",debounce(loadCompanies,250));
+$("#company-search").addEventListener("input",debounce(()=>loadCompanies(true),250));
 $("#new-company").onclick=()=>companyModal();
 $("#company-bulk-del").onclick=()=>confirmDelete(`Delete ${coSel.size} compan${coSel.size>1?"ies":"y"}?`,async()=>{await post("companies/bulk",{action:"delete",ids:[...coSel]});toast("Deleted");loadCompanies();});
 function companyModal(c){
@@ -1778,9 +2080,11 @@ async function loadBoard(){
     const nb=$("#new-deal");if(nb)nb.textContent=def.applies_to==="contact"?"+ New contact":"+ New opportunity";
     const data=await get(`pipeline?pipeline_key=${encodeURIComponent(selDealPipe)}`);
     renderDealBoard(def,data.pipeline||{});
-  }catch(e){$("#board").innerHTML=`<div class="gempty">${esc(e.message)}</div>`;}
+  }catch(e){showRetry($("#board"),e.message,loadBoard,{cls:"gempty"});}
 }
+let currentDealDef=null;
 function renderDealBoard(def,buckets){
+  currentDealDef=def;
   const b=$("#board");b.className="board";
   const isContact=def.applies_to==="contact"; // Marketing etc. → cards are contacts
   b.innerHTML=(def.stages||[]).map(s=>{
@@ -1791,7 +2095,8 @@ function renderDealBoard(def,buckets){
     if(isContact){
       cards=items.map(c=>{
         const sc=(typeof SCORE_COLORS!=="undefined"&&SCORE_COLORS[c.lead_score])||"#98a2b3";
-        return `<div class="gcard" draggable="true" data-type="contact" data-id="${esc(c.id)}" data-contact="${esc(c.id)}" data-stage="${esc(s.key)}" style="--cc:${sc}">
+        const label=esc(`${c.name||c.email||"—"}, stage ${s.name}. Enter to move, Enter or click to open.`);
+        return `<div class="gcard" draggable="true" tabindex="0" role="button" aria-label="${label}" data-type="contact" data-id="${esc(c.id)}" data-contact="${esc(c.id)}" data-stage="${esc(s.key)}" style="--cc:${sc}">
           <div class="gmeta" style="margin-top:0"><span class="avatar">${esc(initials(c.name||c.email||"?"))}</span><span class="gtitle">${esc(c.name||c.email||"—")}</span></div>
           ${c.company_name?`<div class="gsub" style="margin-top:5px">${esc(c.company_name)}</div>`:""}
           <div class="gmeta"><span class="score ${esc(c.lead_score||"neutral")}">${esc(c.lead_score||"—")}</span>${c.source?`<span class="gsrc">${esc(c.source)}</span>`:""}</div>
@@ -1799,10 +2104,13 @@ function renderDealBoard(def,buckets){
       }).join("")||`<div class="gempty">—</div>`;
     }else{
       total=items.reduce((x,d)=>x+(parseFloat(d.value)||0),0);
-      cards=items.map(d=>`<div class="gcard" draggable="true" data-type="deal" data-id="${esc(d.id)}" data-stage="${esc(s.key)}" style="--cc:${color}">
+      cards=items.map(d=>{
+        const label=esc(`${d.title||"—"}, stage ${s.name}. Enter to move.`);
+        return `<div class="gcard" draggable="true" tabindex="0" role="button" aria-label="${label}" data-type="deal" data-id="${esc(d.id)}" data-stage="${esc(s.key)}" style="--cc:${color}">
         <div class="gtitle">${esc(d.title||"—")}</div>
         ${parseFloat(d.value)>0?`<div class="gval">$${parseFloat(d.value).toLocaleString()}</div>`:""}
-        ${d.contact_name?`<div class="gmeta"><span class="avatar">${esc(initials(d.contact_name))}</span><span class="gsub">${esc(d.contact_name)}</span></div>`:""}</div>`).join("")||`<div class="gempty">—</div>`;
+        ${d.contact_name?`<div class="gmeta"><span class="avatar">${esc(initials(d.contact_name))}</span><span class="gsub">${esc(d.contact_name)}</span></div>`:""}</div>`;
+      }).join("")||`<div class="gempty">—</div>`;
     }
     const count=bucket.count!=null?bucket.count:items.length;
     return `<div class="gcol" data-type="${isContact?"contact":"deal"}" data-stage="${esc(s.key)}" style="--sc:${color}">
@@ -1888,7 +2196,7 @@ function renderStageRows(){
     <input class="sname" value="${esc(s.name)}" data-idx="${i}" placeholder="Stage name">
     ${s.mode==="manual"?`<span class="tag" title="Only a human may set this stage — the CRM never auto-advances into it">manual</span>`:""}
     ${s.terminal?`<span class="tag" title="Entering this stage closes the deal">terminal</span>`:""}
-    <button class="del" data-idx="${i}">×</button></div>`).join("");
+    <button class="del" data-idx="${i}" aria-label="Delete stage ${esc(s.name||"")}">×</button></div>`).join("");
 }
 $("#pipe-editor").addEventListener("input",e=>{const i=e.target.dataset.idx;if(i==null)return;
   if(e.target.classList.contains("sname"))editStages[i].name=e.target.value;
@@ -2031,6 +2339,163 @@ $("#new-sequence").onclick=async()=>{
     try{const s=await post("sequences",body);closeModal();editSeqId=s.id;toast("Sequence created");loadSequencesTab();}
     catch(e){toast(e.message,true);}};
 };
+
+// ── Marketing (CP-B backend, this is its first frontend) ───────────────────────
+// webinars, invite links, attendance, the funnel view — all against endpoints
+// under /api/crm/marketing that already work and are already tested
+// (test/unit-cpb-marketing.mjs); nothing here writes any new server logic.
+let MK_WEBINARS=[];
+async function loadMarketingTab(){
+  await Promise.all([loadMarketingFunnel(),loadWebinars(),loadMarketingEvents()]);
+}
+async function loadMarketingFunnel(){
+  const el=$("#mk-funnel");showSkeleton(el,6);
+  try{
+    const r=await get("marketing/funnel?pipeline_key=webinar_marketing");
+    renderMarketingFunnel(el,r.stages||[]);
+  }catch(e){showRetry(el,e.message,loadMarketingFunnel);}
+}
+// Modeled on the existing Analytics renderFunnel (same .funnel/.funnel-row/
+// .funnel-bar/.bar-fill CSS) but NOT reused verbatim — this endpoint already
+// returns {key,label,count,driven_by} in pipeline order, not the {stage,count}
+// shape analytics/funnel returns with an externally-supplied order array.
+function renderMarketingFunnel(el,stages){
+  const max=Math.max(...stages.map(s=>s.count||0),1);
+  el.innerHTML=stages.map(s=>{
+    const pct=Math.round((s.count||0)/max*100);
+    const color=STAGE_COLORS[s.key]||"#98a2b3";
+    const hint=(!s.count&&s.driven_by&&s.driven_by.length)?`<div class="muted" style="font-size:10px;margin-top:2px">driven by ${esc(s.driven_by.join(", "))}</div>`:"";
+    return `<div class="funnel-row" style="align-items:start">
+      <div class="funnel-label" style="padding-top:2px">${esc(s.label||nice(s.key))}</div>
+      <div><div class="funnel-bar"><div class="bar-fill" style="width:${pct}%;background:${color}"></div></div>${hint}</div>
+      <div class="funnel-count">${s.count||0}</div></div>`;
+  }).join("")||`<div class="muted">No data.</div>`;
+}
+async function loadWebinars(){
+  const el=$("#mk-webinars");showSkeleton(el,3);
+  try{
+    const r=await get("marketing/webinars");
+    MK_WEBINARS=r.webinars||[];
+    renderWebinarsList();
+  }catch(e){showRetry(el,e.message,loadWebinars);}
+}
+function renderWebinarsList(){
+  const el=$("#mk-webinars");
+  if(!MK_WEBINARS.length){el.innerHTML=`<div class="empty">No webinars yet. <a class="linklike" id="mk-empty-new">Create one</a>.</div>`;
+    $("#mk-empty-new")&&($("#mk-empty-new").onclick=()=>webinarModal());return;}
+  const rows=MK_WEBINARS.map(w=>`<tr>
+    <td><b>${esc(w.name)}</b><div class="muted" style="font-size:11px">${esc(w.key)}</div></td>
+    <td><span class="status-pill" style="background:var(--cold-bg);color:var(--cold)">${esc(w.status||"scheduled")}</span></td>
+    <td class="muted">${w.scheduled_at?fmtDate(w.scheduled_at):"—"}</td>
+    <td>${w.invite_link_count||0}</td>
+    <td>${w.event_count||0}</td>
+    <td><div class="rowact">
+      <button class="btn sm" data-invite="${esc(w.key)}">Invite…</button>
+      <button class="btn sm" data-attend="${esc(w.key)}">Attendance…</button>
+    </div></td></tr>`).join("");
+  el.innerHTML=`<table><thead><tr><th>Webinar</th><th>Status</th><th>Scheduled</th><th>Invites</th><th>Events</th><th></th></tr></thead>
+    <tbody>${rows}</tbody></table>`;
+}
+$("#mk-webinars").addEventListener("click",e=>{
+  const inv=e.target.closest("[data-invite]"),att=e.target.closest("[data-attend]");
+  if(inv)return inviteModal(inv.dataset.invite);
+  if(att)return attendanceModal(att.dataset.attend);
+});
+$("#new-webinar").onclick=()=>webinarModal();
+function webinarModal(){
+  openModal("New webinar",
+    field("Key","key",{placeholder:"e.g. aug_growth_webinar — unique, used in URLs"})+
+    field("Name","name",{placeholder:"e.g. August Growth Webinar"})+
+    field("Scheduled at","scheduled_at",{type:"datetime-local"})+
+    field("Landing page URL","landing_page_url",{placeholder:"https://…"})+
+    field("Status","status",{type:"select",value:"scheduled",options:["scheduled","live","completed","cancelled"]}),
+    `<button class="btn" onclick="closeModal()">Cancel</button><button class="btn primary" id="save-webinar">Create</button>`);
+  $("#save-webinar").onclick=async()=>{
+    const v=formValues();
+    if(!v.key||!v.name)return toast("Key and name are required",true);
+    const body={key:v.key.trim(),name:v.name.trim()};
+    if(v.scheduled_at)body.scheduled_at=new Date(v.scheduled_at).toISOString();
+    if(v.landing_page_url)body.landing_page_url=v.landing_page_url.trim();
+    if(v.status)body.status=v.status;
+    try{await post("marketing/webinars",body);closeModal();toast("Webinar created");loadWebinars();loadMarketingFunnel();}
+    catch(e){toast(e.message,true);}
+  };
+}
+const MK_INVITE_CHANNELS=["email","sms","whatsapp","linkedin","ai_call","calendar","content"];
+function inviteModal(webinarKey){
+  openModal(`Send invites — ${esc(webinarKey)}`,
+    field("Channel","channel",{type:"select",options:MK_INVITE_CHANNELS.map(c=>({value:c,label:nice(c)}))})+
+    field("Destination URL (optional)","destination_url",{placeholder:"defaults to the webinar's landing page"})+
+    `<div class="field"><label>Emails (one per line)</label><textarea id="mk-inv-emails" rows="6" placeholder="ava@example.com&#10;marcus@example.com"></textarea></div>`,
+    `<button class="btn" onclick="closeModal()">Cancel</button><button class="btn primary" id="mk-inv-go">Send</button>`);
+  $("#mk-inv-go").onclick=async()=>{
+    const v=formValues();
+    const emails=($("#mk-inv-emails").value||"").split("\n").map(s=>s.trim()).filter(Boolean);
+    if(!v.channel)return toast("Pick a channel",true);
+    if(!emails.length)return toast("Add at least one email",true);
+    const btn=$("#mk-inv-go");btn.disabled=true;btn.textContent="Sending…";
+    try{
+      const body={webinar_key:webinarKey,channel:v.channel,invitees:emails.map(email=>({email}))};
+      if(v.destination_url)body.destination_url=v.destination_url.trim();
+      const r=await post("marketing/invites",body);
+      showMarketingResults(`Invites sent — ${webinarKey}`,r.results||[],"invite_url");
+      loadWebinars();loadMarketingFunnel();loadMarketingEvents();
+    }catch(e){toast(e.message,true);btn.disabled=false;btn.textContent="Send";}
+  };
+}
+function attendanceModal(webinarKey){
+  openModal(`Mark attendance — ${esc(webinarKey)}`,
+    `<div class="field"><label>Attended (emails, one per line)</label><textarea id="mk-att-yes" rows="4"></textarea></div>
+     <div class="field"><label>No-show (emails, one per line)</label><textarea id="mk-att-no" rows="4"></textarea></div>
+     <p class="muted" style="font-size:12px;margin:6px 0 0">A person who attended but never registered is flagged, not silently force-advanced — see the result list after submitting.</p>`,
+    `<button class="btn" onclick="closeModal()">Cancel</button><button class="btn primary" id="mk-att-go">Submit</button>`);
+  $("#mk-att-go").onclick=async()=>{
+    const attended=($("#mk-att-yes").value||"").split("\n").map(s=>s.trim()).filter(Boolean).map(email=>({email}));
+    const noShow=($("#mk-att-no").value||"").split("\n").map(s=>s.trim()).filter(Boolean).map(email=>({email}));
+    if(!attended.length&&!noShow.length)return toast("Add at least one email",true);
+    const btn=$("#mk-att-go");btn.disabled=true;btn.textContent="Submitting…";
+    try{
+      const r=await post("marketing/attendance",{webinar_key:webinarKey,attended,no_show:noShow});
+      showMarketingResults(`Attendance recorded — ${webinarKey}`,r.results||[]);
+      loadWebinars();loadMarketingFunnel();loadMarketingEvents();
+    }catch(e){toast(e.message,true);btn.disabled=false;btn.textContent="Submit";}
+  };
+}
+// Shared results view for invites/attendance — every row's outcome, and the
+// refusal detail when there is one, so a stage-move refusal is visible instead
+// of silently absorbed into an aggregate count.
+function showMarketingResults(title,results,urlField){
+  const rows=results.map(r=>{
+    const ok=r.outcome==="advanced";
+    const label=r.contact_email||r.email||r.contact_id||"—";
+    const link=urlField&&r[urlField]?`<button class="btn sm" data-copy="${esc(r[urlField])}">Copy link</button>`:"";
+    return `<tr><td>${esc(label)}</td>
+      <td><span class="score ${ok?"cold":"warm"}">${esc(r.outcome||"—")}</span></td>
+      <td class="muted" style="font-size:12px">${esc(r.detail||"")}</td>
+      <td>${link}</td></tr>`;
+  }).join("");
+  openModal(title,
+    `<div style="max-height:320px;overflow-y:auto"><table><thead><tr><th>Contact</th><th>Outcome</th><th>Detail</th><th></th></tr></thead>
+      <tbody>${rows||`<tr><td colspan="4" class="muted">No rows.</td></tr>`}</tbody></table></div>`,
+    `<button class="btn primary" onclick="closeModal()">Done</button>`);
+  $("#modal-body").querySelectorAll("[data-copy]").forEach(b=>{
+    b.onclick=()=>{navigator.clipboard?.writeText(b.dataset.copy).then(()=>toast("Link copied")).catch(()=>toast("Could not copy — copy manually",true));};
+  });
+}
+async function loadMarketingEvents(){
+  const tb=$("#mk-events tbody");
+  try{
+    const r=await get("marketing/events?limit=50");
+    const rows=(r.events||[]).map(ev=>`<tr>
+      <td>${esc(ev.contact_name||ev.contact_email||"—")}</td>
+      <td class="muted">${esc(ev.webinar_key||"—")}</td>
+      <td>${esc(nice(ev.event_type))}</td>
+      <td class="src">${esc(ev.channel||"—")}</td>
+      <td><span class="score ${ev.outcome==="advanced"?"cold":"warm"}">${esc(ev.outcome||"—")}</span></td>
+      <td class="muted">${fmtDate(ev.created_at)}</td></tr>`).join("");
+    tb.innerHTML=rows||`<tr><td colspan="6" class="muted">No events yet.</td></tr>`;
+  }catch(e){showRetry(tb,e.message,loadMarketingEvents,{colspan:6});}
+}
 </script>
 </body>
 </html>
