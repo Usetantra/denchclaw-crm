@@ -39,6 +39,17 @@
     }
   }
   *{box-sizing:border-box}
+  /* Lets the browser's OWN dark-mode theming of native form-control chrome
+     (dropdown arrows, date pickers, scrollbars) follow the same preference our
+     CSS vars already switch on — without this, some browsers auto-theme a
+     <select>'s background dark while leaving its text at the UA-default black,
+     since form controls don't inherit `color` from the page by default. That
+     combination is exactly a "text not visible" bug: black text, black-ish bg. */
+  :root{color-scheme:light dark}
+  /* Base fallback so no input/select/textarea is EVER left to browser defaults
+     for color+background — more specific rules elsewhere (.toolbar select,
+     .field input, etc.) still win by specificity; this only fills the gaps. */
+  input,select,textarea{color:var(--ink);background:var(--surface);font-family:var(--sans)}
   body{margin:0;background:var(--bg);color:var(--ink);font:16px/1.6 var(--sans);-webkit-font-smoothing:antialiased}
   .eyebrow{font-size:11px;letter-spacing:.18em;text-transform:uppercase;color:var(--ink-4);font-weight:500}
 
