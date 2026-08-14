@@ -149,7 +149,7 @@ async function updateSequenceStatus(id, companyId, status) {
 // and a future direct query against this table that forgets to join through
 // sequences would otherwise have no defense-in-depth layer at all.
 
-async function addStep(sequenceId, companyId, { stepOrder, channel, delaySeconds = 0, templateRef = null, entryConditions = {}, exitConditions = {}, stageWriteback = null, subject = null, body = null, linkedinAction = null }) {
+async function addStep(sequenceId, companyId, { stepOrder, channel, delaySeconds = 0, anchorOffsetSeconds = null, templateRef = null, entryConditions = {}, exitConditions = {}, stageWriteback = null, subject = null, body = null, linkedinAction = null }) {
   if (!companyId) throw new Error('sequences.addStep requires companyId');
   const owned = await getSequenceById(sequenceId, companyId);
   if (!owned) return null;
@@ -164,10 +164,16 @@ async function addStep(sequenceId, companyId, { stepOrder, channel, delaySeconds
   // performs — invite | message | inmail. NULL means 'message' at the gate, and
   // that default falls the SAFE way: an unverified message is refused, whereas
   // defaulting to 'invite' would fire connection requests nobody asked for.
+  // F38: `anchorOffsetSeconds` (migration 032) makes this step ANCHORED to the
+  // enrolling contact's `enrollments.anchor_at` (e.g. a webinar's start time)
+  // instead of relative to the previous step — see materializeNextStep. Signed:
+  // negative is "before the anchor" (a reminder), positive is "after". Passing
+  // both this and a non-zero delaySeconds is rejected by the DB constraint
+  // (sequence_steps_anchor_xor_delay) — one step cannot mean both at once.
   const result = await query(
-    `INSERT INTO sequence_steps (company_id, sequence_id, step_order, channel, delay_seconds, template_ref, entry_conditions, exit_conditions, stage_writeback, subject, body, linkedin_action)
-     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12) RETURNING *`,
-    [companyId, sequenceId, stepOrder, channel, delaySeconds, templateRef, JSON.stringify(entryConditions), JSON.stringify(exitConditions), stageWriteback, subject, body,
+    `INSERT INTO sequence_steps (company_id, sequence_id, step_order, channel, delay_seconds, anchor_offset_seconds, template_ref, entry_conditions, exit_conditions, stage_writeback, subject, body, linkedin_action)
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13) RETURNING *`,
+    [companyId, sequenceId, stepOrder, channel, delaySeconds, anchorOffsetSeconds, templateRef, JSON.stringify(entryConditions), JSON.stringify(exitConditions), stageWriteback, subject, body,
      channel === 'linkedin' ? linkedinAction : null]
   );
   return result.rows[0];
@@ -200,7 +206,7 @@ async function listStepsForSequences(sequenceIds, companyId) {
 
 // ─── enrollments ───────────────────────────────────────────────────────────
 
-async function enroll(companyId, { sequenceId, contactId }) {
+async function enroll(companyId, { sequenceId, contactId, anchorAt = null }) {
   if (!companyId) throw new Error('sequences.enroll requires companyId');
   // Both foreign ids must actually belong to this tenant — without this, a
   // caller could enroll ANY tenant's contact into ANY tenant's sequence by
@@ -244,9 +250,9 @@ async function enroll(companyId, { sequenceId, contactId }) {
     // then blocks re-enrolment while that row stays active, and no route
     // exists to update an enrollment back out of it.
     const result = await client.query(
-      `INSERT INTO enrollments (company_id, sequence_id, contact_id, current_step_id, status, completed_at)
-       VALUES ($1,$2,$3,$4,$5, CASE WHEN $5 = 'completed' THEN now() ELSE NULL END) RETURNING *`,
-      [companyId, sequenceId, contactId, stepId, stepId ? 'active' : 'completed']
+      `INSERT INTO enrollments (company_id, sequence_id, contact_id, current_step_id, status, completed_at, anchor_at)
+       VALUES ($1,$2,$3,$4,$5, CASE WHEN $5 = 'completed' THEN now() ELSE NULL END, $6) RETURNING *`,
+      [companyId, sequenceId, contactId, stepId, stepId ? 'active' : 'completed', anchorAt]
     );
     const enrollment = result.rows[0];
 
@@ -293,6 +299,43 @@ async function enroll(companyId, { sequenceId, contactId }) {
 // step_id) is the idempotency backstop (D8): a replayed ack can never queue
 // the same step twice. A conflict returns null, which callers treat as
 // "already queued", not as a failure.
+// F38: a step whose anchor time has already passed by the time it would be
+// materialized is SKIPPED, never sent late — a late registrant must not
+// receive four reminders in one tick because their enrollment started after
+// the earlier rungs' anchor times. Records a terminal 'skipped' row (so the
+// timeline shows what happened, same as any other terminal outcome) and
+// activity, advances current_step_id, then recurses — the NEXT rung might
+// also already be past its own anchor time for a very late registrant.
+async function skipAnchoredStep(companyId, enrollment, step, { client, reason, computedFor }) {
+  const run = (text, params) => (client ? client.query(text, params) : query(text, params));
+  await run(
+    `INSERT INTO scheduled_actions (company_id, enrollment_id, step_id, contact_id, channel, template_ref, payload, scheduled_for, status)
+     VALUES ($1,$2,$3,$4,$5,$6,$7::jsonb,$8,'skipped')
+     ON CONFLICT (enrollment_id, step_id) DO NOTHING`,
+    [companyId, enrollment.id, step.id, enrollment.contact_id, step.channel, step.template_ref,
+     JSON.stringify({ anchor_skipped: true, reason }), (computedFor || new Date()).toISOString()]
+  );
+  await run(
+    `INSERT INTO contact_activity (contact_id, company_id, type, message, channel, data, created_at)
+     VALUES ($1,$2,$3,$4,$5,$6,now())`,
+    [enrollment.contact_id, companyId, 'sequence_step_skipped_anchor',
+     `Step ${step.step_order} skipped — ${reason}`, step.channel,
+     JSON.stringify({ enrollment_id: enrollment.id, step_id: step.id, reason })]
+  ).catch(() => {}); // best-effort, mirrors dispatch.js's noteActivity
+
+  const next = await run(
+    `SELECT id FROM sequence_steps WHERE sequence_id = $1 AND company_id = $2 AND step_order > $3
+     ORDER BY step_order ASC LIMIT 1`,
+    [enrollment.sequence_id, companyId, step.step_order]
+  );
+  if (!next.rows[0]) {
+    await run(`UPDATE enrollments SET status='completed', completed_at=now() WHERE id=$1 AND company_id=$2`, [enrollment.id, companyId]);
+    return null;
+  }
+  await run(`UPDATE enrollments SET current_step_id=$1 WHERE id=$2 AND company_id=$3`, [next.rows[0].id, enrollment.id, companyId]);
+  return materializeNextStep(companyId, enrollment.id, { client, after: new Date() });
+}
+
 async function materializeNextStep(companyId, enrollmentId, { client = null, after = new Date() } = {}) {
   if (!companyId) throw new Error('sequences.materializeNextStep requires companyId');
   const run = (text, params) => (client ? client.query(text, params) : query(text, params));
@@ -309,6 +352,32 @@ async function materializeNextStep(companyId, enrollmentId, { client = null, aft
   );
   const step = st.rows[0];
   if (!step) return null;
+
+  // F38: an ANCHORED step (anchor_offset_seconds set) fires at the
+  // enrollment's own anchor_at + offset, never relative to `after` — a
+  // reminder ladder's rungs are all measured from the SAME external event
+  // (e.g. a webinar's start time), not from each other.
+  if (step.anchor_offset_seconds !== null) {
+    if (!enrollment.anchor_at) {
+      return skipAnchoredStep(companyId, enrollment, step, { client, reason: 'enrollment has no anchor_at set' });
+    }
+    const scheduledFor = new Date(new Date(enrollment.anchor_at).getTime() + step.anchor_offset_seconds * 1000);
+    if (scheduledFor.getTime() <= Date.now()) {
+      return skipAnchoredStep(companyId, enrollment, step, { client, reason: 'anchor time already passed', computedFor: scheduledFor });
+    }
+    const content = await templatesDb.resolveStepContent(companyId, step,
+      (await run('SELECT id, name, email, company_name, marketing_stage, deal_stage FROM contacts WHERE id = $1 AND company_id = $2', [enrollment.contact_id, companyId])).rows[0] || null,
+      { client });
+    const inserted = await run(
+      `INSERT INTO scheduled_actions (company_id, enrollment_id, step_id, contact_id, channel, template_ref, payload, scheduled_for)
+       VALUES ($1,$2,$3,$4,$5,$6,$7::jsonb,$8)
+       ON CONFLICT (enrollment_id, step_id) DO NOTHING
+       RETURNING *`,
+      [companyId, enrollment.id, step.id, enrollment.contact_id, step.channel, step.template_ref,
+       JSON.stringify(templatesDb.contentPayload(content, { step_order: step.step_order })), scheduledFor.toISOString()]
+    );
+    return inserted.rows[0] || null;
+  }
 
   // CP4a-0: freeze the RESOLVED message content into the job.
   //

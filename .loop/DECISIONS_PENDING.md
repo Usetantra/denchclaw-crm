@@ -239,14 +239,26 @@ because a template row is editable through the API that already exists, and `rer
 (CP4a-0 F1) means editing the copy genuinely un-sticks a ladder blocked on it. Inline content would
 have been fewer rows and a dead end for the operator.
 
-**OPEN — needs the operator: the webinar REMINDER ladder is not shipped, and cannot be yet.**
-The nurturing engine's A0–A8 / S0–S4 / E0–E7 / L0–L1 ladders are ANCHORED to `webinar_at` with
-NEGATIVE offsets ("one week before", "one hour before"). The CRM's scheduler only knows "delay from
-enrolment / previous step". Porting them into relative delays would be a lie, and a half-port that
-fires every already-past reminder at once would blast four messages at a real prospect in one
-minute. It needs an anchored-scheduling capability (`enrollments.anchor_at` +
-`sequence_steps.anchor_offset_seconds`, plus a rule that a rung whose anchored time has already
-passed is SKIPPED rather than sent late). That is its own checkpoint — see F38.
+**RESOLVED 2026-08-15, operator instruction ("Yes, build it now"): the anchored-scheduling
+CAPABILITY is shipped (F38, migration 032).** `enrollments.anchor_at` (the external event this one
+enrollment is anchored to — e.g. the specific webinar occurrence a contact registered for) +
+`sequence_steps.anchor_offset_seconds` (signed: negative = before the anchor, positive = after).
+`server/db/models/sequences.js`'s `materializeNextStep` computes an anchored step's `scheduled_for`
+as `anchor_at + offset`, never relative to the previous step's fire time — and a rung whose computed
+time has already passed (a late registrant, or an enrollment with no `anchor_at` at all) is recorded
+`skipped` and the ladder advances past it, recursively, in case the NEXT rung is also already past
+(so a very late registrant does not get every reminder blasted at once on the next tick). A step
+cannot mix `anchor_offset_seconds` with a non-zero `delay_seconds` — enforced by both a DB constraint
+(`sequence_steps_anchor_xor_delay`) and a 400 at `POST /sequences/:id/steps`. Added
+`POST /sequences/:id/enroll { contact_id, anchor_at? }` — no manual-enroll endpoint existed at all
+before this (only stage-triggered auto-enrollment), so without it `anchor_at` would have been
+unreachable from outside a test. Tests: `test/unit-cpf38-anchored-scheduling.mjs` (12 checks).
+**NOT done, and deliberately out of scope for this checkpoint:** the actual webinar reminder ladder
+content — the A0–A8/S0–S4/E0–E7/L0–L1 rungs, their copy, and the eight production HTML bodies —
+lives in a separate `nurturing-engine` repo (`/Users/adithyamurali/YOGI/...` per the earlier survey)
+that is not present in this environment, so it could not be ported here. What's shipped is the
+scheduling primitive the ladder needs; authoring the actual reminder sequence against it (via
+`POST /sequences` + `/steps` + `/enroll`) is separate follow-up work once that content is available.
 
 **DECIDED BY DEFAULT (recorded on request): Deal Follow-ups 1/2/3 have NO automation, and that is a
 decision rather than an omission.** All three are MANUAL in the operator's own definitions, and the

@@ -171,12 +171,12 @@ router.patch('/:id', async (req, res) => {
   }
 });
 
-// POST /api/crm/sequences/:id/steps  { step_order, channel, delay_seconds?, template_ref?, entry_conditions?, exit_conditions? }
+// POST /api/crm/sequences/:id/steps  { step_order, channel, delay_seconds?, anchor_offset_seconds?, template_ref?, entry_conditions?, exit_conditions? }
 router.post('/:id/steps', async (req, res) => {
   try {
     const companyId = getUserCompanyId(req);
     if (!companyId) return res.status(401).json({ error: 'Authentication required' });
-    const { step_order, channel, delay_seconds, template_ref, entry_conditions, exit_conditions, stage_writeback, subject, body, linkedin_action } = req.body || {};
+    const { step_order, channel, delay_seconds, anchor_offset_seconds, template_ref, entry_conditions, exit_conditions, stage_writeback, subject, body, linkedin_action } = req.body || {};
     if (!Number.isInteger(step_order) || step_order < 1) {
       return res.status(400).json({ error: 'step_order must be a positive integer' });
     }
@@ -194,6 +194,19 @@ router.post('/:id/steps', async (req, res) => {
     }
     if (delay_seconds !== undefined && (!Number.isInteger(delay_seconds) || delay_seconds < 0)) {
       return res.status(400).json({ error: 'delay_seconds must be a non-negative integer' });
+    }
+    // F38: anchor_offset_seconds is SIGNED (negative = before the anchor, e.g.
+    // a reminder) and cannot coexist with a non-zero delay_seconds — mirrors
+    // migration 032's sequence_steps_anchor_xor_delay DB constraint, checked
+    // here too so the operator gets a 400 with an explanation instead of a
+    // raw constraint-violation 500.
+    if (anchor_offset_seconds !== undefined && anchor_offset_seconds !== null) {
+      if (!Number.isInteger(anchor_offset_seconds)) {
+        return res.status(400).json({ error: 'anchor_offset_seconds must be an integer (negative = before the anchor)' });
+      }
+      if (delay_seconds) {
+        return res.status(400).json({ error: 'a step cannot set both anchor_offset_seconds and a non-zero delay_seconds — an anchored step fires at anchor_at + offset, never relative to the previous step' });
+      }
     }
     for (const [label, value] of [['entry_conditions', entry_conditions], ['exit_conditions', exit_conditions]]) {
       if (value !== undefined && (typeof value !== 'object' || value === null || Array.isArray(value))) {
@@ -248,6 +261,7 @@ router.post('/:id/steps', async (req, res) => {
     try {
       step = await seqDb.addStep(req.params.id, companyId, {
         stepOrder: step_order, channel, delaySeconds: delay_seconds || 0,
+        anchorOffsetSeconds: anchor_offset_seconds === undefined ? null : anchor_offset_seconds,
         templateRef: template_ref || null, entryConditions: entry_conditions || {}, exitConditions: exit_conditions || {},
         stageWriteback: stage_writeback === undefined ? null : stage_writeback,
         // CP4a-0: optional inline content. A blank string is refused rather than
@@ -280,6 +294,37 @@ router.post('/:id/steps', async (req, res) => {
   } catch (err) {
     console.error('[CRM] POST /sequences/:id/steps error:', err.message);
     res.status(500).json({ error: 'failed to add step' });
+  }
+});
+
+// POST /api/crm/sequences/:id/enroll  { contact_id, anchor_at? }
+// Manual enrollment — the only path today is stage-triggered
+// (enrollForTriggerStage). F38: `anchor_at` is the external event this ONE
+// enrollment is anchored to (e.g. the specific webinar occurrence the contact
+// registered for) — required for any step on this sequence that carries an
+// anchor_offset_seconds; every ordinary sequence just omits it.
+router.post('/:id/enroll', async (req, res) => {
+  try {
+    const companyId = getUserCompanyId(req);
+    if (!companyId) return res.status(401).json({ error: 'Authentication required' });
+    const { contact_id, anchor_at } = req.body || {};
+    if (!contact_id || typeof contact_id !== 'string') {
+      return res.status(400).json({ error: 'contact_id is required' });
+    }
+    let anchorAt = null;
+    if (anchor_at !== undefined && anchor_at !== null) {
+      const d = new Date(anchor_at);
+      if (Number.isNaN(d.getTime())) return res.status(400).json({ error: 'anchor_at must be a valid date/time' });
+      anchorAt = d.toISOString();
+    }
+    const contact = await contactDb.getById(contact_id, companyId);
+    if (!contact) return res.status(404).json({ error: 'contact not found' });
+    const enrollment = await seqDb.enroll(companyId, { sequenceId: req.params.id, contactId: contact_id, anchorAt });
+    if (!enrollment) return res.status(404).json({ error: 'sequence not found' });
+    res.status(201).json(enrollment);
+  } catch (err) {
+    console.error('[CRM] POST /sequences/:id/enroll error:', err.message);
+    res.status(500).json({ error: 'failed to enroll contact' });
   }
 });
 
