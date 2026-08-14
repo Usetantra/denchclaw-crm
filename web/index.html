@@ -606,10 +606,8 @@
     <div class="ib-col">
       <div class="ib-head">
         <div class="ib-tabs" id="ib-filters" style="margin-bottom:8px">
-          <button data-f="all">All</button>
+          <button data-f="all" class="active">All</button>
           <button data-f="unread">Unread</button>
-          <button data-f="mine" class="active">Your turn</button>
-          <button data-f="theirs">Their turn</button>
           <button data-f="starred">Starred</button>
         </div>
         <div style="display:flex;gap:6px">
@@ -1254,7 +1252,7 @@ $("#inbox-body").addEventListener("click",e=>{
 // Contact-centred. One row per person, one thread across every channel, and the
 // third pane is the contact record. `esc()` on every interpolated value — a
 // contact name and a message body are both attacker-controllable via ingest.
-let ibFilter="mine",ibChannel="",ibQ="",ibSel=null,ibCtx=null,ibTab="reply",ibDeal=null,ibQT=null,ibAssignee="";
+let ibFilter="all",ibChannel="",ibQ="",ibSel=null,ibCtx=null,ibTab="reply",ibDeal=null,ibQT=null,ibAssignee="";
 // Whether the text currently in the composer came from Draft with AI. The
 // server records this on the message, so hardcoding it false — as the first
 // cut did — made every AI-assisted reply audit as purely human-authored and
@@ -1306,7 +1304,7 @@ async function loadInboxUnified(){
       <svg width="42" height="42" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.3">
         <path d="M3 7l9 6 9-6"/><rect x="3" y="5" width="18" height="14" rx="2"/></svg>
       <div>Nothing here.</div>
-      <div style="font-size:12px;margin-top:4px">${ibFilter==="mine"?"Nobody is waiting on you.":"Try another filter."}</div></div>`;
+      <div style="font-size:12px;margin-top:4px">${ibFilter==="unread"?"You're all caught up.":"Try another filter."}</div></div>`;
     return;
   }
   host.innerHTML=d.contacts.map(c=>`
