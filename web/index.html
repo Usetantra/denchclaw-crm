@@ -186,6 +186,11 @@
   .fgrid .f{border-top:1px solid var(--hair);padding-top:8px}
   .fgrid .f .fl{font-size:10px;letter-spacing:.12em;text-transform:uppercase;color:var(--ink-4)}
   .fgrid .f .fv{font-size:13px;color:var(--ink-2);margin-top:3px;word-break:break-word}
+  .fgrid .f input.fed,.fgrid .f select.fed{width:100%;box-sizing:border-box;border:1px solid transparent;border-bottom:1px solid var(--hair);
+        background:transparent;font-size:13px;color:var(--ink-2);padding:3px 2px;font-family:var(--sans);outline:none;margin-top:3px}
+  .fgrid .f input.fed:hover,.fgrid .f select.fed:hover{border-bottom-color:var(--ink-4)}
+  .fgrid .f input.fed:focus,.fgrid .f select.fed:focus{border:1px solid var(--ink);border-radius:5px;background:var(--surface)}
+  .fgrid .fsave{grid-column:1/-1;display:flex;align-items:center;gap:10px;border-top:none;padding-top:4px}
   .feed{border:1px solid var(--hair);border-radius:var(--radius);max-height:min(50vh,480px);min-height:190px;overflow-y:auto;overscroll-behavior:contain;background:var(--bg)}
   .feed .fitem{padding:12px 16px;border-bottom:1px solid var(--hair-2);font-size:13.5px;line-height:1.55;color:var(--ink)}
   .feed .fitem:nth-child(even){background:var(--hair-2)}
@@ -818,23 +823,58 @@ async function openContact(id){
     const [c,act]=await Promise.all([get(`contacts/${id}`),get(`contacts/${id}/activity?limit=${FEED_PAGE_SIZE}&offset=0`)]);
     $("#m-name").textContent=c.name||c.email||"—";
     $("#m-sub").textContent=[c.title,c.company_name].filter(Boolean).join(" · ");
-    const fields=[
-      ["Email",c.email],["Phone",c.phone],["Company",c.company_name],["Title",c.title],
-      ["LinkedIn",c.linkedin_url],["Source",c.source],
-      ["Marketing stage",nice(c.marketing_stage)],["Opportunity stage (legacy)",nice(c.deal_stage)],
-      ["Lead score",`${c.lead_score||"—"} (${c.lead_score_numeric??0})`],
-      ["Opportunity value",c.deal_value>0?`$${parseFloat(c.deal_value).toLocaleString()}`:"—"],
+    // Editable fields render as inputs; system/derived fields (stage, numeric
+    // score, UTMs, dates, id) stay read-only — stage is governed by the
+    // pipeline state machine, not free-edited here.
+    const srcOpts=SOURCES.includes(c.source)||!c.source?SOURCES.slice():[c.source,...SOURCES];
+    const scoreOpts=SCORES.includes(c.lead_score)||!c.lead_score?SCORES.slice():[c.lead_score,...SCORES];
+    const editable=[
+      ["Name","name","text",c.name],
+      ["Email","email","email",c.email],
+      ["Phone","phone","text",c.phone],
+      ["Company","company_name","text",c.company_name],
+      ["Title","title","text",c.title],
+      ["LinkedIn","linkedin_url","text",c.linkedin_url],
+      ["Source","source","select",c.source,srcOpts],
+      ["Lead score","lead_score","select",c.lead_score,scoreOpts],
+      ["Opportunity value ($)","deal_value","number",c.deal_value||0],
+      ["Next follow-up","next_follow_up","date",c.next_follow_up?String(c.next_follow_up).slice(0,10):""],
+    ];
+    const readonly=[
+      ["Marketing stage",nice(c.marketing_stage)],
+      ["Opportunity stage (legacy)",nice(c.deal_stage)],
+      ["Score (numeric)",String(c.lead_score_numeric??0)],
       // CP-I D11: real tag CHIPS, not a comma-joined string. A tag chip is
       // removable-looking and neutral; a stage chip (below) never is. ibTagChip
       // escapes its own content, hence the raw flag.
       ["Tags",(c.tags||[]).length?(c.tags||[]).map(ibTagChip).join(" "):"—",true],
-      ["UTM source",c.utm_source],["UTM medium",c.utm_medium],["UTM campaign",c.utm_campaign],
+      ["UTM source",c.utm_source||"—"],["UTM medium",c.utm_medium||"—"],["UTM campaign",c.utm_campaign||"—"],
       ["Last contacted",c.last_contacted?fmtDate(c.last_contacted):"—"],
-      ["Next follow-up",c.next_follow_up?fmtDate(c.next_follow_up):"—"],
       ["Created",fmtDate(c.created_at)],["Contact ID",c.id],
     ];
-    $("#m-fields").innerHTML=fields.map(([l,v,raw])=>`<div class="f"><div class="fl">${esc(l)}</div>
-      <div class="fv">${raw?v:esc(v||"—")}</div></div>`).join("");
+    $("#m-fields").innerHTML=
+      editable.map(([l,f,t,v,opts])=>`<div class="f"><div class="fl">${esc(l)}</div>
+        ${t==="select"
+          ?`<select class="fed" data-f="${f}">${opts.map(o=>`<option value="${esc(o)}" ${String(v)===o?"selected":""}>${esc(nice(o))}</option>`).join("")}</select>`
+          :`<input class="fed" data-f="${f}" type="${t}" value="${esc(v==null?"":v)}">`}
+      </div>`).join("")
+      +readonly.map(([l,v,raw])=>`<div class="f"><div class="fl">${esc(l)} 🔒</div><div class="fv">${raw?v:esc(v||"—")}</div></div>`).join("")
+      +`<div class="f fsave"><button class="btn sm primary" id="m-save">Save changes</button></div>`;
+    $("#m-save").onclick=async()=>{
+      const upd={};
+      document.querySelectorAll("#m-fields .fed").forEach(el=>{
+        const f=el.dataset.f,v=el.value.trim();
+        if(f==="deal_value"){const n=parseFloat(v)||0;
+          if(n!==(parseFloat(c.deal_value)||0))upd.deal_value=n;return;}
+        if(f==="next_follow_up"){const cur=c.next_follow_up?String(c.next_follow_up).slice(0,10):"";
+          if(v!==cur)upd.next_follow_up=v||null;return;}
+        const cur=c[f]==null?"":String(c[f]);
+        if(v!==cur)upd[f]=v;
+      });
+      if(!Object.keys(upd).length)return toast("No changes to save");
+      try{await patch(`contacts/${id}`,upd);toast("Saved");openContact(id);loadContacts&&loadContacts();}
+      catch(e){toast(e.message,true);}
+    };
     feedItems=act.activity||[];feedTotal=act.total??feedItems.length;
     renderFeed(feedItems,true);
   }catch(e){$("#m-name").textContent="Error";$("#m-sub").textContent="";

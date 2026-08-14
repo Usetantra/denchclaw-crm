@@ -159,13 +159,16 @@ router.get('/:id/contacts', async (req, res) => {
     const own = await query('SELECT id FROM companies WHERE id=$1 AND company_id=$2', [req.params.id, companyId]);
     if (!own.rows.length) return res.status(404).json({ error: 'company not found' });
     const { rows } = await query(
+      // company_id repeated here as defense-in-depth on top of the ownership
+      // pre-check above — company_ref_id alone would trust that FK to already
+      // be tenant-correct with nothing at this query re-verifying it.
       `SELECT id, name, email, title, phone, linkedin_url, source, lead_score,
               marketing_stage, deal_stage, deal_value, created_at
          FROM contacts
-        WHERE company_ref_id = $1 AND deleted_at IS NULL
+        WHERE company_ref_id = $1 AND company_id = $2 AND deleted_at IS NULL
         ORDER BY deal_value DESC NULLS LAST, name ASC
         LIMIT 500`,
-      [req.params.id]
+      [req.params.id, companyId]
     );
     res.json({ total: rows.length, contacts: rows });
   } catch (err) {
@@ -184,10 +187,10 @@ router.get('/:id/deals', async (req, res) => {
       `SELECT d.id, d.title, d.value, d.currency, d.stage, d.pipeline_key,
               d.expected_close, d.created_at, c.name AS contact_name
          FROM deals d LEFT JOIN contacts c ON c.id = d.contact_id
-        WHERE d.company_ref_id = $1
+        WHERE d.company_ref_id = $1 AND d.company_id = $2
         ORDER BY d.created_at DESC
         LIMIT 500`,
-      [req.params.id]
+      [req.params.id, companyId]
     );
     res.json({ total: rows.length, deals: rows });
   } catch (err) {

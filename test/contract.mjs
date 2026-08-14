@@ -190,6 +190,25 @@ async function main() {
     check('phone search does not leak cross-tenant', 'CP1', other.status === 200 && !leaked, `status=${other.status} leaked=${leaked}`);
   }
 
+  // 8c — company sub-resources are tenant-scoped (gate-4 sweep). A co_a company's
+  //      contacts/deals endpoints must 404 for co_b (ownership pre-check + the
+  //      explicit company_id filter on the sub-queries), while the owner reads 200.
+  {
+    const coName = 'SubRes A ' + RUN;
+    await req('POST', '/api/crm/deals', { company: CO_A, body: { title: 'SubRes deal', company: coName, value: 100 } });
+    const list = await req('GET', `/api/crm/companies?search=${encodeURIComponent(coName)}`, { company: CO_A });
+    const coId = (list.json?.companies || [])[0]?.id || null;
+    check('company row created for sub-resource test', 'CP1', !!coId, `status=${list.status} n=${list.json?.companies?.length}`);
+    if (coId) {
+      const own = await req('GET', `/api/crm/companies/${coId}/contacts`, { company: CO_A });
+      check('company contacts readable by owner (200)', 'CP1', own.status === 200, `status=${own.status}`);
+      const foreignC = await req('GET', `/api/crm/companies/${coId}/contacts`, { company: CO_B });
+      check('company contacts blocked cross-tenant (404)', 'CP1', foreignC.status === 404, `status=${foreignC.status} (should be 404)`);
+      const foreignD = await req('GET', `/api/crm/companies/${coId}/deals`, { company: CO_B });
+      check('company deals blocked cross-tenant (404)', 'CP1', foreignD.status === 404, `status=${foreignD.status} (should be 404)`);
+    }
+  }
+
   // 9 — illegal stage transition lead→won → 400 with allowed_transitions
   {
     const c = await req('POST', '/api/crm/contacts', { company: CO_A, body: { name: 'Stage X', email: email('stage'), source: 'manual' } });
