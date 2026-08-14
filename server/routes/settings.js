@@ -1,0 +1,132 @@
+'use strict';
+// ─── Settings API ───────────────────────────────────────────────────────────
+// Business profile, custom field definitions, and tag management — the
+// GHL/Salesforce-style "configure your own CRM" surface. All tenant-scoped
+// under requireAuth (NOT the admin-only tenants.js provisioning router).
+const express = require('express');
+const router = express.Router();
+const { requireAuth, getUserCompanyId } = require('../middleware/auth');
+const businessProfile = require('../db/models/business-profile');
+const customFields = require('../db/models/custom-fields');
+const tagsDb = require('../db/models/tags');
+
+router.use(requireAuth);
+
+// ── Business profile ──────────────────────────────────────────────────────
+router.get('/business-profile', async (req, res) => {
+  try {
+    const companyId = getUserCompanyId(req);
+    const profile = await businessProfile.get(companyId);
+    res.json({ profile: profile || { company_id: companyId } });
+  } catch (e) {
+    console.error('[Settings] GET business-profile', e.message);
+    res.status(500).json({ error: 'failed to load business profile' });
+  }
+});
+
+router.patch('/business-profile', async (req, res) => {
+  try {
+    const companyId = getUserCompanyId(req);
+    const { name, industry, website, phone, timezone, currency, address, logo_url } = req.body || {};
+    const profile = await businessProfile.upsert(companyId, { name, industry, website, phone, timezone, currency, address, logo_url });
+    res.json({ profile });
+  } catch (e) {
+    console.error('[Settings] PATCH business-profile', e.message);
+    res.status(500).json({ error: 'failed to save business profile' });
+  }
+});
+
+// ── Custom field definitions ──────────────────────────────────────────────
+router.get('/custom-fields', async (req, res) => {
+  try {
+    const companyId = getUserCompanyId(req);
+    const fields = await customFields.list(companyId, req.query.entity_type || 'contact');
+    res.json({ fields, types: customFields.TYPES });
+  } catch (e) {
+    console.error('[Settings] GET custom-fields', e.message);
+    res.status(500).json({ error: 'failed to load custom fields' });
+  }
+});
+
+router.post('/custom-fields', async (req, res) => {
+  try {
+    const companyId = getUserCompanyId(req);
+    const { label, type, options, entity_type } = req.body || {};
+    const field = await customFields.create(companyId, { label, type, options, entityType: entity_type });
+    res.status(201).json({ field });
+  } catch (e) {
+    const known = /required|must be one of|at least one letter/.test(e.message);
+    if (known) return res.status(400).json({ error: e.message });
+    if (e.code === '23505') return res.status(409).json({ error: 'a field with this name already exists' });
+    console.error('[Settings] POST custom-fields', e.message);
+    res.status(500).json({ error: 'failed to create custom field' });
+  }
+});
+
+router.patch('/custom-fields/:id', async (req, res) => {
+  try {
+    const companyId = getUserCompanyId(req);
+    const { label, type, options, position } = req.body || {};
+    const field = await customFields.update(companyId, req.params.id, { label, type, options, position });
+    if (!field) return res.status(404).json({ error: 'custom field not found' });
+    res.json({ field });
+  } catch (e) {
+    if (/must be one of/.test(e.message)) return res.status(400).json({ error: e.message });
+    console.error('[Settings] PATCH custom-fields/:id', e.message);
+    res.status(500).json({ error: 'failed to update custom field' });
+  }
+});
+
+router.delete('/custom-fields/:id', async (req, res) => {
+  try {
+    const companyId = getUserCompanyId(req);
+    const removed = await customFields.remove(companyId, req.params.id);
+    if (!removed) return res.status(404).json({ error: 'custom field not found' });
+    // The definition is gone, but existing contacts keep whatever value they
+    // already had under metadata.custom_fields[key] — deleting a definition
+    // is not a bulk-erase of everyone's data, only "stop offering this field."
+    res.json({ ok: true, key: removed.key });
+  } catch (e) {
+    console.error('[Settings] DELETE custom-fields/:id', e.message);
+    res.status(500).json({ error: 'failed to delete custom field' });
+  }
+});
+
+// ── Tags ───────────────────────────────────────────────────────────────────
+router.get('/tags', async (req, res) => {
+  try {
+    const companyId = getUserCompanyId(req);
+    res.json({ tags: await tagsDb.list(companyId) });
+  } catch (e) {
+    console.error('[Settings] GET tags', e.message);
+    res.status(500).json({ error: 'failed to load tags' });
+  }
+});
+
+router.patch('/tags', async (req, res) => {
+  try {
+    const companyId = getUserCompanyId(req);
+    const { old_tag, new_tag } = req.body || {};
+    if (!old_tag || !new_tag) return res.status(400).json({ error: 'old_tag and new_tag are required' });
+    const n = await tagsDb.rename(companyId, old_tag, new_tag);
+    res.json({ ok: true, contacts_updated: n });
+  } catch (e) {
+    console.error('[Settings] PATCH tags', e.message);
+    res.status(500).json({ error: 'failed to rename tag' });
+  }
+});
+
+router.delete('/tags', async (req, res) => {
+  try {
+    const companyId = getUserCompanyId(req);
+    const { tag } = req.body || {};
+    if (!tag) return res.status(400).json({ error: 'tag is required' });
+    const n = await tagsDb.remove(companyId, tag);
+    res.json({ ok: true, contacts_updated: n });
+  } catch (e) {
+    console.error('[Settings] DELETE tags', e.message);
+    res.status(500).json({ error: 'failed to delete tag' });
+  }
+});
+
+module.exports = router;

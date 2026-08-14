@@ -732,19 +732,56 @@
 
   <!-- ── SETTINGS · CHANNELS (CP-M2, ported from origin/aquila-working-branch) ── -->
   <div id="view-settings" style="display:none">
-  <div class="sechead"><span class="eyebrow">Settings · Channels</span><span class="rule"></span></div>
-  <div class="settings-card">
-    <h3>Twilio (WhatsApp &amp; SMS)</h3>
-    <p class="muted" style="font-size:12px;margin:2px 0 16px;line-height:1.5">This connects the compliance-gated Twilio path (consent, suppression, 24h window, DLT templates) used by inbox replies on WhatsApp/SMS threads. It is separate from the automated sequence dispatcher's own sender.</p>
-    <div id="twilio-conn" class="muted" style="margin-bottom:14px">loading…</div>
-    <div id="twilio-connect-form"></div>
+  <div class="board-tabs" id="settings-subtab" style="margin-bottom:18px">
+    <button data-sub="profile" class="active">Business Profile</button>
+    <button data-sub="fields">Custom Fields</button>
+    <button data-sub="tags">Tags</button>
+    <button data-sub="channels">Channels</button>
   </div>
-  <div class="settings-card">
-    <h3>Connected senders</h3>
-    <p class="muted" style="font-size:12px;margin:2px 0 16px;line-height:1.5">Numbers/accounts the inbox composer can send from. WhatsApp &amp; SMS require the sender to be registered/approved (A2P&nbsp;10DLC in the US, DLT in India) before real delivery.</p>
-    <div id="senders-list"><div class="muted">loading…</div></div>
-    <button class="btn sm" id="add-sender" style="margin-top:14px">+ Add sender</button>
-  </div>
+
+  <!-- ── Business Profile ────────────────────────────────────────────────── -->
+  <div id="settings-sub-profile">
+    <div class="settings-card">
+      <h3>Business Profile</h3>
+      <p class="muted" style="font-size:12px;margin:2px 0 16px;line-height:1.5">Who you are — shown on templates, invite links, and anywhere the CRM identifies your business.</p>
+      <div id="bp-form"><div class="muted">loading…</div></div>
+    </div>
+  </div><!-- /settings-sub-profile -->
+
+  <!-- ── Custom Fields ────────────────────────────────────────────────────── -->
+  <div id="settings-sub-fields" style="display:none">
+    <div class="settings-card" style="max-width:760px">
+      <h3>Custom Fields</h3>
+      <p class="muted" style="font-size:12px;margin:2px 0 16px;line-height:1.5">Define fields once here and they render as proper typed inputs (not just free text) in every contact's Custom fields section. Values live per-contact — deleting a definition stops offering the field, it doesn't erase anyone's data.</p>
+      <div id="cf-list"><div class="muted">loading…</div></div>
+      <button class="btn sm primary" id="cf-add" style="margin-top:14px">+ New custom field</button>
+    </div>
+  </div><!-- /settings-sub-fields -->
+
+  <!-- ── Tags ─────────────────────────────────────────────────────────────── -->
+  <div id="settings-sub-tags" style="display:none">
+    <div class="settings-card" style="max-width:640px">
+      <h3>Tags</h3>
+      <p class="muted" style="font-size:12px;margin:2px 0 16px;line-height:1.5">Every tag currently in use across your contacts. Rename merges into an existing tag if the target already exists on a contact; delete removes it everywhere.</p>
+      <div id="tags-list"><div class="muted">loading…</div></div>
+    </div>
+  </div><!-- /settings-sub-tags -->
+
+  <!-- ── Channels ─────────────────────────────────────────────────────────── -->
+  <div id="settings-sub-channels" style="display:none">
+    <div class="settings-card">
+      <h3>Twilio (WhatsApp &amp; SMS)</h3>
+      <p class="muted" style="font-size:12px;margin:2px 0 16px;line-height:1.5">This connects the compliance-gated Twilio path (consent, suppression, 24h window, DLT templates) used by inbox replies on WhatsApp/SMS threads. It is separate from the automated sequence dispatcher's own sender.</p>
+      <div id="twilio-conn" class="muted" style="margin-bottom:14px">loading…</div>
+      <div id="twilio-connect-form"></div>
+    </div>
+    <div class="settings-card">
+      <h3>Connected senders</h3>
+      <p class="muted" style="font-size:12px;margin:2px 0 16px;line-height:1.5">Numbers/accounts the inbox composer can send from. WhatsApp &amp; SMS require the sender to be registered/approved (A2P&nbsp;10DLC in the US, DLT in India) before real delivery.</p>
+      <div id="senders-list"><div class="muted">loading…</div></div>
+      <button class="btn sm" id="add-sender" style="margin-top:14px">+ Add sender</button>
+    </div>
+  </div><!-- /settings-sub-channels -->
   </div><!-- /view-settings -->
 
 </main>
@@ -912,7 +949,8 @@ async function openContact(id){
   $("#m-feed").innerHTML=`<div class="fitem muted">loading…</div>`;
   feedItems=[];feedTotal=0;
   try{
-    const [c,act]=await Promise.all([get(`contacts/${id}`),get(`contacts/${id}/activity?limit=${FEED_PAGE_SIZE}&offset=0`)]);
+    const [c,act,cfDefsRes]=await Promise.all([get(`contacts/${id}`),get(`contacts/${id}/activity?limit=${FEED_PAGE_SIZE}&offset=0`),get("settings/custom-fields").catch(()=>({fields:[]}))]);
+    contactCustomFieldDefs=cfDefsRes.fields||[];
     $("#m-name").textContent=c.name||c.email||"—";
     $("#m-sub").textContent=[c.title,c.company_name].filter(Boolean).join(" · ");
     // Editable fields render as inputs; system/derived fields (stage, numeric
@@ -1001,18 +1039,46 @@ $("#m-tags").addEventListener("click",e=>{
 });
 
 // ── Custom fields (contact drawer) ────────────────────────────────────────────
+// Fields DEFINED in Settings render as a proper typed input (select/date/
+// number/checkbox); anything in metadata.custom_fields with no matching
+// definition (older ad-hoc entries, or a field whose definition was since
+// deleted — deleting a definition never erases the data) still renders as a
+// free-text key/value row below, never silently dropped.
+let contactCustomFieldDefs=[];
 function renderCustomFields(fields){
-  const entries=Object.entries(fields||{});
-  $("#m-custom").innerHTML=entries.length
-    ? entries.map(([k,v])=>`<div class="cvrow cf-row" style="margin-bottom:8px;align-items:flex-end">
-        <div class="cvf"><label>Field name</label><input class="cf-key" value="${esc(k)}" placeholder="e.g. birthday"></div>
-        <div class="cvf"><label>Value</label><input class="cf-val" value="${esc(v==null?"":v)}" placeholder="value"></div>
-        <button class="btn sm danger" data-cf-del style="flex:0 0 auto">Remove</button>
-      </div>`).join("")
-    : `<div class="muted" style="font-size:12px;margin-bottom:8px">No custom fields yet.</div>`;
+  const values=fields||{};
+  const defKeys=new Set(contactCustomFieldDefs.map(d=>d.key));
+  const definedHtml=contactCustomFieldDefs.map(d=>{
+    const v=values[d.key];
+    let input;
+    if(d.type==="select"){
+      input=`<select class="cf-def-val" data-key="${esc(d.key)}"><option value="">—</option>${
+        (d.options||[]).map(o=>`<option value="${esc(o)}" ${v===o?"selected":""}>${esc(o)}</option>`).join("")}</select>`;
+    }else if(d.type==="checkbox"){
+      input=`<input type="checkbox" class="cf-def-val" data-key="${esc(d.key)}" ${v==="true"||v===true?"checked":""} style="width:auto;margin-top:8px">`;
+    }else{
+      input=`<input type="${d.type==="number"?"number":d.type==="date"?"date":"text"}" class="cf-def-val" data-key="${esc(d.key)}" value="${esc(v==null?"":v)}">`;
+    }
+    return `<div class="cvf"><label>${esc(d.label)}</label>${input}</div>`;
+  }).join("");
+  const adhocEntries=Object.entries(values).filter(([k])=>!defKeys.has(k));
+  const adhocHtml=adhocEntries.map(([k,v])=>`<div class="cvrow cf-row" style="margin-bottom:8px;align-items:flex-end">
+      <div class="cvf"><label>Field name</label><input class="cf-key" value="${esc(k)}" placeholder="e.g. birthday"></div>
+      <div class="cvf"><label>Value</label><input class="cf-val" value="${esc(v==null?"":v)}" placeholder="value"></div>
+      <button class="btn sm danger" data-cf-del style="flex:0 0 auto">Remove</button>
+    </div>`).join("");
+  $("#m-custom").innerHTML=
+    (definedHtml?`<div class="fgrid" style="margin-bottom:10px">${definedHtml}</div>`:"")
+    +(adhocHtml||(!definedHtml?`<div class="muted" style="font-size:12px;margin-bottom:8px">No custom fields yet. Define one in Settings, or add an ad-hoc field below.</div>`:""));
 }
 function collectCustomFields(){
   const out={};
+  $("#m-custom").querySelectorAll(".cf-def-val").forEach(el=>{
+    const k=el.dataset.key;
+    if(el.type==="checkbox"){out[k]=el.checked?"true":"false";return;}
+    const v=el.value.trim();
+    if(v)out[k]=v;
+  });
   $("#m-custom").querySelectorAll(".cf-row").forEach(row=>{
     const k=row.querySelector(".cf-key").value.trim();
     if(k)out[k]=row.querySelector(".cf-val").value.trim();
@@ -1917,7 +1983,7 @@ async function load(){
 
 // ── Settings → Channels (CP-M2, ported from origin/aquila-working-branch) ─────
 const SENDER_STATUS_COLOR={connected:"#067647",verified:"#067647",approved:"#067647",pending:"#b54708",rejected:"#b42318"};
-async function loadSettings(){
+async function loadChannelsSettings(){
   let data={connections:[],senders:[]};
   try{data=await get("channels");}catch(e){$("#twilio-conn").textContent=e.message;return;}
   const tw=(data.connections||[]).find(c=>c.provider==="twilio"&&c.status==="connected");
@@ -1925,7 +1991,7 @@ async function loadSettings(){
     $("#twilio-conn").innerHTML=`<span class="li-ok">✓ Connected</span> · account <code>${esc(tw.account_ref||"")}</code>`;
     $("#twilio-connect-form").innerHTML=`<button class="btn sm" id="tw-disconnect">Disconnect Twilio</button>`;
     $("#tw-disconnect").onclick=async()=>{if(!confirm("Disconnect Twilio? Senders stay but can't send until reconnected."))return;
-      try{await post("channels/twilio/disconnect",{});toast("Disconnected");loadSettings();}catch(e){toast(e.message,true);}};
+      try{await post("channels/twilio/disconnect",{});toast("Disconnected");loadChannelsSettings();}catch(e){toast(e.message,true);}};
   }else{
     $("#twilio-conn").innerHTML=`<span class="li-warn">Not connected.</span> Paste your Twilio credentials to connect (verified against Twilio; stored encrypted, never shown again).`;
     $("#twilio-connect-form").innerHTML=`
@@ -1941,7 +2007,7 @@ async function loadSettings(){
       const body={account_sid:sid,auth_token:$("#tw-token").value.trim()||undefined,
         api_key_sid:$("#tw-keysid").value.trim()||undefined,api_key_secret:$("#tw-keysecret").value.trim()||undefined};
       const btn=$("#tw-connect");btn.disabled=true;btn.textContent="Verifying…";
-      try{await post("channels/twilio/connect",body);toast("Twilio connected");loadSettings();}
+      try{await post("channels/twilio/connect",body);toast("Twilio connected");loadChannelsSettings();}
       catch(e){toast(e.message,true);btn.disabled=false;btn.textContent="Connect Twilio";}
     };
   }
@@ -1956,9 +2022,111 @@ async function loadSettings(){
       <td><button class="btn sm danger" data-del-sender="${esc(s.id)}">Remove</button></td></tr>`;}).join("")
   }</tbody></table>`:`<div class="empty">No WhatsApp/SMS senders yet. ${tw?"Add one below.":"Connect Twilio first."}</div>`;
   $("#senders-list").querySelectorAll("[data-del-sender]").forEach(b=>b.onclick=async()=>{
-    try{await del("channels/senders/"+b.dataset.delSender);toast("Removed");loadSettings();}catch(e){toast(e.message,true);}});
+    try{await del("channels/senders/"+b.dataset.delSender);toast("Removed");loadChannelsSettings();}catch(e){toast(e.message,true);}});
   $("#add-sender").style.display=tw?"":"none";
   $("#add-sender").onclick=()=>senderModal(tw);
+}
+
+// ── Settings sub-tabs ────────────────────────────────────────────────────────
+let _settingsSubtab="profile";
+function setSettingsSubtab(sub){
+  _settingsSubtab=sub;
+  $$("#settings-subtab button").forEach(b=>b.classList.toggle("active",b.dataset.sub===sub));
+  ["profile","fields","tags","channels"].forEach(s=>{
+    const el=$(`#settings-sub-${s}`);if(el)el.style.display=s===sub?"":"none";
+  });
+  if(sub==="profile")loadBusinessProfile();
+  if(sub==="fields")loadCustomFields();
+  if(sub==="tags")loadTagsSettings();
+  if(sub==="channels")loadChannelsSettings();
+}
+$("#settings-subtab").addEventListener("click",e=>{const b=e.target.closest("button[data-sub]");if(b)setSettingsSubtab(b.dataset.sub);});
+
+// ── Business Profile ─────────────────────────────────────────────────────────
+async function loadBusinessProfile(){
+  let p={};
+  try{p=(await get("settings/business-profile")).profile||{};}
+  catch(e){$("#bp-form").innerHTML=`<div class="empty">${esc(e.message)}</div>`;return;}
+  const a=p.address||{};
+  $("#bp-form").innerHTML=
+    `<div class="cvrow">${field("Business name","name",{value:p.name||""})}${field("Industry","industry",{value:p.industry||""})}</div>
+     <div class="cvrow">${field("Website","website",{value:p.website||"",placeholder:"https://…"})}${field("Phone","phone",{value:p.phone||""})}</div>
+     <div class="cvrow">${field("Timezone","timezone",{value:p.timezone||"",placeholder:"e.g. Asia/Kolkata"})}${field("Currency","currency",{value:p.currency||"USD",placeholder:"USD"})}</div>
+     <div class="cvrow">${field("City","city",{value:a.city||""})}${field("Country","country",{value:a.country||""})}</div>
+     <div class="cvf"><label>Street address</label><input id="bp-street" value="${esc(a.street||"")}"></div>
+     <button class="btn sm primary" id="bp-save" style="margin-top:12px">Save profile</button>`;
+  $("#bp-save").onclick=async()=>{
+    const v=formValues();
+    const body={name:v.name,industry:v.industry,website:v.website,phone:v.phone,timezone:v.timezone,currency:v.currency,
+      address:{street:$("#bp-street").value.trim(),city:v.city,country:v.country}};
+    try{await patch("settings/business-profile",body);toast("Profile saved");}
+    catch(e){toast(e.message,true);}
+  };
+}
+
+// ── Custom Fields ─────────────────────────────────────────────────────────────
+async function loadCustomFields(){
+  let fields=[];
+  try{fields=(await get("settings/custom-fields")).fields||[];}
+  catch(e){$("#cf-list").innerHTML=`<div class="empty">${esc(e.message)}</div>`;return;}
+  const typeLabel={text:"Text",number:"Number",date:"Date",select:"Dropdown",checkbox:"Checkbox"};
+  $("#cf-list").innerHTML=fields.length?`<table><thead><tr><th>Label</th><th>Type</th><th>Key</th><th></th></tr></thead><tbody>${
+    fields.map(f=>`<tr>
+      <td><b>${esc(f.label)}</b></td>
+      <td><span class="ch-badge">${esc(typeLabel[f.type]||f.type)}</span>${f.type==="select"?` <span class="muted" style="font-size:11px">${(f.options||[]).map(esc).join(", ")}</span>`:""}</td>
+      <td class="muted" style="font-family:monospace;font-size:12px">${esc(f.key)}</td>
+      <td style="text-align:right"><button class="btn sm danger" data-cf-del="${esc(f.id)}">Delete</button></td>
+    </tr>`).join("")
+  }</tbody></table>`:`<div class="empty">No custom fields defined yet.</div>`;
+  $("#cf-list").querySelectorAll("[data-cf-del]").forEach(b=>b.onclick=()=>{
+    confirmDelete("Delete this custom field? Existing contact values are kept but the field stops appearing.",async()=>{
+      await del("settings/custom-fields/"+b.dataset.cfDel);toast("Deleted");loadCustomFields();});
+  });
+}
+$("#cf-add").onclick=()=>{
+  openModal("New custom field",
+    field("Label","label",{placeholder:"e.g. Birthday"})+
+    field("Type","type",{type:"select",value:"text",options:[
+      {value:"text",label:"Text"},{value:"number",label:"Number"},{value:"date",label:"Date"},
+      {value:"select",label:"Dropdown"},{value:"checkbox",label:"Checkbox"}]})+
+    `<div class="field" id="cf-opts-wrap" style="display:none">${field("Options (comma-separated)","options",{placeholder:"Red, Blue, Green"})}</div>`,
+    `<button class="btn" onclick="closeModal()">Cancel</button><button class="btn primary" id="cf-save">Create</button>`);
+  $("[name=type]").onchange=e=>{$("#cf-opts-wrap").style.display=e.target.value==="select"?"":"none";};
+  $("#cf-save").onclick=async()=>{
+    const v=formValues();if(!v.label)return toast("Label required",true);
+    const options=(v.options||"").split(",").map(s=>s.trim()).filter(Boolean);
+    try{await post("settings/custom-fields",{label:v.label,type:v.type,options});closeModal();toast("Field created");loadCustomFields();}
+    catch(e){toast(e.message,true);}
+  };
+};
+
+// ── Tags ─────────────────────────────────────────────────────────────────────
+async function loadTagsSettings(){
+  let tags=[];
+  try{tags=(await get("settings/tags")).tags||[];}
+  catch(e){$("#tags-list").innerHTML=`<div class="empty">${esc(e.message)}</div>`;return;}
+  $("#tags-list").innerHTML=tags.length?`<table><thead><tr><th>Tag</th><th>Contacts</th><th></th></tr></thead><tbody>${
+    tags.map(t=>`<tr>
+      <td><span class="chip chip-tag">${esc(t.tag)}</span></td>
+      <td class="muted">${t.contact_count}</td>
+      <td style="text-align:right"><button class="btn sm" data-tag-ren="${esc(t.tag)}">Rename</button> <button class="btn sm danger" data-tag-del="${esc(t.tag)}">Delete</button></td>
+    </tr>`).join("")
+  }</tbody></table>`:`<div class="empty">No tags in use yet.</div>`;
+  $("#tags-list").querySelectorAll("[data-tag-ren]").forEach(b=>b.onclick=()=>{
+    const old=b.dataset.tagRen;
+    openModal(`Rename "${old}"`,field("New name","new_tag",{value:old}),
+      `<button class="btn" onclick="closeModal()">Cancel</button><button class="btn primary" id="tag-ren-go">Rename</button>`);
+    $("#tag-ren-go").onclick=async()=>{
+      const v=formValues();if(!v.new_tag||v.new_tag.trim()===old){closeModal();return;}
+      try{await apiFetch("PATCH","settings/tags",{old_tag:old,new_tag:v.new_tag.trim()});closeModal();toast("Renamed");loadTagsSettings();}
+      catch(e){toast(e.message,true);}
+    };
+  });
+  $("#tags-list").querySelectorAll("[data-tag-del]").forEach(b=>b.onclick=()=>{
+    const t=b.dataset.tagDel;
+    confirmDelete(`Delete tag "${t}" from every contact?`,async()=>{
+      await apiFetch("DELETE","settings/tags",{tag:t});toast("Deleted");loadTagsSettings();});
+  });
 }
 async function senderModal(){
   // Pull both lists: SMS uses phone numbers; WhatsApp uses registered WA senders.
@@ -1994,7 +2162,7 @@ async function senderModal(){
     const opt=sel.options[sel.selectedIndex];
     const reg=(opt&&opt.dataset.reg)||"pending";
     try{await post("channels/senders",{channel:v.channel||"whatsapp",identifier:id,country:v.country||null,label:v.label||null,registration_status:reg,is_default:true});
-      closeModal();toast("Sender added");loadSettings();}catch(e){toast(e.message,true);}};
+      closeModal();toast("Sender added");loadChannelsSettings();}catch(e){toast(e.message,true);}};
 }
 
 // ── Message Templates (CP-M2) ─────────────────────────────────────────────────
@@ -2114,7 +2282,7 @@ function setTab(tab){
   if(tab==="board")setBoardSubtab(_boardSubtab);
   if(tab==="sequences")setSeqSubtab(_seqSubtab);
   if(tab==="marketing")loadMarketingTab();
-  if(tab==="settings")loadSettings();
+  if(tab==="settings")setSettingsSubtab(_settingsSubtab);
 }
 $(".tabbar").addEventListener("click",e=>{const b=e.target.closest("button[data-tab]");if(!b)return;setTab(b.dataset.tab);});
 
