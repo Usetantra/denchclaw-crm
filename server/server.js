@@ -72,6 +72,14 @@ app.use('/api/crm/sequences', sequencesRouter);
 app.use('/api/crm/api-keys', apiKeysRouter);
 app.use('/api/crm/inbox', inboxRouter);
 app.use('/api/crm/templates', templatesRouter);
+// CP-M2 (WhatsApp/SMS compliance layer, ported from origin/aquila-working-branch).
+// Mounted at /channel-templates rather than /templates — that path already belongs
+// to CP4a-0's sequence-content templates (message_templates), a different concept
+// entirely. Not wired into the automated channel-jobs executor; see
+// .loop/DECISIONS_PENDING.md (CP-M2) for the deferred replace-vs-coexist decision.
+app.use('/api/crm/compliance', require('./routes/compliance'));
+app.use('/api/crm/channels', require('./routes/channels'));
+app.use('/api/crm/channel-templates', require('./routes/channel-templates'));
 app.use('/api/crm/executors', executorsRouter);
 app.use('/api/crm/automations', automationsRouter);
 app.use('/api/crm', conversationsRouter);

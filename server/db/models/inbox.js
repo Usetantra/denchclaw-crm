@@ -219,7 +219,9 @@ async function getThread(companyId, contactId, { limit = 500 } = {}) {
               COALESCE(m.ai_generated, false) AS ai_generated,
               m.provider_message_id,
               m.metadata,
-              NULL::text             AS activity_type
+              NULL::text             AS activity_type,
+              m.provider_status,
+              m.error_code
          FROM messages m
          JOIN conv ON conv.id = m.conversation_id
         WHERE m.company_id = $1
@@ -238,7 +240,12 @@ async function getThread(companyId, contactId, { limit = 500 } = {}) {
               false                  AS ai_generated,
               ca.data->>'provider_message_id' AS provider_message_id,
               ca.data                AS metadata,
-              ca.type                AS activity_type
+              ca.type                AS activity_type,
+              -- CP2 sequence sends don't go through the Twilio status webhook
+              -- path (no messages row to update), so they carry no delivery
+              -- status. NULL, typed to match the message branch for the UNION.
+              NULL::text             AS provider_status,
+              NULL::text             AS error_code
          FROM contact_activity ca
         WHERE ca.company_id = $1
           AND ca.contact_id = $2

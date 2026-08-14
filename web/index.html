@@ -249,6 +249,9 @@
   #conv-wrap .conv-bar{display:flex;gap:8px;align-items:center;flex-wrap:wrap;padding:0 24px 14px;border-bottom:1px solid var(--hair);flex:0 0 auto}
   #conv-wrap .msgs{flex:1 1 auto;min-height:0;background:var(--hair-2)}
   #conv-wrap .composer{flex:0 0 auto;flex-direction:column;align-items:stretch;gap:9px;padding:12px 16px;max-height:52vh;overflow-y:auto}
+  .cv-li-status{font-size:11.5px;line-height:1.5}
+  .cv-li-status .li-ok{color:var(--live)}
+  .cv-li-status .li-warn{color:var(--warm)}
   .cv-chan{display:flex;gap:6px;flex-wrap:wrap}
   .cv-chan button{border:1px solid var(--hair);background:var(--surface);color:var(--ink-3);font-size:11px;font-weight:600;letter-spacing:.03em;padding:5px 12px;border-radius:999px;cursor:pointer;font-family:var(--sans);text-transform:capitalize}
   .cv-chan button.active{background:var(--accent-bg);color:var(--accent-fg);border-color:var(--accent-bg)}
@@ -410,6 +413,8 @@
   <button data-tab="inbox">Inbox</button>
   <button data-tab="marketing">Marketing</button>
   <button data-tab="analytics">Analytics</button>
+  <button data-tab="templates">Templates</button>
+  <button data-tab="settings">Settings</button>
 </div></div>
 
 <main>
@@ -661,6 +666,34 @@
     </div>
   </div>
   </div><!-- /view-analytics -->
+
+  <!-- ── SETTINGS · CHANNELS (CP-M2, ported from origin/aquila-working-branch) ── -->
+  <div id="view-settings" style="display:none">
+  <div class="sechead"><span class="eyebrow">Settings · Channels</span><span class="rule"></span></div>
+  <div class="a-section" style="max-width:760px">
+    <h3>Twilio (WhatsApp &amp; SMS)</h3>
+    <p class="muted" style="font-size:12px;margin:2px 0 12px">This connects the compliance-gated Twilio path (consent, suppression, 24h window, DLT templates) used by inbox replies on WhatsApp/SMS threads. It is separate from the automated sequence dispatcher's own sender.</p>
+    <div id="twilio-conn" class="muted" style="margin:6px 0 14px">loading…</div>
+    <div id="twilio-connect-form"></div>
+  </div>
+  <div class="a-section" style="max-width:760px;margin-top:24px">
+    <h3>Connected senders</h3>
+    <p class="muted" style="font-size:12px;margin:2px 0 12px">Numbers/accounts the inbox composer can send from. WhatsApp &amp; SMS require the sender to be registered/approved (A2P&nbsp;10DLC in the US, DLT in India) before real delivery.</p>
+    <div id="senders-list"><div class="muted">loading…</div></div>
+    <button class="btn sm" id="add-sender" style="margin-top:12px">+ Add sender</button>
+  </div>
+  </div><!-- /view-settings -->
+
+  <!-- ── TEMPLATES (CP-M2, ported from origin/aquila-working-branch) ─────────── -->
+  <div id="view-templates" style="display:none">
+  <div class="sechead"><span class="eyebrow">Message Templates</span><span class="rule"></span></div>
+  <div class="toolbar" style="margin-bottom:14px">
+    <span class="muted" style="font-size:12px">WhatsApp templates — authored here, submitted to Meta via Twilio, status synced back. Required for business-initiated / out-of-window messages.</span>
+    <span class="spacer" style="flex:1"></span>
+    <button class="btn primary" id="new-template">+ New template</button>
+  </div>
+  <div id="templates-list"><div class="muted">loading…</div></div>
+  </div><!-- /view-templates -->
 </main>
 
 <div class="modal-overlay" id="modal"><div class="modal">
@@ -1464,6 +1497,12 @@ function renderConvActions(c){
 function renderThread(msgs){
   const box=$("#cv-msgs");
   if(!msgs.length){box.innerHTML=`<div class="msg bot">No messages yet.</div>`;return;}
+  // CP-M2: provider delivery status (written by the Twilio status webhook,
+  // server/routes/webhooks.js POST /twilio/status) on outbound rows.
+  const deliveryBadge=m=>{const s=m.provider_status;if(!s)return "";
+    const col=/read|delivered/i.test(s)?"var(--live)":/fail|undeliv/i.test(s)?"var(--hot)":"var(--ink-4)";
+    const t=m.error_code?` title="error ${esc(m.error_code)}"`:"";
+    return ` · <span style="color:${col};font-weight:600"${t}>${esc(s)}${m.error_code?" ("+esc(m.error_code)+")":""}</span>`;};
   box.innerHTML=msgs.map((m,i)=>{
     const out=m.direction==="outbound";
     const who=out?(m.ai_generated?"AI":"You"):"Contact";
@@ -1485,7 +1524,7 @@ function renderThread(msgs){
       }
     }
     return `<div class="msg ${out?"user":"bot"}">${replyRef}${subj}${esc(m.body||"—")}
-      <div class="mmeta">${esc(who)}${out&&m.ai_generated?`<span class="ai-tag">AI</span>`:""} · ${esc(m.channel||"")}${m.intent?" · "+esc(m.intent):""}${cc} · ${new Date(m.created_at).toLocaleString()}</div>
+      <div class="mmeta">${esc(who)}${out&&m.ai_generated?`<span class="ai-tag">AI</span>`:""} · ${esc(m.channel||"")}${m.intent?" · "+esc(m.intent):""}${cc} · ${new Date(m.created_at).toLocaleString()}${out?deliveryBadge(m):""}</div>
     </div>`;
   }).join("");
   box.scrollTop=box.scrollHeight;
@@ -1755,10 +1794,193 @@ async function load(){
   }
 }
 
+// ── Settings → Channels (CP-M2, ported from origin/aquila-working-branch) ─────
+const SENDER_STATUS_COLOR={connected:"#067647",verified:"#067647",approved:"#067647",pending:"#b54708",rejected:"#b42318"};
+async function loadSettings(){
+  let data={connections:[],senders:[]};
+  try{data=await get("channels");}catch(e){$("#twilio-conn").textContent=e.message;return;}
+  const tw=(data.connections||[]).find(c=>c.provider==="twilio"&&c.status==="connected");
+  if(tw){
+    $("#twilio-conn").innerHTML=`<span class="li-ok">✓ Connected</span> · account <code>${esc(tw.account_ref||"")}</code>`;
+    $("#twilio-connect-form").innerHTML=`<button class="btn sm" id="tw-disconnect">Disconnect Twilio</button>`;
+    $("#tw-disconnect").onclick=async()=>{if(!confirm("Disconnect Twilio? Senders stay but can't send until reconnected."))return;
+      try{await post("channels/twilio/disconnect",{});toast("Disconnected");loadSettings();}catch(e){toast(e.message,true);}};
+  }else{
+    $("#twilio-conn").innerHTML=`<span class="li-warn">Not connected.</span> Paste your Twilio credentials to connect (verified against Twilio; stored encrypted, never shown again).`;
+    $("#twilio-connect-form").innerHTML=`
+      <div class="cvf" style="max-width:420px"><label>Account SID</label><input id="tw-sid" placeholder="AC…"></div>
+      <div class="cvf" style="max-width:420px;margin-top:8px"><label>Auth Token (or use an API Key below)</label><input id="tw-token" type="password" placeholder="your auth token"></div>
+      <div class="cvrow" style="max-width:420px;margin-top:8px">
+        <div class="cvf"><label>API Key SID (optional)</label><input id="tw-keysid" placeholder="SK…"></div>
+        <div class="cvf"><label>API Key Secret (optional)</label><input id="tw-keysecret" type="password"></div>
+      </div>
+      <button class="btn sm primary" id="tw-connect" style="margin-top:10px">Connect Twilio</button>`;
+    $("#tw-connect").onclick=async()=>{
+      const sid=$("#tw-sid").value.trim();if(!sid)return toast("Account SID required",true);
+      const body={account_sid:sid,auth_token:$("#tw-token").value.trim()||undefined,
+        api_key_sid:$("#tw-keysid").value.trim()||undefined,api_key_secret:$("#tw-keysecret").value.trim()||undefined};
+      const btn=$("#tw-connect");btn.disabled=true;btn.textContent="Verifying…";
+      try{await post("channels/twilio/connect",body);toast("Twilio connected");loadSettings();}
+      catch(e){toast(e.message,true);btn.disabled=false;btn.textContent="Connect Twilio";}
+    };
+  }
+  // senders
+  const rows=(data.senders||[]).filter(s=>s.channel==="whatsapp"||s.channel==="sms");
+  $("#senders-list").innerHTML=rows.length?`<table><thead><tr><th>Channel</th><th>Sender</th><th>Country</th><th>Registration</th><th></th></tr></thead><tbody>${
+    rows.map(s=>{const col=SENDER_STATUS_COLOR[s.registration_status]||"#98a2b3";
+      return `<tr><td><span class="ch-badge">${esc(s.channel)}</span></td>
+      <td><b>${esc(s.identifier)}</b>${s.label?`<div class="muted" style="font-size:11px">${esc(s.label)}</div>`:""}</td>
+      <td class="muted">${esc(s.country||"—")}</td>
+      <td><span class="status-pill" style="background:${col}20;color:${col}">${esc(s.registration_status||"—")}</span></td>
+      <td><button class="btn sm danger" data-del-sender="${esc(s.id)}">Remove</button></td></tr>`;}).join("")
+  }</tbody></table>`:`<div class="empty">No WhatsApp/SMS senders yet. ${tw?"Add one below.":"Connect Twilio first."}</div>`;
+  $("#senders-list").querySelectorAll("[data-del-sender]").forEach(b=>b.onclick=async()=>{
+    try{await del("channels/senders/"+b.dataset.delSender);toast("Removed");loadSettings();}catch(e){toast(e.message,true);}});
+  $("#add-sender").style.display=tw?"":"none";
+  $("#add-sender").onclick=()=>senderModal(tw);
+}
+async function senderModal(){
+  // Pull both lists: SMS uses phone numbers; WhatsApp uses registered WA senders.
+  let numbers=[],waSenders=[];
+  try{numbers=(await get("channels/twilio/numbers")).numbers||[];}catch(e){}
+  try{waSenders=(await get("channels/twilio/whatsapp-senders")).senders||[];}catch(e){}
+  const pickHtml=ch=>{
+    if(ch==="whatsapp"){
+      const opts=waSenders.map(s=>`<option value="${esc(s.sender_id)}" data-reg="${s.status==="ONLINE"?"approved":"pending"}">${esc(s.sender_id)} · ${esc(s.status||"")}${s.quality?" · "+esc(s.quality):""}</option>`).join("");
+      return `<option value="">— choose —</option>${waSenders.length?`<optgroup label="Your WhatsApp senders">${opts}</optgroup>`:""}<option value="whatsapp:+14155238886" data-reg="connected">WhatsApp Sandbox · whatsapp:+14155238886</option><option value="__manual">Type manually…</option>`;
+    }
+    const opts=numbers.map(n=>`<option value="${esc(n.phone_number)}" data-reg="pending">${esc(n.phone_number)}${n.sms?" · SMS":""}</option>`).join("");
+    return `<option value="">— choose —</option>${numbers.length?`<optgroup label="Your Twilio numbers">${opts}</optgroup>`:""}<option value="__manual">Type manually…</option>`;
+  };
+  openModal("Add sender",
+    field("Channel","channel",{type:"select",options:[{value:"whatsapp",label:"WhatsApp"},{value:"sms",label:"SMS"}]})+
+    `<div class="cvf"><label>Sender</label><select name="picked" id="sender-pick">${pickHtml("whatsapp")}</select></div>
+     <div class="cvf" id="sender-manual" style="display:none"><label>Number / sender id</label><input name="identifier" placeholder="+1…  (WhatsApp uses whatsapp:+…)"></div>
+     <div id="sender-hint" class="cv-li-status" style="margin:2px 0"></div>
+     <div class="cvrow">${field("Country (ISO-2)","country",{value:"US",placeholder:"US / IN / DE"})}${field("Label","label",{placeholder:"optional"})}</div>`,
+    `<button class="btn" onclick="closeModal()">Cancel</button><button class="btn primary" id="save-sender">Add</button>`);
+  const hint=()=>{const ch=$("[name=channel]").value;
+    $("#sender-hint").innerHTML=ch==="whatsapp"
+      ?(waSenders.length?`<span class="li-ok">✓ ${waSenders.length} WhatsApp sender(s) found on your account.</span>`:`<span class="li-warn">No WhatsApp senders found — use the sandbox to test.</span>`)
+      :`<span class="muted">Pick one of your Twilio numbers. US long codes need A2P&nbsp;10DLC to send at scale.</span>`;};
+  const rebuild=()=>{const ch=$("[name=channel]").value;$("#sender-pick").innerHTML=pickHtml(ch);$("#sender-manual").style.display="none";hint();};
+  $("[name=channel]").onchange=rebuild;hint();
+  $("#sender-pick").onchange=e=>{$("#sender-manual").style.display=e.target.value==="__manual"?"":"none";};
+  $("#save-sender").onclick=async()=>{const v=formValues();const sel=$("#sender-pick");
+    let id=v.picked==="__manual"?(v.identifier||"").trim():v.picked;
+    if(!id||id==="")return toast("Pick or enter a sender",true);
+    if(v.channel==="whatsapp"&&/^\+/.test(id)&&!/^whatsapp:/i.test(id))id="whatsapp:"+id;
+    const opt=sel.options[sel.selectedIndex];
+    const reg=(opt&&opt.dataset.reg)||"pending";
+    try{await post("channels/senders",{channel:v.channel||"whatsapp",identifier:id,country:v.country||null,label:v.label||null,registration_status:reg,is_default:true});
+      closeModal();toast("Sender added");loadSettings();}catch(e){toast(e.message,true);}};
+}
+
+// ── Message Templates (CP-M2) ─────────────────────────────────────────────────
+const TPL_STATUS_COLOR={DRAFT:"#475467",PENDING:"#b54708",APPROVED:"#067647",REJECTED:"#b42318",PAUSED:"#b54708",DISABLED:"#b42318",ARCHIVED:"#98a2b3"};
+const TPL_CATEGORIES=["MARKETING","UTILITY","AUTHENTICATION"];
+let _tplList=[];
+async function loadTemplates(){
+  const box=document.getElementById("templates-list");
+  try{const r=await get("channel-templates?includeArchived=true");_tplList=r.templates||[];}
+  catch(e){box.innerHTML=`<div class="empty">${esc(e.message)}</div>`;return;}
+  if(!_tplList.length){box.innerHTML=`<div class="empty">No templates yet. Create one to send business-initiated WhatsApp messages.</div>`;return;}
+  box.innerHTML=`<table><thead><tr><th>Name</th><th>Lang</th><th>Category</th><th>Status</th><th>v</th><th>Preview</th><th></th></tr></thead><tbody>${
+    _tplList.map(t=>{
+      const cat=t.current_category&&t.current_category!==t.category?`${esc(t.category)} → <b>${esc(t.current_category)}</b>`:esc(t.category);
+      const rej=t.rejection_reason?` <span class="muted" title="${esc(t.rejection_reason)}">ⓘ</span>`:"";
+      return `<tr data-tid="${t.id}" style="cursor:pointer">
+        <td><b>${esc(t.name)}</b></td>
+        <td>${esc(t.language||"")}</td>
+        <td style="font-size:12px">${cat}</td>
+        <td><span class="status-pill" style="background:${TPL_STATUS_COLOR[t.status]||"#475467"}22;color:${TPL_STATUS_COLOR[t.status]||"#475467"}">${esc(t.status)}</span>${rej}</td>
+        <td>${t.version}</td>
+        <td class="muted" style="max-width:280px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(t.body||"")}</td>
+        <td style="text-align:right">${statusActions(t)}</td>
+      </tr>`;}).join("")
+  }</tbody></table>`;
+  box.querySelectorAll("tr[data-tid]").forEach(tr=>tr.addEventListener("click",e=>{
+    if(e.target.closest("button"))return;templateModal(_tplList.find(x=>String(x.id)===tr.dataset.tid));}));
+  box.querySelectorAll("button[data-act]").forEach(b=>b.addEventListener("click",async e=>{
+    e.stopPropagation();const id=b.dataset.tid,act=b.dataset.act;
+    try{
+      if(act==="submit"){if(!confirm("Submit to Meta for approval via Twilio? It can't be edited while pending."))return;await post(`channel-templates/${id}/submit`,{});toast("Submitted for approval");}
+      if(act==="sync"){await post(`channel-templates/${id}/sync`,{});toast("Status synced");}
+      if(act==="archive"){if(!confirm("Archive this template?"))return;await post(`channel-templates/${id}/archive`,{});toast("Archived");}
+      loadTemplates();
+    }catch(err){toast(err.message,true);}
+  }));
+}
+function statusActions(t){
+  const btn=(act,label)=>`<button class="act-btn" data-act="${act}" data-tid="${t.id}">${label}</button>`;
+  const a=[];
+  if(t.status==="DRAFT"||t.status==="REJECTED")a.push(btn("submit","Submit"));
+  if(t.provider_template_id&&["PENDING","APPROVED","PAUSED"].includes(t.status))a.push(btn("sync","Sync"));
+  if(t.status!=="ARCHIVED")a.push(btn("archive","Archive"));
+  return a.join(" ");
+}
+document.getElementById("new-template").addEventListener("click",()=>templateModal(null));
+
+function templateModal(t){
+  const isNew=!t;t=t||{};
+  const editable=isNew||["DRAFT","REJECTED"].includes(t.status);
+  const btns=(t.buttons||[]).map(b=>b.title).join(", ");
+  const vars=(t.variables||[]).map(v=>`${v.name||v.index||""}=${v.example||""}`).join("; ");
+  const hdr=t.header||{};
+  const readonly=editable?"":"disabled";
+  openModal(isNew?"New template":`Template · ${esc(t.name||"")}`,
+    `<div class="cvrow">${field("Name","name",{value:t.name||"",placeholder:"order_update"})}${field("Language","language",{value:t.language||"en",placeholder:"en / en_US / hi"})}</div>
+     <div class="cvrow">${field("Category","category",{type:"select",value:(t.category||"UTILITY"),options:TPL_CATEGORIES})}${field("Channel","channel",{type:"select",value:(t.channel||"whatsapp"),options:[{value:"whatsapp",label:"WhatsApp"}]})}</div>
+     ${field("Header text (optional, ≤60)","header_text",{value:hdr.type==="text"?(hdr.text||""):"",placeholder:"optional bold header"})}
+     ${field("Body (≤1024, use {{1}} for variables)","body",{type:"textarea",value:t.body||""})}
+     ${field("Footer (optional, ≤60)","footer",{value:t.footer||"",placeholder:"optional footer"})}
+     ${field("Buttons (comma-separated titles, optional)","buttons","")}
+     ${field("Variable examples (e.g. 1=Alex; 2=#123)","variables",{value:vars,placeholder:"1=Alex; 2=#123"})}
+     <div id="tpl-errs" class="cv-li-status" style="color:#b42318;margin-top:6px"></div>
+     ${t.rejection_reason?`<div class="muted" style="margin-top:6px">Rejection: ${esc(t.rejection_reason)}</div>`:""}
+     ${t.provider_template_id?`<div class="muted" style="margin-top:4px">Twilio Content: <code>${esc(t.provider_template_id)}</code></div>`:""}`,
+    `<button class="btn" onclick="closeModal()">Close</button>
+     ${!isNew?`<button class="btn sm" id="tpl-versions">History (v${t.version})</button>`:""}
+     ${editable?`<button class="btn primary" id="tpl-save">${isNew?"Create draft":"Save (new version)"}</button>`:`<span class="muted" style="font-size:12px">Read-only while ${esc(t.status)}</span>`}`);
+  // preset buttons/select values that field() can't easily set
+  const bIn=$("#modal-body [name=buttons]");if(bIn)bIn.value=btns;
+  if(!editable)$("#modal-body").querySelectorAll("input,textarea,select").forEach(el=>el.disabled=true);
+  const vsBtn=document.getElementById("tpl-versions");if(vsBtn)vsBtn.onclick=()=>templateVersions(t);
+  const saveBtn=document.getElementById("tpl-save");
+  if(saveBtn)saveBtn.onclick=async()=>{
+    const v=formValues();
+    const payload={
+      name:(v.name||"").toLowerCase().replace(/[^a-z0-9_]/g,"_"),
+      language:v.language||"en",category:(v.category||"UTILITY").toUpperCase(),channel:v.channel||"whatsapp",
+      body:v.body||"",footer:v.footer||null,
+      header:v.header_text?{type:"text",text:v.header_text}:null,
+      buttons:(v.buttons||"").split(",").map(s=>s.trim()).filter(Boolean).map(title=>({type:"quick_reply",title})),
+      variables:(v.variables||"").split(";").map(s=>s.trim()).filter(Boolean).map(pair=>{const[name,example]=pair.split("=");return{name:(name||"").trim(),example:(example||"").trim()};}),
+    };
+    try{
+      if(isNew)await post("channel-templates",payload);
+      else await patch(`channel-templates/${t.id}`,payload);
+      closeModal();toast("Saved");loadTemplates();
+    }catch(e){
+      if(e.errors&&e.errors.length)$("#tpl-errs").innerHTML=e.errors.map(esc).join("<br>");
+      else toast(e.message,true);
+    }};
+}
+async function templateVersions(t){
+  let vs=[];try{vs=(await get(`channel-templates/${t.id}/versions`)).versions||[];}catch(e){return toast(e.message,true);}
+  openModal(`History · ${esc(t.name)}`,
+    vs.length?vs.map(v=>{const s=typeof v.snapshot==="string"?JSON.parse(v.snapshot):v.snapshot;
+      return `<div class="cv-li" style="border-bottom:1px solid #eee;padding:6px 0">
+        <div><b>v${v.version}</b> · <span class="muted">${esc(v.status||"")}</span> · <span class="muted">${fmtDate(v.created_at)}</span></div>
+        <div class="muted" style="font-size:12px;white-space:pre-wrap">${esc((s&&s.body)||"")}</div></div>`;}).join("")
+    :`<div class="muted">No prior versions — this is v${t.version}.</div>`,
+    `<button class="btn" onclick="closeModal()">Close</button>`);
+}
+
 // ── Tab switching ─────────────────────────────────────────────────────────────
 function setTab(tab){
   document.querySelectorAll(".tabbar button").forEach(b=>b.classList.toggle("active",b.dataset.tab===tab));
-  ["dashboard","board","contacts","companies","pipelines","sequences","inbox","marketing","analytics"].forEach(v=>{
+  ["dashboard","board","contacts","companies","pipelines","sequences","inbox","marketing","analytics","templates","settings"].forEach(v=>{
     const el=$(`#view-${v}`);if(el)el.style.display=v===tab?"":"none";
   });
   // Every tab refetches on entry so numbers are always live (get() is no-store).
@@ -1772,6 +1994,8 @@ function setTab(tab){
   if(tab==="pipelines")loadPipelinesTab();
   if(tab==="sequences")loadSequencesTab();
   if(tab==="marketing")loadMarketingTab();
+  if(tab==="settings")loadSettings();
+  if(tab==="templates")loadTemplates();
 }
 $(".tabbar").addEventListener("click",e=>{const b=e.target.closest("button[data-tab]");if(!b)return;setTab(b.dataset.tab);});
 

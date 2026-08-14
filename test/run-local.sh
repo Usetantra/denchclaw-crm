@@ -22,6 +22,10 @@ LIMITED="ct-limited-$$"
 # CP-B: the public marketing webhooks fail CLOSED with no secret, so the test
 # server needs one. Per-run, never a real deployment value.
 MK_SECRET="ct-marketing-secret-$$"
+# CP-M2's Twilio inbound webhook shares the inbound-email webhook's shared-secret
+# guard (server/routes/webhooks.js) — set here so unit-cpm2-channel-compliance's
+# STOP/START simulation (M2-14) isn't skipped.
+IB_SECRET="ct-inbound-secret-$$"
 # The public marketing webhooks derive the TENANT from the secret, so the suite's
 # per-run tenant needs its own binding. RUN is pinned here (not left to the test's
 # Date.now() default) precisely so the server, booted first, can know the tenant
@@ -75,6 +79,7 @@ AUTOMATION_ENV_FILE=/nonexistent \
 MARKETING_WEBHOOK_SECRET="$MK_SECRET" \
 MARKETING_WEBHOOK_SECRETS="$MK_SECRETS" \
 MARKETING_PUBLIC_BASE="http://127.0.0.1:${TEST_PORT}" \
+INBOUND_WEBHOOK_SECRET="$IB_SECRET" \
   RESEND_API_KEY="" CLOUDFLARE_AI_TOKEN="" \
 node server/server.js &
 SERVER_PID=$!
@@ -137,6 +142,7 @@ SUITES=(
   "unit-cpc2-linkedin|node test/unit-cpc2-linkedin.mjs"
   "unit-cpd-automations|node test/unit-cpd-automations.mjs"
   "unit-cpy-automation-gate|node test/unit-cpy-automation-gate.mjs"
+  "unit-cpm2-channel-compliance|env INBOUND_WEBHOOK_SECRET=$IB_SECRET node test/unit-cpm2-channel-compliance.mjs"
 )
 
 TOTAL_SUITES=${#SUITES[@]}

@@ -278,15 +278,44 @@ main — this is genuine parallel duplicate effort, not a fast-forward):
 - **Editable contact drawer** (part of `eb994ad`) — **PORTED, commit `81c9ab1`.** Main's
   drawer was read-only; this was self-contained UI with no backend gap (`PATCH
   /contacts/:id` already accepted every field).
-- **WhatsApp/SMS compliance layer** (`6ed52f1`) + **delivery status badge** (`620914c`,
-  depends on it) — **NOT PORTED, needs its own checkpoint.** Main's Twilio sender
-  (`twilio-send.js`) has no compliance gate at all. Aquila built real Twilio signature
-  verification, STOP/START suppression, WhatsApp 24h window enforcement, India DLT
-  template rules, Meta template-approval workflow, and AES-256-GCM encrypted credential
-  storage — genuinely unique and legally load-bearing (TCPA/Meta policy), not something
-  to fold in casually. It also collides with main's migration numbering (aquila's
-  `012_channel_compliance.sql`/`013_channel_connections.sql` vs main's own
-  `012_tenants.sql`/`013_tenant_fk.sql`) and raises a real design question: does it
-  *replace* main's simpler Twilio sender, or live alongside it? **OPEN — needs the
-  operator to scope this as a dedicated checkpoint (CP-M2b or similar) before anyone
-  builds against it.**
+- **WhatsApp/SMS compliance layer** (`6ed52f1`) + **delivery status badge** (`620914c`)
+  — **PORTED, 2026-08-14, on operator instruction ("just show me what changes first" —
+  ported and tested, deliberately NOT wired into the automated executor).** Migrations
+  renumbered `012`/`013` → `migrations/027_channel_compliance.sql` /
+  `028_channel_connections.sql` (main's own `012`/`013` are unrelated — tenants/tenant_fk).
+  Aquila's `message_templates`/`message_template_versions` tables renamed to
+  `channel_message_templates`/`channel_message_template_versions` throughout — main
+  already has an UNRELATED `message_templates` table (CP4a-0, migration 021, sequence
+  content) and the two would have collided under one name. `server/db/models/templates.js`
+  → `channel-templates.js`, `server/routes/templates.js` → `channel-templates.js`, mounted
+  at `/api/crm/channel-templates` (`/api/crm/templates` is CP4a-0's). New `server/lib/twilio.js`
+  coexists with CP-C's `server/lib/twilio-send.js` — see that file's header comment for
+  which is which.
+  **What's live:** consent/suppression DALs, the pre-send compliance gate (suppression →
+  consent ladder → WhatsApp 24h window/template → India DLT template), the segment
+  analyzer, regional policy data, the channel-templates manager (create/submit/sync/
+  archive/versions), the Settings → Channels connect flow + sender management UI, the
+  Twilio inbound/status webhooks (`POST /webhooks/twilio/inbound`, `/twilio/status`), and
+  — genuinely NEW capability, not a replacement — WhatsApp/SMS delivery from the inbox
+  reply composer (`server/routes/conversations.js`), which had **no delivery path at all**
+  for those two channels before this (only email/LinkedIn delivered on reply).
+  **What's deliberately NOT done:** the automated `channel-jobs` executor
+  (`server/lib/twilio-send.js`, CP-C) is untouched — it still sends with no compliance
+  gate in front of it. **OPEN — still needs the operator:** decide whether the executor
+  should be rewired onto the compliance-gated sender (`server/lib/twilio.js`), or whether
+  the two are meant to stay permanently separate (e.g. executor = pre-approved automation
+  sequences that don't need per-send consent checks because consent was already verified
+  at enrollment; composer = ad hoc human replies that do). Also un-ported from aquila's
+  `crm.js` diff: the `/channel-senders` env-default removal (aquila dropped the hardcoded
+  WhatsApp/SMS fallback identities in favor of DB-only) — skipped because aquila's own
+  commit left `router.channelSenders` in `crm.js` stale (still sync/env-only), which
+  `server/routes/inbox.js`'s composer sender-picker reads; fixing that gap first needs a
+  decision on whether the picker becomes async or a cache is introduced, not something
+  to improvise while porting someone else's unrelated feature.
+  Tests: `test/unit-cpm2-channel-compliance.mjs` (30 checks — everything reachable
+  without a live Twilio credential: migrations idempotent + no table collision with
+  CP4a-0, suppression/consent DAL round trips, the gate's decision logic across
+  suppressed/no-consent/WA-window/DLT scenarios, template CRUD + tenancy isolation, the
+  compose-path 409 when Twilio isn't connected, and the inbound STOP/START webhook via
+  the same shared-secret sim path the email webhook already uses). Suite now 1151/0,
+  20/20 suites green.
