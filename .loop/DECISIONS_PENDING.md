@@ -249,3 +249,44 @@ signed deal. `.loop/GOALS.md:78` already states this ("Deal followups are MANUAL
 figures describe *when a human should act*, not timers"), and `test/unit-cpd-automations.mjs` D-2
 asserts that no definition triggers on, or writes back to, any `deal_followup_*` stage — so the
 absence is enforced, not merely intended.
+
+## CP-M2 (surfaced 2026-08-14) — origin/aquila-working-branch diverged again after CP-M
+
+CP-M (2026-08-01) reconciled `aquila-working-branch`'s then-10 commits into `main`. The
+branch kept receiving commits after that merge point — 2 more on 2026-07-23, 5 more on
+2026-08-10 — that were **never folded back in**. `origin/main`'s last real commit is
+2026-08-02; `origin/aquila-working-branch`'s is 2026-08-10, so it was the most recently
+active branch in the repo when this was found.
+
+Reviewed all 7 against what `main` already ships (none of aquila's new files exist in
+main — this is genuine parallel duplicate effort, not a fast-forward):
+
+- **LinkedIn via Unipile** (`4b56938`, `eb994ad`'s LinkedIn/grouping parts) —
+  **SUPERSEDED, not ported.** Main's CP-C2 (`linkedin-gate.js`) is the deliberately
+  safer, complete version (rate limits, accept-gate, lease/reserve, kill switch,
+  allowlist). Aquila's sends directly with none of that — exactly the "unsafe partial
+  version" CP-C2's own decision explicitly refused to ship.
+- **Sequences/dispatcher/executor-contract** (`49e8f1b`, `4b2bc22`) —
+  **SUPERSEDED, not ported.** Main's B1–B4/CP2/CP4a/CP-Z work is more mature: a real
+  OpenAPI contract (`docs/contracts/channel-executor.openapi.yaml`), reference stub,
+  dedicated test suites.
+- **Tenancy defense-in-depth** (`09cd054`) — **PORTED, commit `81c9ab1`.** Most of this
+  commit turned out already reconciled during CP-M (`contacts.js`'s comment documents
+  it, made even stricter — throws instead of returning null/[]). Only the
+  `companies.js` `/:id/contacts` and `/:id/deals` missing `company_id` filter was a
+  real gap; ported with its regression test (8c in `contract.mjs`).
+- **Editable contact drawer** (part of `eb994ad`) — **PORTED, commit `81c9ab1`.** Main's
+  drawer was read-only; this was self-contained UI with no backend gap (`PATCH
+  /contacts/:id` already accepted every field).
+- **WhatsApp/SMS compliance layer** (`6ed52f1`) + **delivery status badge** (`620914c`,
+  depends on it) — **NOT PORTED, needs its own checkpoint.** Main's Twilio sender
+  (`twilio-send.js`) has no compliance gate at all. Aquila built real Twilio signature
+  verification, STOP/START suppression, WhatsApp 24h window enforcement, India DLT
+  template rules, Meta template-approval workflow, and AES-256-GCM encrypted credential
+  storage — genuinely unique and legally load-bearing (TCPA/Meta policy), not something
+  to fold in casually. It also collides with main's migration numbering (aquila's
+  `012_channel_compliance.sql`/`013_channel_connections.sql` vs main's own
+  `012_tenants.sql`/`013_tenant_fk.sql`) and raises a real design question: does it
+  *replace* main's simpler Twilio sender, or live alongside it? **OPEN — needs the
+  operator to scope this as a dedicated checkpoint (CP-M2b or similar) before anyone
+  builds against it.**
