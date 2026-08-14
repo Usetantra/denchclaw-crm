@@ -190,6 +190,14 @@ cannot see each other and the aggregate exceeds every cap while both believe the
 This is the one CP-C2 risk I cannot close in code. Recommendation: the engine's LinkedIn dispatch
 must be OFF wherever the CRM sends.
 
+**STILL OPEN, 2026-08-15: asked the operator directly, answer was "not sure."** They don't know
+whether the separate outreach engine shares the same connected LinkedIn account as the CRM. Nothing
+to act on in code — this is a fact only the operator can establish (check the outreach engine's
+LinkedIn connection settings against what's connected in CRM Settings → Channels). Flagging so it
+isn't re-asked as if new: the CRM side of this (per-tenant `linkedin_gate.js` caps/lease) cannot
+detect a second, unrelated system sending on the same account — verification has to happen outside
+this codebase.
+
 ## CP-D (automations) — 2026-08-01
 
 **DECIDED BY DEFAULT: `crm_pipeline_configs.automations` stays EMPTY, and becomes a computed
@@ -299,13 +307,27 @@ main — this is genuine parallel duplicate effort, not a fast-forward):
   — genuinely NEW capability, not a replacement — WhatsApp/SMS delivery from the inbox
   reply composer (`server/routes/conversations.js`), which had **no delivery path at all**
   for those two channels before this (only email/LinkedIn delivered on reply).
-  **What's deliberately NOT done:** the automated `channel-jobs` executor
-  (`server/lib/twilio-send.js`, CP-C) is untouched — it still sends with no compliance
-  gate in front of it. **OPEN — still needs the operator:** decide whether the executor
-  should be rewired onto the compliance-gated sender (`server/lib/twilio.js`), or whether
-  the two are meant to stay permanently separate (e.g. executor = pre-approved automation
-  sequences that don't need per-send consent checks because consent was already verified
-  at enrollment; composer = ad hoc human replies that do). Also un-ported from aquila's
+  **RESOLVED 2026-08-15, operator instruction ("Replace it").** The automated
+  `channel-jobs` executor's sms/whatsapp providers now go through the compliance-gated
+  sender (`server/lib/twilio.js` + `server/lib/compliance-gate.js`), the same path the
+  composer already used — one send path, not two. `server/lib/twilio-send.js` (CP-C, the
+  env-configured sender) is retired from `server/lib/executors.js` and no longer imported
+  there; it is left in the tree, unused, rather than deleted, in case anything else still
+  references it. New provider: `server/lib/twilio-compliant-provider.js`, mirroring CP-C2's
+  `linkedinProvider` shape — permissive sync boot gate (the connected identity is a
+  per-tenant DB row, `channel_connections`/`channel_senders`), real check in the async
+  per-tick `preflight(companyId)`, and `admitJob` running `compliance-gate.check()`
+  immediately before every send. Added a `TWILIO_API_BASE` override seam to
+  `server/lib/twilio.js` (it had none — unlike `twilio-send.js` — which was a blocker: no
+  way to test it without hitting real Twilio) plus the same error-classification contract
+  (`configError`/`definitive`/`transient`/`outcomeUnknown`) `twilio-send.js` already had.
+  Known gap carried forward, not fixed here: the automated path has no template-authoring
+  step wired up (sequence-step payloads never populate `content_sid`), so an out-of-window
+  WhatsApp send or a DLT-region SMS from a *sequence* is correctly refused by the gate
+  today rather than silently sent — building template-backed sequence steps is separate,
+  future work. Tests: `test/unit-cpc-channels.mjs` rewritten for the DB-connected,
+  compliance-gated path (see its own header for what changed).
+  Also un-ported from aquila's
   `crm.js` diff: the `/channel-senders` env-default removal (aquila dropped the hardcoded
   WhatsApp/SMS fallback identities in favor of DB-only) — skipped because aquila's own
   commit left `router.channelSenders` in `crm.js` stale (still sync/env-only), which

@@ -19,7 +19,7 @@
 // from another's number until the session is banned. Business API only.
 const { makeExecutor } = require('./channel-executor');
 const resendEmail = require('./email-resend');
-const twilio = require('./twilio-send');
+const { twilioCompliantProvider } = require('./twilio-compliant-provider');
 const unipile = require('./unipile-send');
 const linkedinGate = require('./linkedin-gate');
 
@@ -54,23 +54,6 @@ const emailProvider = {
     return { id: sent.id || null, providerStatus: null };
   },
 };
-
-const twilioProvider = (channel) => ({
-  isConfigured: () => twilio.isConfigured(),
-  configReason: 'Twilio is not configured (TWILIO_ACCOUNT_SID + credentials)',
-  senderReason: channel === 'sms'
-    ? 'no connected sending number for sms — set TWILIO_PHONE'
-    : 'no connected sending number for whatsapp — set TWILIO_WHATSAPP (or TWILIO_PHONE)',
-  senderFor: () => twilio.senderFor(channel),
-  send: async ({ from, to, payload }) => twilio.sendMessage({
-    channel, from, to, body: payload.body,
-    // An approved template, when the copy declares one. Free-form text is only
-    // deliverable inside WhatsApp's 24-hour session window; a template is how a
-    // first-contact message legitimately gets through.
-    contentSid: payload.content_sid || null,
-    contentVariables: payload.content_variables || null,
-  }),
-});
 
 // ─── LinkedIn ────────────────────────────────────────────────────────────────
 // The sender is a DB row, not an env var, because the connected identity is what
@@ -146,12 +129,12 @@ const email = makeExecutor({
   recipientField: 'email',
 });
 const sms = makeExecutor({
-  channel: 'sms', provider: twilioProvider('sms'),
+  channel: 'sms', provider: twilioCompliantProvider('sms'),
   enabledEnv: 'SMS_EXECUTOR_ENABLED', batchEnv: 'SMS_EXECUTOR_BATCH',
   recipientField: 'phone',
 });
 const whatsapp = makeExecutor({
-  channel: 'whatsapp', provider: twilioProvider('whatsapp'),
+  channel: 'whatsapp', provider: twilioCompliantProvider('whatsapp'),
   enabledEnv: 'WHATSAPP_EXECUTOR_ENABLED', batchEnv: 'WHATSAPP_EXECUTOR_BATCH',
   recipientField: 'phone',
 });

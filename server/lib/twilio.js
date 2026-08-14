@@ -7,12 +7,17 @@
 // sending/Content-API calls; every send is expected to have already passed
 // server/lib/compliance-gate.js (consent, suppression, 24h window, DLT).
 //
-// NOT the same thing as server/lib/twilio-send.js (CP-C): that one is the
-// env-configured sender the automated channel-jobs executor uses today, with no
-// compliance gate in front of it. The two intentionally coexist for now — see
-// .loop/DECISIONS_PENDING.md (CP-M2) for why the executor was left untouched and
-// which of the two should win.
-const base = 'https://api.twilio.com/2010-04-01';
+// twilio-send.js (CP-C) is retired from the automated channel-jobs executor —
+// this module is now that path too (see .loop/DECISIONS_PENDING.md, CP-M2:
+// "replace it"). Every automated send passes compliance-gate.js first, exactly
+// like the manual composer path in routes/conversations.js.
+//
+// Overridable base so the send path can be exercised against a LOCAL STUB,
+// mirroring twilio-send.js's TWILIO_API_BASE seam — without it this module
+// cannot be tested without hitting real Twilio.
+const API_BASE = () =>
+  String(process.env.TWILIO_API_BASE || 'https://api.twilio.com').replace(/\/+$/, '');
+const base = () => `${API_BASE()}/2010-04-01`;
 
 // creds: { account_sid, auth_token?, api_key_sid?, api_key_secret? }
 function authHeader(creds) {
@@ -22,7 +27,7 @@ function authHeader(creds) {
 }
 
 async function call(creds, path) {
-  const r = await fetch(`${base}/Accounts/${encodeURIComponent(creds.account_sid)}${path}`, {
+  const r = await fetch(`${base()}/Accounts/${encodeURIComponent(creds.account_sid)}${path}`, {
     headers: { Authorization: authHeader(creds), accept: 'application/json' },
   });
   let j = {};
@@ -138,9 +143,16 @@ async function deleteContent(creds, contentSid) {
   return contentCall(creds, 'DELETE', `/Content/${contentSid}`);
 }
 
+const TIMEOUT_MS = parseInt(process.env.TWILIO_TIMEOUT_MS, 10) || 15000;
+
 // Send an SMS/MMS/WhatsApp message. from/to are already channel-formatted
 // (WhatsApp = "whatsapp:+…"). Pass contentSid+contentVariables to send an
 // approved template. Returns { sid, status, error_code }.
+//
+// Errors carry the same classification contract twilio-send.js established
+// (configError / definitive / transient / outcomeUnknown), because
+// lib/twilio-compliant-provider.js — the automated dispatcher's provider —
+// branches on it exactly like every other channel-executor provider does.
 async function sendMessage({ creds, from, to, body, mediaUrl, statusCallback, messagingServiceSid, contentSid, contentVariables }) {
   const params = new URLSearchParams();
   if (messagingServiceSid) params.set('MessagingServiceSid', messagingServiceSid); else params.set('From', from);
@@ -151,14 +163,41 @@ async function sendMessage({ creds, from, to, body, mediaUrl, statusCallback, me
   } else if (body != null) params.set('Body', String(body));
   if (mediaUrl) params.set('MediaUrl', mediaUrl);
   if (statusCallback) params.set('StatusCallback', statusCallback);
-  const r = await fetch(`${base}/Accounts/${encodeURIComponent(creds.account_sid)}/Messages.json`, {
-    method: 'POST',
-    headers: { Authorization: authHeader(creds), 'content-type': 'application/x-www-form-urlencoded' },
-    body: params.toString(),
-  });
+
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), TIMEOUT_MS);
+  let r;
+  try {
+    r = await fetch(`${base()}/Accounts/${encodeURIComponent(creds.account_sid)}/Messages.json`, {
+      method: 'POST',
+      headers: { Authorization: authHeader(creds), 'content-type': 'application/x-www-form-urlencoded' },
+      body: params.toString(),
+      signal: controller.signal,
+    });
+  } catch (err) {
+    clearTimeout(timer);
+    const e = new Error(
+      err.name === 'AbortError'
+        ? `Twilio: no response within ${TIMEOUT_MS}ms — the message may or may not have been sent`
+        : `Twilio: network fault (${err.message}) — the message may or may not have been sent`
+    );
+    e.outcomeUnknown = true;
+    throw e;
+  }
   let j = {};
   try { j = await r.json(); } catch (_e) {}
-  if (!r.ok) throw new Error(`Twilio ${r.status}${j.code ? ' [' + j.code + ']' : ''}: ${j.message || 'send failed'}`);
+  finally { clearTimeout(timer); }
+
+  if (!r.ok) {
+    const msg = j.message || j.detail || `HTTP ${r.status}`;
+    const e = new Error(`Twilio ${r.status}${j.code ? ' [' + j.code + ']' : ''}: ${msg}`);
+    if (r.status === 401 || r.status === 403) { e.configError = true; e.definitive = true; }
+    else if (r.status === 429 || j.code === 20429) { e.transient = true; }
+    else if (r.status >= 400 && r.status < 500) e.definitive = true;
+    else e.outcomeUnknown = true;
+    e.status = r.status; e.providerCode = j.code || null;
+    throw e;
+  }
   return { sid: j.sid, status: j.status, error_code: j.error_code || null };
 }
 
@@ -167,5 +206,5 @@ function isConfigured() { return true; } // connection-scoped; creds passed per 
 module.exports = {
   verify, listNumbers, listWhatsAppSenders, sendMessage,
   createContent, submitApproval, fetchApproval, deleteContent,
-  isConfigured, __providerName: 'twilio',
+  isConfigured, TIMEOUT_MS, API_BASE, __providerName: 'twilio',
 };
