@@ -169,6 +169,18 @@
   .settings-card{border:1px solid var(--hair);border-radius:8px;padding:20px 22px;max-width:640px}
   .settings-card+.settings-card{margin-top:20px}
   .settings-card h3{margin:0 0 4px;font-family:var(--serif);font-weight:400;font-size:17px}
+  /* Left-nav settings layout — a normal "tools settings" pattern (Slack/VS
+     Code style): a fixed vertical list of sections on the left, content on
+     the right, rather than a horizontal tab strip that has to be scanned
+     left-to-right for the section you want. */
+  .settings-layout{display:grid;grid-template-columns:200px 1fr;gap:32px;align-items:start}
+  @media(max-width:760px){.settings-layout{grid-template-columns:1fr}}
+  .settings-nav{display:flex;flex-direction:column;gap:2px;position:sticky;top:calc(var(--nav-h) + 78px)}
+  .settings-nav button{text-align:left;border:none;background:none;padding:9px 12px;border-radius:6px;
+    font-family:var(--sans);font-size:13px;font-weight:600;color:var(--ink-4);cursor:pointer}
+  .settings-nav button:hover:not(.active){background:var(--hair-2);color:var(--ink-2)}
+  .settings-nav button.active{background:var(--accent-bg);color:var(--accent-fg)}
+  .settings-content{min-width:0}
   .a-section h3{font-size:12px;letter-spacing:.14em;text-transform:uppercase;color:var(--ink-4);margin:0 0 14px;font-weight:600}
   .funnel{display:flex;flex-direction:column;gap:8px}
   .funnel-row{display:grid;grid-template-columns:120px 1fr 50px;align-items:center;gap:12px}
@@ -735,13 +747,15 @@
 
   <!-- ── SETTINGS · CHANNELS (CP-M2, ported from origin/aquila-working-branch) ── -->
   <div id="view-settings" style="display:none">
-  <div class="board-tabs" id="settings-subtab" style="margin-bottom:18px">
+  <div class="settings-layout">
+  <div class="settings-nav" id="settings-subtab">
     <button data-sub="profile" class="active">Business Profile</button>
     <button data-sub="fields">Custom Fields</button>
     <button data-sub="tags">Tags</button>
     <button data-sub="channels">Channels</button>
     <button data-sub="integrations">Integrations</button>
   </div>
+  <div class="settings-content">
 
   <!-- ── Business Profile ────────────────────────────────────────────────── -->
   <div id="settings-sub-profile">
@@ -796,6 +810,9 @@
       <button class="btn sm primary" id="lw-add" style="margin-top:14px">+ New webhook</button>
     </div>
   </div><!-- /settings-sub-integrations -->
+
+  </div><!-- /settings-content -->
+  </div><!-- /settings-layout -->
   </div><!-- /view-settings -->
 
 </main>
