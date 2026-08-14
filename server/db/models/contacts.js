@@ -5,6 +5,22 @@ const { query } = require('../index');
 
 // ─── Public API ─────────────────────────────────────────────────────────────
 
+// Sortable columns for the Contacts list — a fixed whitelist, never the raw
+// query value, so `sort` can never become a SQL-injection vector.
+const SORTABLE_COLUMNS = {
+  name: 'name', company_name: 'company_name', email: 'email',
+  deal_stage: 'deal_stage', marketing_stage: 'marketing_stage',
+  lead_score_numeric: 'lead_score_numeric', source: 'source',
+  created_at: 'created_at', updated_at: 'updated_at',
+};
+function orderByClause(sort, dir) {
+  const col = SORTABLE_COLUMNS[sort] || 'updated_at';
+  const direction = String(dir).toLowerCase() === 'asc' ? 'ASC' : 'DESC';
+  // NULLS LAST regardless of direction — an empty company/email/score sorting
+  // to the top of every list is confusing, not useful.
+  return `ORDER BY ${col} ${direction} NULLS LAST, id ${direction}`;
+}
+
 async function list(companyId, filters = {}) {
   if (!companyId) throw new Error('contacts.list requires companyId');
   const conditions = [];
@@ -50,19 +66,20 @@ async function list(companyId, filters = {}) {
 
   conditions.push('deleted_at IS NULL');
   const where = `WHERE ${conditions.join(' AND ')}`;
+  const orderBy = orderByClause(filters.sort, filters.dir);
 
   if (filters.limit !== undefined || filters.offset !== undefined) {
     const limit = Math.min(parseInt(filters.limit, 10) || 50, 500);
     const offset = Math.max(parseInt(filters.offset, 10) || 0, 0);
     const result = await query(
-      `SELECT * FROM contacts ${where} ORDER BY updated_at DESC LIMIT $${idx++} OFFSET $${idx++}`,
+      `SELECT * FROM contacts ${where} ${orderBy} LIMIT $${idx++} OFFSET $${idx++}`,
       [...params, limit, offset]
     );
     return result.rows;
   }
 
   const result = await query(
-    `SELECT * FROM contacts ${where} ORDER BY updated_at DESC`,
+    `SELECT * FROM contacts ${where} ${orderBy}`,
     params
   );
   return result.rows;

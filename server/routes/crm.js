@@ -270,7 +270,7 @@ router.get('/contacts', async (req, res) => {
   try {
     const companyId = getUserCompanyId(req);
     if (!companyId) return res.status(401).json({ error: 'Authentication required' });
-    const { score, source, search, stage, limit, offset, tags, phone } = req.query;
+    const { score, source, search, stage, limit, offset, tags, phone, sort, dir } = req.query;
     const paginated = limit !== undefined || offset !== undefined;
 
     // tags overlap filter — accepts ?tags=a,b or repeated ?tags=a&tags=b.
@@ -284,6 +284,7 @@ router.get('/contacts', async (req, res) => {
       dealStage: stage,
       leadScore: score,
       source,
+      sort, dir,
       ...(tagList && tagList.length ? { tags: tagList } : {}),
       ...(phone ? { phone } : {}),
       ...(paginated ? { limit, offset } : {}),

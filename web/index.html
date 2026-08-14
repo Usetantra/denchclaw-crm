@@ -91,6 +91,8 @@
   table{width:100%;border-collapse:collapse;border:1px solid var(--hair);border-radius:var(--radius);overflow:hidden}
   th,td{text-align:left;padding:11px 13px;border-bottom:1px solid var(--hair);font-size:13px}
   th{font-size:10px;letter-spacing:.12em;text-transform:uppercase;color:var(--ink-4);font-weight:500;background:var(--hair-2)}
+  th.sortable{cursor:pointer;user-select:none}
+  th.sortable:hover{color:var(--ink-2)}
   tr:last-child td{border-bottom:none}
   td .co{color:var(--ink-2)} td .email{color:var(--ink-4)}
   .score{display:inline-block;padding:2px 8px;border-radius:999px;font-size:11px;font-weight:600;text-transform:capitalize;letter-spacing:.02em}
@@ -151,6 +153,9 @@
 
   /* Analytics */
   .a-section{margin-bottom:36px}
+  .settings-card{border:1px solid var(--hair);border-radius:8px;padding:20px 22px;max-width:640px}
+  .settings-card+.settings-card{margin-top:20px}
+  .settings-card h3{margin:0 0 4px;font-family:var(--serif);font-weight:400;font-size:17px}
   .a-section h3{font-size:12px;letter-spacing:.14em;text-transform:uppercase;color:var(--ink-4);margin:0 0 14px;font-weight:600}
   .funnel{display:flex;flex-direction:column;gap:8px}
   .funnel-row{display:grid;grid-template-columns:120px 1fr 50px;align-items:center;gap:12px}
@@ -256,12 +261,16 @@
   .cv-chan button{border:1px solid var(--hair);background:var(--surface);color:var(--ink-3);font-size:11px;font-weight:600;letter-spacing:.03em;padding:5px 12px;border-radius:999px;cursor:pointer;font-family:var(--sans);text-transform:capitalize}
   .cv-chan button.active{background:var(--accent-bg);color:var(--accent-fg);border-color:var(--accent-bg)}
   .cv-fields{display:flex;flex-direction:column;gap:7px}
-  .cv-fields .cvf{display:flex;flex-direction:column;gap:3px}
-  .cv-fields .cvrow{display:flex;gap:8px}
-  .cv-fields .cvrow .cvf{flex:1;min-width:0}
-  .cv-fields label{font-size:9px;letter-spacing:.08em;text-transform:uppercase;color:var(--ink-4);font-weight:700}
-  .cv-fields input,.cv-fields textarea,.cv-fields select{border:1px solid var(--hair);border-radius:6px;padding:8px 10px;font-size:13px;font-family:var(--sans);outline:none;background:var(--surface);color:var(--ink);width:100%;box-sizing:border-box}
-  .cv-fields input:focus,.cv-fields textarea:focus,.cv-fields select:focus{border-color:var(--ink)}
+  /* .cvf/.cvrow are used both inside the conversation composer (.cv-fields) and
+     standalone (Settings' connect form, the sender-add modal) — unscoped so both
+     get the same aligned label/input treatment instead of the standalone uses
+     falling back to unstyled browser defaults. */
+  .cvf{display:flex;flex-direction:column;gap:3px;margin-bottom:10px}
+  .cvrow{display:flex;gap:8px}
+  .cvrow .cvf{flex:1;min-width:0}
+  .cvf label,.cv-fields label{font-size:9px;letter-spacing:.08em;text-transform:uppercase;color:var(--ink-4);font-weight:700}
+  .cvf input,.cvf textarea,.cvf select,.cv-fields input,.cv-fields textarea,.cv-fields select{border:1px solid var(--hair);border-radius:6px;padding:8px 10px;font-size:13px;font-family:var(--sans);outline:none;background:var(--surface);color:var(--ink);width:100%;box-sizing:border-box}
+  .cvf input:focus,.cvf textarea:focus,.cvf select:focus,.cv-fields input:focus,.cv-fields textarea:focus,.cv-fields select:focus{border-color:var(--ink)}
   .cv-fields select[disabled]{color:var(--ink-4);background:var(--hair-2)}
   .cv-fields textarea{min-height:68px;resize:vertical;line-height:1.5}
   .cv-send-row{display:flex;justify-content:flex-end}
@@ -292,6 +301,16 @@
   .btn.sm{padding:5px 10px;font-size:11px}
   .checkcell{width:34px;text-align:center} .checkcell input{cursor:pointer}
   .rowact{display:flex;gap:6px;justify-content:flex-end}
+  .dots-btn{border:1px solid transparent;background:none;color:var(--ink-4);font-size:16px;line-height:1;
+    width:28px;height:28px;border-radius:6px;cursor:pointer;font-family:var(--sans)}
+  .dots-btn:hover{background:var(--hair-2);color:var(--ink)}
+  .row-menu-pop{position:fixed;min-width:140px;background:var(--surface);border:1px solid var(--hair);border-radius:8px;
+    box-shadow:0 8px 24px rgba(16,24,40,.16);z-index:200;padding:4px;display:none}
+  .row-menu-pop.show{display:block}
+  .row-menu-pop button{display:block;width:100%;text-align:left;border:none;background:none;padding:8px 10px;
+    font-family:var(--sans);font-size:13px;color:var(--ink-2);cursor:pointer;border-radius:5px}
+  .row-menu-pop button:hover{background:var(--hair-2)}
+  .row-menu-pop button.danger{color:var(--hot)}
   tbody tr:hover{background:var(--hair-2)}
   .linklike{color:var(--cold);cursor:pointer;text-decoration:none} .linklike:hover{text-decoration:underline}
   .bulkbar{display:none;align-items:center;gap:12px;background:var(--accent-bg);color:var(--accent-fg);border-radius:8px;padding:9px 14px;margin-bottom:12px;font-size:13px}
@@ -408,12 +427,10 @@
   <button data-tab="board">Opportunities</button>
   <button data-tab="contacts">Contacts</button>
   <button data-tab="companies">Companies</button>
-  <button data-tab="pipelines">Pipelines</button>
   <button data-tab="sequences">Sequences</button>
   <button data-tab="inbox">Inbox</button>
   <button data-tab="marketing">Marketing</button>
   <button data-tab="analytics">Analytics</button>
-  <button data-tab="templates">Templates</button>
   <button data-tab="settings">Settings</button>
 </div></div>
 
@@ -454,8 +471,14 @@
   </div>
   </div><!-- /view-dashboard -->
 
-  <!-- ── BOARD ──────────────────────────────────────────────────────────── -->
+  <!-- ── BOARD (+ Pipeline stages, folded in) ─────────────────────────────── -->
   <div id="view-board" style="display:none">
+  <div class="board-tabs" id="board-subtab" style="margin-bottom:14px">
+    <button data-sub="board" class="active">Board</button>
+    <button data-sub="pipelines">Pipeline stages</button>
+  </div>
+
+  <div id="board-sub-board">
   <div class="toolbar">
     <h2 class="h1" style="margin-right:12px">Opportunities</h2>
     <select id="deal-pipe-sel"></select>
@@ -464,18 +487,39 @@
     <button class="btn primary" id="new-deal">+ New opportunity</button>
   </div>
   <div class="board" id="board"></div>
+  </div><!-- /board-sub-board -->
+
+  <div id="board-sub-pipelines" style="display:none">
+    <div class="toolbar">
+      <h2 class="h1" style="margin-right:12px">Pipeline stages</h2>
+      <span class="spacer"></span>
+      <button class="btn primary" id="new-pipeline">+ New pipeline</button>
+    </div>
+    <p class="muted" style="font-size:12px;margin:-4px 0 16px">Editing the built-in <b>Sales</b>/<b>Marketing</b> pipelines changes the stage machine for your workspace (keep automation in sync). Custom pipelines apply to opportunities and move freely.</p>
+    <div class="pipe-layout">
+      <div class="pipe-list" id="pipe-list"></div>
+      <div class="pipe-editor" id="pipe-editor"><div class="muted">Select a pipeline to edit its stages.</div></div>
+    </div>
+  </div><!-- /board-sub-pipelines -->
   </div><!-- /view-board -->
 
   <!-- ── CONTACTS ───────────────────────────────────────────────────────── -->
   <div id="view-contacts" style="display:none">
     <div class="toolbar">
       <h2 class="h1" style="margin-right:12px">Contacts</h2>
+      <select id="smart-list-sel" title="Smart lists — your saved filter combinations"><option value="">All contacts</option></select>
+      <button class="btn sm" id="save-smart-list" title="Save the current search/filters as a smart list">☆ Save view</button>
+      <button class="btn sm" id="del-smart-list" title="Delete the selected smart list" style="display:none">Delete view</button>
+      <span class="spacer"></span>
+      <button class="btn" id="import-contacts">↑ Import CSV</button>
+      <button class="btn primary" id="new-contact">+ New contact</button>
+    </div>
+    <div class="toolbar" style="margin-top:-4px">
       <input class="search" id="contact-search" type="search" placeholder="Search name, email, company…">
       <select id="filter-score"><option value="">All scores</option><option>hot</option><option>warm</option><option>neutral</option><option>cold</option></select>
       <select id="filter-source"><option value="">All sources</option></select>
       <span class="spacer"></span>
-      <button class="btn" id="import-contacts">Import CSV</button>
-      <button class="btn primary" id="new-contact">+ New contact</button>
+      <span class="muted" style="font-size:11px">Select rows below for bulk actions (stage move, tag, export, delete) →</span>
     </div>
     <div class="bulkbar" id="contact-bulk">
       <span id="contact-selN">0 selected</span><span class="spacer"></span>
@@ -504,22 +548,14 @@
     <div id="companies-pager" class="pager"></div>
   </div><!-- /view-companies -->
 
-  <!-- ── PIPELINES ──────────────────────────────────────────────────────── -->
-  <div id="view-pipelines" style="display:none">
-    <div class="toolbar">
-      <h2 class="h1" style="margin-right:12px">Pipelines</h2>
-      <span class="spacer"></span>
-      <button class="btn primary" id="new-pipeline">+ New pipeline</button>
-    </div>
-    <p class="muted" style="font-size:12px;margin:-4px 0 16px">Editing the built-in <b>Sales</b>/<b>Marketing</b> pipelines changes the stage machine for your workspace (keep automation in sync). Custom pipelines apply to opportunities and move freely.</p>
-    <div class="pipe-layout">
-      <div class="pipe-list" id="pipe-list"></div>
-      <div class="pipe-editor" id="pipe-editor"><div class="muted">Select a pipeline to edit its stages.</div></div>
-    </div>
-  </div><!-- /view-pipelines -->
-
-  <!-- ── SEQUENCES ──────────────────────────────────────────────────────── -->
+  <!-- ── SEQUENCES (+ Templates, folded in) ───────────────────────────────── -->
   <div id="view-sequences" style="display:none">
+  <div class="board-tabs" id="seq-subtab" style="margin-bottom:14px">
+    <button data-sub="ladders" class="active">Ladders</button>
+    <button data-sub="templates">Templates</button>
+  </div>
+
+  <div id="seq-sub-ladders">
     <div class="toolbar">
       <h2 class="h1" style="margin-right:12px">Sequences</h2>
       <span class="spacer"></span>
@@ -530,6 +566,17 @@
       <div class="pipe-list" id="seq-list"></div>
       <div class="pipe-editor" id="seq-editor"><div class="muted">Select a sequence to view its steps.</div></div>
     </div>
+  </div><!-- /seq-sub-ladders -->
+
+  <div id="seq-sub-templates" style="display:none">
+    <div class="toolbar" style="margin-bottom:14px">
+      <h2 class="h1" style="margin-right:12px">Templates</h2>
+      <span class="muted" style="font-size:12px">WhatsApp templates — authored here, submitted to Meta via Twilio, status synced back. Required for business-initiated / out-of-window messages.</span>
+      <span class="spacer"></span>
+      <button class="btn primary" id="new-template">+ New template</button>
+    </div>
+    <div id="templates-list"><div class="muted">loading…</div></div>
+  </div><!-- /seq-sub-templates -->
   </div><!-- /view-sequences -->
 
   <!-- ── INBOX ──────────────────────────────────────────────────────────── -->
@@ -670,30 +717,20 @@
   <!-- ── SETTINGS · CHANNELS (CP-M2, ported from origin/aquila-working-branch) ── -->
   <div id="view-settings" style="display:none">
   <div class="sechead"><span class="eyebrow">Settings · Channels</span><span class="rule"></span></div>
-  <div class="a-section" style="max-width:760px">
+  <div class="settings-card">
     <h3>Twilio (WhatsApp &amp; SMS)</h3>
-    <p class="muted" style="font-size:12px;margin:2px 0 12px">This connects the compliance-gated Twilio path (consent, suppression, 24h window, DLT templates) used by inbox replies on WhatsApp/SMS threads. It is separate from the automated sequence dispatcher's own sender.</p>
-    <div id="twilio-conn" class="muted" style="margin:6px 0 14px">loading…</div>
+    <p class="muted" style="font-size:12px;margin:2px 0 16px;line-height:1.5">This connects the compliance-gated Twilio path (consent, suppression, 24h window, DLT templates) used by inbox replies on WhatsApp/SMS threads. It is separate from the automated sequence dispatcher's own sender.</p>
+    <div id="twilio-conn" class="muted" style="margin-bottom:14px">loading…</div>
     <div id="twilio-connect-form"></div>
   </div>
-  <div class="a-section" style="max-width:760px;margin-top:24px">
+  <div class="settings-card">
     <h3>Connected senders</h3>
-    <p class="muted" style="font-size:12px;margin:2px 0 12px">Numbers/accounts the inbox composer can send from. WhatsApp &amp; SMS require the sender to be registered/approved (A2P&nbsp;10DLC in the US, DLT in India) before real delivery.</p>
+    <p class="muted" style="font-size:12px;margin:2px 0 16px;line-height:1.5">Numbers/accounts the inbox composer can send from. WhatsApp &amp; SMS require the sender to be registered/approved (A2P&nbsp;10DLC in the US, DLT in India) before real delivery.</p>
     <div id="senders-list"><div class="muted">loading…</div></div>
-    <button class="btn sm" id="add-sender" style="margin-top:12px">+ Add sender</button>
+    <button class="btn sm" id="add-sender" style="margin-top:14px">+ Add sender</button>
   </div>
   </div><!-- /view-settings -->
 
-  <!-- ── TEMPLATES (CP-M2, ported from origin/aquila-working-branch) ─────────── -->
-  <div id="view-templates" style="display:none">
-  <div class="sechead"><span class="eyebrow">Message Templates</span><span class="rule"></span></div>
-  <div class="toolbar" style="margin-bottom:14px">
-    <span class="muted" style="font-size:12px">WhatsApp templates — authored here, submitted to Meta via Twilio, status synced back. Required for business-initiated / out-of-window messages.</span>
-    <span class="spacer" style="flex:1"></span>
-    <button class="btn primary" id="new-template">+ New template</button>
-  </div>
-  <div id="templates-list"><div class="muted">loading…</div></div>
-  </div><!-- /view-templates -->
 </main>
 
 <div class="modal-overlay" id="modal"><div class="modal">
@@ -703,6 +740,7 @@
 </div></div>
 
 <div class="toast" id="toast"></div>
+<div class="row-menu-pop" id="row-menu-pop"></div>
 
 <!-- ── CONTACT DETAIL MODAL ─────────────────────────────────────────────── -->
 <div class="modal-wrap" id="modal-wrap">
@@ -712,6 +750,9 @@
       <button class="mclose" id="m-close" title="Close" aria-label="Close">×</button>
     </div>
     <div class="fgrid" id="m-fields"></div>
+    <div class="sechead" style="margin:8px 0 10px"><span class="eyebrow">Custom fields</span><span class="rule"></span></div>
+    <div id="m-custom"></div>
+    <button class="btn sm" id="m-custom-add" style="margin:8px 0 18px">+ Add field</button>
     <div class="sechead" style="margin:8px 0 10px"><span class="eyebrow">Activity Feed</span><span class="rule"></span></div>
     <div class="feed" id="m-feed"><div class="fitem muted">loading…</div></div>
     <form class="notebar" id="m-noteform" autocomplete="off">
@@ -904,15 +945,56 @@ async function openContact(id){
         const cur=c[f]==null?"":String(c[f]);
         if(v!==cur)upd[f]=v;
       });
+      const newCustom=collectCustomFields();
+      const oldCustom=(c.metadata&&c.metadata.custom_fields)||{};
+      if(JSON.stringify(newCustom)!==JSON.stringify(oldCustom))upd.metadata={custom_fields:newCustom};
       if(!Object.keys(upd).length)return toast("No changes to save");
       try{await patch(`contacts/${id}`,upd);toast("Saved");openContact(id);loadContacts&&loadContacts();}
       catch(e){toast(e.message,true);}
     };
+    // Custom fields — arbitrary key/value pairs the operator defines per-contact,
+    // namespaced under metadata.custom_fields so they never collide with the
+    // other writers already sharing this contact's metadata bag (e.g. the
+    // nurturing engine's per-contact timezone). PATCH's shallow top-level merge
+    // means the whole custom_fields object must be sent together, never a
+    // single key — collectCustomFields() above does that.
+    renderCustomFields((c.metadata&&c.metadata.custom_fields)||{});
     feedItems=act.activity||[];feedTotal=act.total??feedItems.length;
     renderFeed(feedItems,true);
   }catch(e){$("#m-name").textContent="Error";$("#m-sub").textContent="";
     showRetry($("#m-feed"),e.message,()=>openContact(id),{cls:"fitem muted"});}
 }
+// ── Custom fields (contact drawer) ────────────────────────────────────────────
+function renderCustomFields(fields){
+  const entries=Object.entries(fields||{});
+  $("#m-custom").innerHTML=entries.length
+    ? entries.map(([k,v])=>`<div class="cvrow cf-row" style="margin-bottom:8px;align-items:flex-end">
+        <div class="cvf"><label>Field name</label><input class="cf-key" value="${esc(k)}" placeholder="e.g. birthday"></div>
+        <div class="cvf"><label>Value</label><input class="cf-val" value="${esc(v==null?"":v)}" placeholder="value"></div>
+        <button class="btn sm danger" data-cf-del style="flex:0 0 auto">Remove</button>
+      </div>`).join("")
+    : `<div class="muted" style="font-size:12px;margin-bottom:8px">No custom fields yet.</div>`;
+}
+function collectCustomFields(){
+  const out={};
+  $("#m-custom").querySelectorAll(".cf-row").forEach(row=>{
+    const k=row.querySelector(".cf-key").value.trim();
+    if(k)out[k]=row.querySelector(".cf-val").value.trim();
+  });
+  return out;
+}
+$("#m-custom").addEventListener("click",e=>{
+  if(e.target.closest("[data-cf-del]"))e.target.closest(".cf-row").remove();
+});
+$("#m-custom-add").addEventListener("click",()=>{
+  const row=document.createElement("div");
+  row.className="cvrow cf-row";row.style.cssText="margin-bottom:8px;align-items:flex-end";
+  row.innerHTML=`<div class="cvf"><label>Field name</label><input class="cf-key" placeholder="e.g. birthday"></div>
+    <div class="cvf"><label>Value</label><input class="cf-val" placeholder="value"></div>
+    <button class="btn sm danger" data-cf-del style="flex:0 0 auto">Remove</button>`;
+  $("#m-custom").appendChild(row);
+  row.querySelector(".cf-key").focus();
+});
 async function loadOlderActivity(){
   const id=$("#modal-wrap").dataset.contact;if(!id)return;
   const btn=$("#feed-more");if(btn){btn.disabled=true;btn.textContent="Loading…";}
@@ -1980,7 +2062,7 @@ async function templateVersions(t){
 // ── Tab switching ─────────────────────────────────────────────────────────────
 function setTab(tab){
   document.querySelectorAll(".tabbar button").forEach(b=>b.classList.toggle("active",b.dataset.tab===tab));
-  ["dashboard","board","contacts","companies","pipelines","sequences","inbox","marketing","analytics","templates","settings"].forEach(v=>{
+  ["dashboard","board","contacts","companies","sequences","inbox","marketing","analytics","settings"].forEach(v=>{
     const el=$(`#view-${v}`);if(el)el.style.display=v===tab?"":"none";
   });
   // Every tab refetches on entry so numbers are always live (get() is no-store).
@@ -1990,14 +2072,36 @@ function setTab(tab){
   if(tab==="analytics")loadAnalytics();
   if(tab==="contacts")loadContacts();
   if(tab==="companies")loadCompanies();
-  if(tab==="board")loadBoard();
-  if(tab==="pipelines")loadPipelinesTab();
-  if(tab==="sequences")loadSequencesTab();
+  if(tab==="board")setBoardSubtab(_boardSubtab);
+  if(tab==="sequences")setSeqSubtab(_seqSubtab);
   if(tab==="marketing")loadMarketingTab();
   if(tab==="settings")loadSettings();
-  if(tab==="templates")loadTemplates();
 }
 $(".tabbar").addEventListener("click",e=>{const b=e.target.closest("button[data-tab]");if(!b)return;setTab(b.dataset.tab);});
+
+// ── Opportunities ⇄ Pipeline stages sub-tabs (Pipelines folded into Opportunities) ──
+let _boardSubtab="board";
+function setBoardSubtab(sub){
+  _boardSubtab=sub;
+  $$("#board-subtab button").forEach(b=>b.classList.toggle("active",b.dataset.sub===sub));
+  $("#board-sub-board").style.display=sub==="board"?"":"none";
+  $("#board-sub-pipelines").style.display=sub==="pipelines"?"":"none";
+  if(sub==="board")loadBoard();
+  if(sub==="pipelines")loadPipelinesTab();
+}
+$("#board-subtab").addEventListener("click",e=>{const b=e.target.closest("button[data-sub]");if(b)setBoardSubtab(b.dataset.sub);});
+
+// ── Sequences ⇄ Templates sub-tabs (Templates folded into Sequences) ───────────
+let _seqSubtab="ladders";
+function setSeqSubtab(sub){
+  _seqSubtab=sub;
+  $$("#seq-subtab button").forEach(b=>b.classList.toggle("active",b.dataset.sub===sub));
+  $("#seq-sub-ladders").style.display=sub==="ladders"?"":"none";
+  $("#seq-sub-templates").style.display=sub==="templates"?"":"none";
+  if(sub==="ladders")loadSequencesTab();
+  if(sub==="templates")loadTemplates();
+}
+$("#seq-subtab").addEventListener("click",e=>{const b=e.target.closest("button[data-sub]");if(b)setSeqSubtab(b.dataset.sub);});
 
 // ── Boot ──────────────────────────────────────────────────────────────────────
 initBoardDnD();load();setInterval(load,30000);
@@ -2018,6 +2122,29 @@ const SCORES=["hot","warm","neutral","cold"];
 // modal
 function openModal(title,body,foot){$("#modal-title").textContent=title;$("#modal-body").innerHTML=body;$("#modal-foot").innerHTML=foot||"";$("#modal").classList.add("show");}
 function closeModal(){$("#modal").classList.remove("show");}
+
+// ── Row action menu (3-dot) — shared by Contacts/Companies rows ──────────────
+// One popover reused everywhere rather than one-per-row, so it never drifts out
+// of sync with a table re-render and never leaks a stale listener per row.
+function closeRowMenu(){$("#row-menu-pop").classList.remove("show");}
+function openRowMenu(anchorEl,items){
+  const pop=$("#row-menu-pop");
+  const r=anchorEl.getBoundingClientRect();
+  pop.innerHTML=items.map((it,i)=>`<button data-i="${i}"${it.danger?' class="danger"':""}>${esc(it.label)}</button>`).join("");
+  pop.classList.add("show");
+  // Measure after showing (display:none has no layout box), then flip above
+  // the button if it would otherwise run off the bottom of the viewport.
+  const h=pop.offsetHeight,w=pop.offsetWidth;
+  const top=(r.bottom+h>window.innerHeight)?Math.max(8,r.top-h-4):r.bottom+4;
+  const left=Math.min(r.right-w,window.innerWidth-w-8);
+  pop.style.top=`${top}px`;pop.style.left=`${Math.max(8,left)}px`;
+  pop.onclick=e=>{const b=e.target.closest("button[data-i]");if(!b)return;closeRowMenu();items[+b.dataset.i].onClick();};
+}
+document.addEventListener("click",e=>{
+  if(e.target.closest(".dots-btn")||e.target.closest("#row-menu-pop"))return;
+  closeRowMenu();
+});
+document.addEventListener("keydown",e=>{if(e.key==="Escape")closeRowMenu();});
 $("#modal-x").onclick=closeModal;
 $("#modal").addEventListener("click",e=>{if(e.target.id==="modal")closeModal();});
 function field(label,name,opts={}){
@@ -2038,10 +2165,13 @@ function confirmDelete(msg,fn){openModal("Confirm",`<p style="margin:4px 0 0">${
 let cList=[],cSel=new Set(),_srcFilled=false;
 const CONTACT_PAGE_SIZE=50;
 let cOffset=0,cTotal=0;
+let cSort="updated_at",cDir="desc";
+const CONTACT_COLUMNS=[["name","Name"],["company_name","Company"],["email","Email"],["marketing_stage","Stage"],["lead_score_numeric","Score"],["source","Source"],["created_at","Created"]];
 function contactQuery(){const p=new URLSearchParams();
   const s=$("#contact-search").value.trim();if(s)p.set("search",s);
   const sc=$("#filter-score").value;if(sc)p.set("score",sc);
   const so=$("#filter-source").value;if(so)p.set("source",so);
+  p.set("sort",cSort);p.set("dir",cDir);
   p.set("limit",CONTACT_PAGE_SIZE);p.set("offset",cOffset);
   return p.toString();}
 async function loadContacts(resetPage){
@@ -2072,9 +2202,11 @@ function renderContactList(){
     <td style="text-transform:capitalize">${esc(nice(c.marketing_stage||c.deal_stage||""))}</td>
     <td><span class="score ${esc(c.lead_score||"neutral")}">${esc(c.lead_score||"—")}</span></td>
     <td><span class="src">${esc(c.source||"")}</span></td><td class="muted">${fmtDate(c.created_at)}</td>
-    <td><div class="rowact"><button class="btn sm" data-edit="${esc(c.id)}">Edit</button><button class="btn sm danger" data-del="${esc(c.id)}">Del</button></div></td></tr>`).join("");
+    <td class="checkcell"><button class="dots-btn" data-menu="${esc(c.id)}" aria-label="Row actions">⋮</button></td></tr>`).join("");
+  const arrow=col=>col!==cSort?"":(cDir==="asc"?" ▲":" ▼");
+  const heads=CONTACT_COLUMNS.map(([col,label])=>`<th class="sortable" data-sort="${col}">${esc(label)}${arrow(col)}</th>`).join("");
   $("#contacts-list").innerHTML=`<table><thead><tr><th class="checkcell"><input type="checkbox" id="csel-all"></th>
-    <th>Name</th><th>Company</th><th>Email</th><th>Stage</th><th>Score</th><th>Source</th><th>Created</th><th></th></tr></thead><tbody>${rows}</tbody></table>`;
+    ${heads}<th></th></tr></thead><tbody>${rows}</tbody></table>`;
   updateContactBulk();
 }
 function updateContactBulk(){$("#contact-bulk").classList.toggle("show",cSel.size>0);$("#contact-selN").textContent=`${cSel.size} selected`;}
@@ -2083,14 +2215,63 @@ $("#contacts-list").addEventListener("change",e=>{
   else if(e.target.classList.contains("csel")){e.target.checked?cSel.add(e.target.dataset.id):cSel.delete(e.target.dataset.id);updateContactBulk();}
 });
 $("#contacts-list").addEventListener("click",e=>{
-  const ed=e.target.closest("[data-edit]"),dl=e.target.closest("[data-del]");
-  if(ed)return contactModal(cList.find(x=>x.id===ed.dataset.edit));
-  if(dl){const c=cList.find(x=>x.id===dl.dataset.del);return confirmDelete(`Delete contact "${c?.name||c?.email||""}"?`,async()=>{await del(`contacts/${dl.dataset.del}`);toast("Deleted");loadContacts();});}
-  if(e.target.closest(".checkcell"))return; // checkbox toggles selection, not open
+  const th=e.target.closest("th[data-sort]");
+  if(th){cDir=(cSort===th.dataset.sort&&cDir==="asc")?"desc":"asc";cSort=th.dataset.sort;loadContacts(true);return;}
+  const dots=e.target.closest(".dots-btn");
+  if(dots){
+    e.stopPropagation();
+    const c=cList.find(x=>x.id===dots.dataset.menu);
+    return openRowMenu(dots,[
+      {label:"Edit",onClick:()=>contactModal(c)},
+      {label:"Delete",danger:true,onClick:()=>confirmDelete(`Delete contact "${c?.name||c?.email||""}"?`,async()=>{await del(`contacts/${c.id}`);toast("Deleted");loadContacts();})},
+    ]);
+  }
+  if(e.target.closest(".checkcell"))return; // checkbox / dots toggle, not open
   const tr=e.target.closest("tr[data-contact]");if(tr)openContact(tr.dataset.contact);
 });
-["#contact-search","#filter-score","#filter-source"].forEach(s=>$(s).addEventListener(s==="#contact-search"?"input":"change",debounce(()=>loadContacts(true),250)));
+["#contact-search","#filter-score","#filter-source"].forEach(s=>$(s).addEventListener(s==="#contact-search"?"input":"change",debounce(()=>{$("#smart-list-sel").value="";loadContacts(true);},250)));
 $("#new-contact").onclick=()=>contactModal();
+
+// ── Smart lists — saved (search, score, source, sort, dir) combos, per browser.
+// localStorage rather than a new backend table: this is a personal "how I like
+// to slice contacts" shortcut, not shared team state, and shipping it this way
+// needs no migration/API surface to get real value out the door today.
+const SMART_LISTS_KEY="denchclaw_smart_lists";
+function getSmartLists(){try{return JSON.parse(localStorage.getItem(SMART_LISTS_KEY)||"[]");}catch{return[];}}
+function setSmartLists(v){localStorage.setItem(SMART_LISTS_KEY,JSON.stringify(v));}
+function renderSmartListOptions(){
+  const sel=$("#smart-list-sel"),cur=sel.value;
+  sel.innerHTML=`<option value="">All contacts</option>`+
+    getSmartLists().map(v=>`<option value="${esc(v.name)}">${esc(v.name)}</option>`).join("");
+  sel.value=cur;
+}
+renderSmartListOptions();
+$("#smart-list-sel").addEventListener("change",()=>{
+  const name=$("#smart-list-sel").value;
+  $("#del-smart-list").style.display=name?"":"none";
+  const v=getSmartLists().find(x=>x.name===name);
+  if(!v)return loadContacts(true);
+  $("#contact-search").value=v.search||"";$("#filter-score").value=v.score||"";$("#filter-source").value=v.source||"";
+  cSort=v.sort||"updated_at";cDir=v.dir||"desc";
+  loadContacts(true);
+});
+$("#del-smart-list").onclick=()=>{
+  const name=$("#smart-list-sel").value;if(!name)return;
+  setSmartLists(getSmartLists().filter(x=>x.name!==name));
+  renderSmartListOptions();$("#del-smart-list").style.display="none";
+  toast("Smart list deleted");
+};
+$("#save-smart-list").onclick=()=>{
+  openModal("Save smart list",field("Name","name",{placeholder:"e.g. Hot leads this week"}),
+    `<button class="btn" onclick="closeModal()">Cancel</button><button class="btn primary" id="save-sl-go">Save</button>`);
+  $("#save-sl-go").onclick=()=>{
+    const v=formValues();if(!v.name)return toast("Name required",true);
+    const lists=getSmartLists().filter(x=>x.name!==v.name);
+    lists.push({name:v.name,search:$("#contact-search").value.trim(),score:$("#filter-score").value,source:$("#filter-source").value,sort:cSort,dir:cDir});
+    setSmartLists(lists);renderSmartListOptions();$("#smart-list-sel").value=v.name;
+    closeModal();toast("Smart list saved");
+  };
+};
 
 // ── GHL-style CSV bulk import ─────────────────────────────────────────────────
 const IMP_FIELDS=[["email","Email"],["first_name","First name"],["last_name","Last name"],["name","Full name"],["phone","Phone"],["company","Company"],["title","Title"],["linkedin_url","LinkedIn URL"],["tags","Tags"]];
@@ -2269,7 +2450,7 @@ function renderCompanyList(){
     <td><b><a class="linklike" data-view="${esc(c.id)}">${esc(c.name)}</a></b></td><td>${esc(c.industry||"")}</td><td>${c.contact_count||0}</td><td>${money(c.pipeline_value)}</td>
     <td>${c.deal_count||0}${c.deal_value?` · ${money(c.deal_value)}`:""}</td>
     <td>${c.website?`<a class="linklike" href="${esc(/^https?:/.test(c.website)?c.website:"https://"+c.website)}" target="_blank" rel="noopener">${esc(c.website)}</a>`:""}</td>
-    <td><div class="rowact"><button class="btn sm" data-edit="${esc(c.id)}">Edit</button><button class="btn sm danger" data-del="${esc(c.id)}">Del</button></div></td></tr>`).join("");
+    <td class="checkcell"><button class="dots-btn" data-menu="${esc(c.id)}" aria-label="Row actions">⋮</button></td></tr>`).join("");
   $("#companies-list").innerHTML=`<table><thead><tr><th class="checkcell"><input type="checkbox" id="cosel-all"></th>
     <th>Company</th><th>Industry</th><th>Contacts</th><th>Pipeline</th><th>Opportunities</th><th>Website</th><th></th></tr></thead><tbody>${rows}</tbody></table>`;
   updateCompanyBulk();
@@ -2280,10 +2461,17 @@ $("#companies-list").addEventListener("change",e=>{
   else if(e.target.classList.contains("cosel")){e.target.checked?coSel.add(e.target.dataset.id):coSel.delete(e.target.dataset.id);updateCompanyBulk();}
 });
 $("#companies-list").addEventListener("click",e=>{
-  const vw=e.target.closest("[data-view]"),ed=e.target.closest("[data-edit]"),dl=e.target.closest("[data-del]");
+  const vw=e.target.closest("[data-view]");
   if(vw){e.preventDefault();openCompanyDetail(vw.dataset.view);return;}
-  if(ed)companyModal(coList.find(x=>x.id===ed.dataset.edit));
-  if(dl){const c=coList.find(x=>x.id===dl.dataset.del);confirmDelete(`Delete company "${c?.name}"?`,async()=>{await del(`companies/${dl.dataset.del}`);toast("Deleted");loadCompanies();});}
+  const dots=e.target.closest(".dots-btn");
+  if(dots){
+    e.stopPropagation();
+    const c=coList.find(x=>x.id===dots.dataset.menu);
+    return openRowMenu(dots,[
+      {label:"Edit",onClick:()=>companyModal(c)},
+      {label:"Delete",danger:true,onClick:()=>confirmDelete(`Delete company "${c?.name}"?`,async()=>{await del(`companies/${c.id}`);toast("Deleted");loadCompanies();})},
+    ]);
+  }
 });
 // Account detail drawer: profile + linked contacts + deal pipeline.
 async function openCompanyDetail(id){

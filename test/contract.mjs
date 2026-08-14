@@ -263,6 +263,26 @@ async function main() {
       !ids2.some(id => ids1.includes(id)), JSON.stringify({ ids1, ids2 }));
   }
 
+  // 12bb — contacts list sort (whitelisted columns, SQL-injection-safe fallback)
+  {
+    const a = await req('POST', '/api/crm/contacts', { company: CO_A, body: { name: 'Zeta Sort', email: email('sortz'), source: 'manual' } });
+    const b = await req('POST', '/api/crm/contacts', { company: CO_A, body: { name: 'Alpha Sort', email: email('sorta'), source: 'manual' } });
+    const asc = await req('GET', '/api/crm/contacts?sort=name&dir=asc&limit=200', { company: CO_A });
+    const names = (asc.json?.contacts || []).map(c => c.name);
+    const ia = names.indexOf('Alpha Sort'), iz = names.indexOf('Zeta Sort');
+    check('sort=name&dir=asc orders alphabetically', '—', ia !== -1 && iz !== -1 && ia < iz, `ia=${ia} iz=${iz}`);
+    const desc = await req('GET', '/api/crm/contacts?sort=name&dir=desc&limit=200', { company: CO_A });
+    const namesDesc = (desc.json?.contacts || []).map(c => c.name);
+    const ia2 = namesDesc.indexOf('Alpha Sort'), iz2 = namesDesc.indexOf('Zeta Sort');
+    check('sort=name&dir=desc reverses it', '—', iz2 < ia2, `ia2=${ia2} iz2=${iz2}`);
+    // An unrecognised/hostile `sort` value must never reach raw SQL — the
+    // column is resolved through a fixed whitelist, so this can only ever
+    // fall back to the default order, never error or inject.
+    const hostile = await req('GET', "/api/crm/contacts?sort=" + encodeURIComponent("name; DROP TABLE contacts;--") + "&limit=5", { company: CO_A });
+    check('a non-whitelisted sort value is refused SQL injection (200, falls back to default order)', '—',
+      hostile.status === 200, `status=${hostile.status} body=${JSON.stringify(hostile.json)}`);
+  }
+
   // 12c — analytics timeseries: day-bucketed totals for the trend chart
   {
     const r = await req('GET', '/api/crm/analytics/timeseries?days=7', { company: CO_A });
