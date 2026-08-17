@@ -491,4 +491,133 @@ router.post('/capture/:tool', async (req, res) => {
   res.status(200).json({ ok: true, captured: true });
 });
 
+// ─── Tantra outbound webhook receiver (POST /webhooks/tantra/:token) ─────────
+// Per-company token in the URL is the whole auth story (migration 036's
+// header explains why: Tantra's webhook carries no signature/API key of its
+// own). Real, documented payload shape and event list — from
+// usetantra.com/help/api-and-mcp/{outbound-webhooks,webhook-event-triggers} —
+// NOT a guess. Every delivery is captured raw first (tool 'tantra', same
+// table the other connectors use) regardless of what happens after, so a
+// wrong field-name guess below is diagnosable from Settings → Integrations
+// instead of silently mis-filing a lead.
+const tantraWebhooksDb = require('../db/models/tantra-webhooks');
+
+// Tantra's envelope nests the recipient inside campaign.events[].attendees[]
+// for webinar-style events; the docs separately say every event "includes
+// the recipient email address... where applicable" without naming the field
+// for the plain email.* events, so the top-level candidates below are a
+// best-effort guess pending a real captured payload to confirm against.
+function extractTantraEmails(body) {
+  const out = new Set();
+  const top = pick(body || {}, 'recipient_email', 'recipient', 'email', 'contact_email', 'to');
+  if (top) out.add(top.toLowerCase());
+  const events = body && body.campaign && body.campaign.events;
+  if (Array.isArray(events)) {
+    for (const ev of events) {
+      const attendees = Array.isArray(ev && ev.attendees) ? ev.attendees : [];
+      for (const a of attendees) {
+        if (a && a.email) out.add(String(a.email).trim().toLowerCase());
+      }
+    }
+  }
+  return [...out];
+}
+
+router.post('/tantra/:token', async (req, res) => {
+  try {
+    const hook = await tantraWebhooksDb.getByToken(req.params.token);
+    if (!hook) return res.status(404).json({ error: 'unknown webhook' });
+
+    // Capture first, unconditionally — this is the "prove what actually
+    // arrived" record, independent of whether enabled/parsing succeeds below.
+    try {
+      await webhookCaptures.record('tantra', { method: req.method, headers: req.headers, body: req.body });
+    } catch (err) {
+      console.error('[Webhooks] tantra capture record failed:', err.message);
+    }
+
+    if (!hook.enabled) return res.status(403).json({ error: 'this webhook is disabled' });
+    await tantraWebhooksDb.touch(hook.id);
+
+    const companyId = hook.company_id;
+    const eventType = req.get('x-tantra-event') || (req.body && req.body.event) || null;
+    if (!eventType) return res.status(200).json({ ok: true, note: 'no X-Tantra-Event header — captured only' });
+
+    const body = req.body || {};
+    const campaignName = body.campaign && body.campaign.name;
+    const emails = extractTantraEmails(body);
+    if (!emails.length) {
+      return res.status(200).json({ ok: true, note: 'no recipient email found in payload — captured only, no contact matched' });
+    }
+
+    for (const email of emails) {
+      let contact, created;
+      try {
+        const r = await crmRouter.findOrCreateContact(email, { company_id: companyId, source: 'tantra' });
+        contact = r.contact; created = r.created;
+      } catch (err) {
+        console.error('[Webhooks] tantra findOrCreateContact failed:', email, err.message);
+        continue;
+      }
+      if (!contact) continue;
+
+      if (eventType === 'email.replied') {
+        // Same self-call shape /email/inbound uses — reuses the conversations
+        // route's own engaged→responded advance and trigger-stage enrollment
+        // rather than duplicating that logic here.
+        const conv = await api('POST', '/api/crm/conversations', { contact_id: contact.id, channel: 'email' }, companyId);
+        if (conv.json && conv.json.id) {
+          await api('POST', `/api/crm/conversations/${conv.json.id}/messages`, {
+            direction: 'inbound', channel: 'email',
+            body: body.text || body.body || `(Tantra reply${campaignName ? ' on "' + campaignName + '"' : ''} — no body in payload)`,
+            metadata: { source: 'tantra', event: eventType, campaign: campaignName || null },
+          }, companyId);
+        }
+        continue;
+      }
+
+      if (eventType === 'email.unsubscribed') {
+        try {
+          await suppression.add(companyId, 'email', email, { reason: 'tantra_unsubscribe', contactId: contact.id, metadata: { campaign: campaignName || null } });
+        } catch (err) {
+          console.error('[Webhooks] tantra suppression add failed:', email, err.message);
+        }
+        await crmRouter.addContactActivity(contact.id, companyId, { type: 'unsubscribed', message: `Tantra: unsubscribed${campaignName ? ' from "' + campaignName + '"' : ''}` });
+        continue;
+      }
+
+      if (eventType === 'lead.stage.changed') {
+        // Tantra's own stage name is not a fixed, documented vocabulary — only
+        // apply it if the operator has mapped it (Settings → Integrations →
+        // Tantra), otherwise log the raw value so it's visible but nothing
+        // moves on a guess.
+        const rawStage = pick(body, 'stage', 'new_stage', 'to_stage', 'lead_stage', 'status');
+        const mapped = rawStage && hook.stage_map && hook.stage_map[rawStage];
+        if (mapped) {
+          const adv = await api('POST', `/api/crm/contacts/${contact.id}/advance`,
+            { pipeline_key: 'marketing', stage: mapped, automated: true, reason: `Tantra lead.stage.changed (${rawStage})` }, companyId);
+          if (adv.status >= 400) {
+            await crmRouter.addContactActivity(contact.id, companyId, { type: 'tantra_event', message: `Tantra: stage → "${rawStage}" mapped to "${mapped}" but the advance was refused (${adv.json && adv.json.error || adv.status})` });
+          }
+        } else {
+          await crmRouter.addContactActivity(contact.id, companyId, { type: 'tantra_event', message: `Tantra: lead stage changed to "${rawStage || '(unknown field)'}" — no mapping configured, stage not changed here` });
+        }
+        continue;
+      }
+
+      // email.sent / email.clicked / email.bounced / email.intent.classified /
+      // email.sequence.completed, and anything undocumented — logged, not acted on.
+      await crmRouter.addContactActivity(contact.id, companyId, {
+        type: 'tantra_event',
+        message: `Tantra: ${eventType}${campaignName ? ' — "' + campaignName + '"' : ''}`,
+      });
+    }
+
+    res.status(200).json({ ok: true, event: eventType, contacts_matched: emails.length });
+  } catch (err) {
+    console.error('[Webhooks] tantra/:token error:', err.message);
+    res.status(500).json({ error: 'failed to process Tantra event' });
+  }
+});
+
 module.exports = router;

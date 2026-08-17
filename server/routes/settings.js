@@ -190,6 +190,43 @@ router.delete('/lead-webhooks/:id', async (req, res) => {
   }
 });
 
+// ── Tantra outbound webhook (migration 036) ─────────────────────────────────
+const tantraWebhooksDb = require('../db/models/tantra-webhooks');
+
+router.get('/tantra-webhook', async (req, res) => {
+  try {
+    const companyId = getUserCompanyId(req);
+    res.json({ webhook: await tantraWebhooksDb.getOrCreate(companyId) });
+  } catch (e) {
+    console.error('[Settings] GET tantra-webhook', e.message);
+    res.status(500).json({ error: 'failed to load Tantra webhook' });
+  }
+});
+
+router.patch('/tantra-webhook', async (req, res) => {
+  try {
+    const companyId = getUserCompanyId(req);
+    await tantraWebhooksDb.getOrCreate(companyId); // ensure a row exists to update
+    const { enabled, stage_map } = req.body || {};
+    const webhook = await tantraWebhooksDb.update(companyId, { enabled, stageMap: stage_map });
+    res.json({ webhook });
+  } catch (e) {
+    console.error('[Settings] PATCH tantra-webhook', e.message);
+    res.status(500).json({ error: 'failed to update Tantra webhook' });
+  }
+});
+
+router.post('/tantra-webhook/regenerate', async (req, res) => {
+  try {
+    const companyId = getUserCompanyId(req);
+    await tantraWebhooksDb.getOrCreate(companyId);
+    res.json({ webhook: await tantraWebhooksDb.regenerateToken(companyId) });
+  } catch (e) {
+    console.error('[Settings] POST tantra-webhook/regenerate', e.message);
+    res.status(500).json({ error: 'failed to rotate token' });
+  }
+});
+
 // GET /api/crm/settings/webhook-captures — what's actually arrived at
 // POST /webhooks/capture/:tool, for building a real connector from real
 // payloads instead of guessed-at documentation. Not company-scoped (see

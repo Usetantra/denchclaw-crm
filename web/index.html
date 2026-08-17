@@ -873,6 +873,11 @@
       <div id="int-tools-list"></div>
     </div>
     <div class="settings-card">
+      <h3>📡 Tantra</h3>
+      <p class="muted" style="font-size:12px;margin:2px 0 16px;line-height:1.5">Real connection, built from Tantra's own docs (<code>usetantra.com/help/api-and-mcp/outbound-webhooks</code>) — not the generic capture harness below. Paste the URL into Tantra's Webhooks page. <code>email.replied</code> advances the contact's stage, <code>email.unsubscribed</code> suppresses them, everything else (sent/clicked/bounced/intent/sequence-completed) is logged to their activity feed. <code>lead.stage.changed</code> only moves the contact here if you map Tantra's stage name below — an unmapped one is logged, not applied.</p>
+      <div id="int-tantra"><div class="muted">loading…</div></div>
+    </div>
+    <div class="settings-card">
       <h3>🧪 Connector test capture</h3>
       <p class="muted" style="font-size:12px;margin:2px 0 16px;line-height:1.5">For a tool without a confirmed payload shape yet: paste its capture URL into that tool's webhook/test-event setting and fire one real event. It's logged here so the exact field mapping can be built from what actually arrives, not guessed-at docs. Not a permanent log — only the last 20 events per tool are kept, and each event may contain a real prospect's data.</p>
       <div id="int-captures-list"></div>
@@ -3117,7 +3122,7 @@ async function loadTagsSettings(){
 // one" without opening each one to read its label, and so a tool that hasn't
 // been wired up yet still shows as a visible next step, not a silent gap.
 const INT_TOOL_HINTS=[
-  {key:"tantra",name:"Tantra",match:/tantra/i,icon:"📡",note:"Omnichannel outreach — connects once its webhook payload shape is confirmed."},
+  {key:"tantra",name:"Tantra",match:/tantra/i,icon:"📡",note:"Omnichannel outreach — has its own real webhook receiver below, not just a lead webhook."},
   {key:"webinargeek",name:"WebinarGeek",match:/webinargeek/i,icon:"🎥",note:"Point its registration webhook at a lead webhook below with a tag like webinar_lead."},
   {key:"zoom",name:"Zoom Webinars",match:/zoom/i,icon:"🎦",note:"Point its Zoom Webinars registrant webhook at a lead webhook below."},
   {key:"instantly",name:"Instantly",match:/instantly/i,icon:"📧",note:"Point its reply/interested webhook at a lead webhook below."},
@@ -3127,17 +3132,32 @@ async function loadLeadWebhooks(){
   try{hooks=(await get("settings/lead-webhooks")).webhooks||[];}catch(e){}
   let byTool={};
   try{(await get("settings/webhook-captures")).tools.forEach(t=>byTool[t.tool]=t);}catch(e){}
+  let tantraHook=null;
+  try{tantraHook=(await get("settings/tantra-webhook")).webhook;}catch(e){}
   // Three states, not two: a tool can have a real test payload captured
   // (proves it can reach us, but there's no field mapping wired to turn
   // that payload into a contact yet) well before it's actually "connected"
   // (a matching lead webhook exists for it to be pointed at in production).
+  // Tantra is a special case — it has its OWN dedicated webhook row (below),
+  // auto-provisioned the moment this page loads, so "a row exists" can't be
+  // the connected signal (it always exists). "It has actually received a
+  // real event" is.
   const matched=INT_TOOL_HINTS.map(t=>({...t,hook:hooks.find(h=>t.match.test(h.label||"")),cap:byTool[t.key]}));
   $("#int-tools-list").innerHTML=`<div style="display:flex;flex-direction:column;gap:8px">${matched.map(t=>{
-    const pill=t.hook
-      ?`<span class="status-pill" style="background:var(--live-bg);color:var(--live)">connected</span>`
-      :t.cap
-      ?`<span class="status-pill" style="background:var(--warm-bg);color:var(--warm)">payload captured — needs mapping</span>`
-      :`<span class="status-pill" style="background:var(--neutral-bg);color:var(--neutral)">not set up</span>`;
+    let pill;
+    if(t.key==="tantra"){
+      pill=!tantraHook||!tantraHook.enabled
+        ?`<span class="status-pill" style="background:var(--neutral-bg);color:var(--neutral)">disabled</span>`
+        :tantraHook.request_count>0
+        ?`<span class="status-pill" style="background:var(--live-bg);color:var(--live)">connected</span>`
+        :`<span class="status-pill" style="background:var(--neutral-bg);color:var(--neutral)">not set up</span>`;
+    }else{
+      pill=t.hook
+        ?`<span class="status-pill" style="background:var(--live-bg);color:var(--live)">connected</span>`
+        :t.cap
+        ?`<span class="status-pill" style="background:var(--warm-bg);color:var(--warm)">payload captured — needs mapping</span>`
+        :`<span class="status-pill" style="background:var(--neutral-bg);color:var(--neutral)">not set up</span>`;
+    }
     return `<div style="display:flex;align-items:center;gap:10px;padding:10px 12px;border:1px solid var(--hair);border-radius:8px">
       <span style="font-size:18px">${t.icon}</span>
       <div style="flex:1">
@@ -3150,6 +3170,7 @@ async function loadLeadWebhooks(){
     <div class="muted" style="font-size:11px;margin-top:2px">Any other tool that can send a webhook (or email) works the same way — it doesn't need to be on this list.</div>
   </div>`;
 
+  renderTantraCard(tantraHook);
   await renderCaptureTools(byTool);
 
   try{
@@ -3162,6 +3183,73 @@ async function loadLeadWebhooks(){
   }catch(e){$("#int-email-status").innerHTML=`<div class="empty">${esc(e.message)}</div>`;}
 
   await renderLeadWebhooksList(hooks);
+}
+function renderTantraCard(hook){
+  if(!hook){$("#int-tantra").innerHTML=`<div class="empty">Could not load the Tantra webhook.</div>`;return;}
+  const url=`${location.origin}/webhooks/tantra/${hook.token}`;
+  const stageMap=hook.stage_map||{};
+  const rows=Object.keys(stageMap);
+  $("#int-tantra").innerHTML=`
+    <div style="display:flex;align-items:center;gap:10px;margin-bottom:10px">
+      <span class="status-pill" style="background:${hook.enabled?"var(--live-bg)":"var(--neutral-bg)"};color:${hook.enabled?"var(--live)":"var(--neutral)"}">${hook.enabled?"enabled":"disabled"}</span>
+      <span class="muted" style="font-size:11px">${hook.request_count} event${hook.request_count===1?"":"s"} received${hook.last_used_at?" · last "+fmtDate(hook.last_used_at):""}</span>
+      <span class="spacer" style="flex:1"></span>
+      <button class="btn sm" id="tantra-toggle">${hook.enabled?"Disable":"Enable"}</button>
+      <button class="btn sm" id="tantra-regen">Rotate token</button>
+    </div>
+    <div class="cvf" style="margin-bottom:14px">
+      <label>Webhook URL — paste into Tantra's Webhooks page</label>
+      <div class="field"><input readonly value="${esc(url)}" onclick="this.select()"></div>
+    </div>
+    <div class="cvf">
+      <label>Stage mapping for <code>lead.stage.changed</code></label>
+      <div class="muted" style="font-size:11px;margin-bottom:8px">Tantra's stage name on the left → the marketing stage it should set here. Anything not listed is logged only, never applied.</div>
+      <div id="tantra-stage-rows" style="display:flex;flex-direction:column;gap:6px;margin-bottom:8px">
+        ${rows.length?rows.map(k=>`
+          <div style="display:flex;align-items:center;gap:8px" data-tantra-row="${esc(k)}">
+            <input readonly value="${esc(k)}" style="flex:1">
+            <span class="muted">→</span>
+            <select style="flex:1" data-tantra-target>${MARKETING_STAGES.map(s=>`<option value="${s}" ${s===stageMap[k]?"selected":""}>${s}</option>`).join("")}</select>
+            <button class="btn sm" data-tantra-rm="${esc(k)}">Remove</button>
+          </div>`).join(""):`<div class="muted" style="font-size:12px">No mappings yet — every stage change is logged only.</div>`}
+      </div>
+      <div style="display:flex;align-items:center;gap:8px">
+        <input id="tantra-new-stage-name" placeholder="Tantra stage name (exact)" style="flex:1">
+        <span class="muted">→</span>
+        <select id="tantra-new-stage-target" style="flex:1">${MARKETING_STAGES.map(s=>`<option value="${s}">${s}</option>`).join("")}</select>
+        <button class="btn sm primary" id="tantra-add-mapping">+ Add</button>
+      </div>
+    </div>`;
+
+  $("#tantra-toggle").onclick=async()=>{
+    const updated=(await patch("settings/tantra-webhook",{enabled:!hook.enabled})).webhook;
+    renderTantraCard(updated);
+    loadLeadWebhooks();
+  };
+  $("#tantra-regen").onclick=async()=>{
+    if(!confirm("Rotate the Tantra webhook token? The old URL will stop working immediately — update it in Tantra's Webhooks page too."))return;
+    const updated=(await post("settings/tantra-webhook/regenerate",{})).webhook;
+    renderTantraCard(updated);
+  };
+  $$("[data-tantra-rm]").forEach(b=>b.onclick=async()=>{
+    const next={...stageMap}; delete next[b.dataset.tantraRm];
+    const updated=(await patch("settings/tantra-webhook",{stage_map:next})).webhook;
+    renderTantraCard(updated);
+  });
+  $$("[data-tantra-row]").forEach(row=>{
+    row.querySelector("[data-tantra-target]").onchange=async(e)=>{
+      const k=row.dataset.tantraRow;
+      const updated=(await patch("settings/tantra-webhook",{stage_map:{...stageMap,[k]:e.target.value}})).webhook;
+      renderTantraCard(updated);
+    };
+  });
+  $("#tantra-add-mapping").onclick=async()=>{
+    const name=$("#tantra-new-stage-name").value.trim();
+    if(!name)return;
+    const target=$("#tantra-new-stage-target").value;
+    const updated=(await patch("settings/tantra-webhook",{stage_map:{...stageMap,[name]:target}})).webhook;
+    renderTantraCard(updated);
+  };
 }
 async function renderCaptureTools(byTool){
   if(!byTool){
