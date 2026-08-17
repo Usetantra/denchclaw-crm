@@ -3125,21 +3125,32 @@ const INT_TOOL_HINTS=[
 async function loadLeadWebhooks(){
   let hooks=[];
   try{hooks=(await get("settings/lead-webhooks")).webhooks||[];}catch(e){}
-  const matched=INT_TOOL_HINTS.map(t=>({...t,hook:hooks.find(h=>t.match.test(h.label||""))}));
-  $("#int-tools-list").innerHTML=`<div style="display:flex;flex-direction:column;gap:8px">${matched.map(t=>`
-    <div style="display:flex;align-items:center;gap:10px;padding:10px 12px;border:1px solid var(--hair);border-radius:8px">
+  let byTool={};
+  try{(await get("settings/webhook-captures")).tools.forEach(t=>byTool[t.tool]=t);}catch(e){}
+  // Three states, not two: a tool can have a real test payload captured
+  // (proves it can reach us, but there's no field mapping wired to turn
+  // that payload into a contact yet) well before it's actually "connected"
+  // (a matching lead webhook exists for it to be pointed at in production).
+  const matched=INT_TOOL_HINTS.map(t=>({...t,hook:hooks.find(h=>t.match.test(h.label||"")),cap:byTool[t.key]}));
+  $("#int-tools-list").innerHTML=`<div style="display:flex;flex-direction:column;gap:8px">${matched.map(t=>{
+    const pill=t.hook
+      ?`<span class="status-pill" style="background:var(--live-bg);color:var(--live)">connected</span>`
+      :t.cap
+      ?`<span class="status-pill" style="background:var(--warm-bg);color:var(--warm)">payload captured — needs mapping</span>`
+      :`<span class="status-pill" style="background:var(--neutral-bg);color:var(--neutral)">not set up</span>`;
+    return `<div style="display:flex;align-items:center;gap:10px;padding:10px 12px;border:1px solid var(--hair);border-radius:8px">
       <span style="font-size:18px">${t.icon}</span>
       <div style="flex:1">
         <div style="font-size:13px;font-weight:600">${esc(t.name)}</div>
         <div class="muted" style="font-size:11px">${esc(t.note)}</div>
       </div>
-      ${t.hook?`<span class="status-pill" style="background:var(--live-bg);color:var(--live)">connected</span>`
-        :`<span class="status-pill" style="background:var(--neutral-bg);color:var(--neutral)">not set up</span>`}
-    </div>`).join("")}
+      ${pill}
+    </div>`;
+  }).join("")}
     <div class="muted" style="font-size:11px;margin-top:2px">Any other tool that can send a webhook (or email) works the same way — it doesn't need to be on this list.</div>
   </div>`;
 
-  await renderCaptureTools();
+  await renderCaptureTools(byTool);
 
   try{
     const st=await get("settings/inbound-email-status");
@@ -3152,9 +3163,11 @@ async function loadLeadWebhooks(){
 
   await renderLeadWebhooksList(hooks);
 }
-async function renderCaptureTools(){
-  let byTool={};
-  try{(await get("settings/webhook-captures")).tools.forEach(t=>byTool[t.tool]=t);}catch(e){}
+async function renderCaptureTools(byTool){
+  if(!byTool){
+    byTool={};
+    try{(await get("settings/webhook-captures")).tools.forEach(t=>byTool[t.tool]=t);}catch(e){}
+  }
   $("#int-captures-list").innerHTML=`<div style="display:flex;flex-direction:column;gap:8px">${INT_TOOL_HINTS.map(t=>{
     const url=`${location.origin}/webhooks/capture/${t.key}`;
     const cap=byTool[t.key];
