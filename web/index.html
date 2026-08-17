@@ -868,11 +868,6 @@
   <!-- ── Integrations ─────────────────────────────────────────────────────── -->
   <div id="settings-sub-integrations" style="display:none">
     <div class="settings-card">
-      <h3>🔌 Connected tools</h3>
-      <p class="muted" style="font-size:12px;margin:2px 0 16px;line-height:1.5">External platforms this CRM talks to. Anything that can send a webhook can feed leads in below — a connected tool here is just a lead webhook (or the inbound email address) with a name attached to it, plus a note on what tag it applies, since a tag is what a Workflow triggers on.</p>
-      <div id="int-tools-list"></div>
-    </div>
-    <div class="settings-card">
       <h3>📡 Tantra</h3>
       <p class="muted" style="font-size:12px;margin:2px 0 16px;line-height:1.5">Real connection, built from Tantra's own docs (<code>usetantra.com/help/api-and-mcp/outbound-webhooks</code>) — not the generic capture harness below. Paste the URL into Tantra's Webhooks page. <code>email.replied</code> advances the contact's stage, <code>email.unsubscribed</code> suppresses them, everything else (sent/clicked/bounced/intent/sequence-completed) is logged to their activity feed. <code>lead.stage.changed</code> only moves the contact here if you map Tantra's stage name below — an unmapped one is logged, not applied.</p>
       <div id="int-tantra"><div class="muted">loading…</div></div>
@@ -3120,17 +3115,12 @@ async function loadTagsSettings(){
 
 // ── Integrations — inbound lead webhooks ──────────────────────────────────────
 // ── Connected tools + inbound email status (Integrations panel) ───────────────
-// "Connected tools" isn't a separate credential store — WebinarGeek, Zoom,
-// Instantly, an outreach engine like Tantra, all just POST to a lead webhook
-// (or the inbound email address) the same as Zapier would. This section
-// exists so an operator sees at a glance WHICH webhook is "the WebinarGeek
-// one" without opening each one to read its label, and so a tool that hasn't
-// been wired up yet still shows as a visible next step, not a silent gap.
+// Tantra and WebinarGeek each have their own dedicated card with real status
+// (below) — this list is now only for tools that genuinely have nothing more
+// than "point its webhook at ours and see what arrives."
 const INT_TOOL_HINTS=[
-  {key:"tantra",name:"Tantra",match:/tantra/i,icon:"📡",note:"Omnichannel outreach — has its own real webhook receiver below, not just a lead webhook."},
-  {key:"webinargeek",name:"WebinarGeek",match:/webinargeek/i,icon:"🎥",note:"No webhooks in their API — connects with an API key and syncs on demand, below.",noCapture:true},
-  {key:"zoom",name:"Zoom Webinars",match:/zoom/i,icon:"🎦",note:"Point its Zoom Webinars registrant webhook at a lead webhook below."},
-  {key:"instantly",name:"Instantly",match:/instantly/i,icon:"📧",note:"Point its reply/interested webhook at a lead webhook below."},
+  {key:"zoom",name:"Zoom Webinars",icon:"🎦",note:"Point its Zoom Webinars registrant webhook at a lead webhook below."},
+  {key:"instantly",name:"Instantly",icon:"📧",note:"Point its reply/interested webhook at a lead webhook below."},
 ];
 async function loadLeadWebhooks(){
   let hooks=[];
@@ -3141,45 +3131,6 @@ async function loadLeadWebhooks(){
   try{tantraHook=(await get("settings/tantra-webhook")).webhook;}catch(e){}
   let webinargeekConn=null;
   try{webinargeekConn=(await get("settings/webinargeek")).connection;}catch(e){}
-  // Three states, not two: a tool can have a real test payload captured
-  // (proves it can reach us, but there's no field mapping wired to turn
-  // that payload into a contact yet) well before it's actually "connected"
-  // (a matching lead webhook exists for it to be pointed at in production).
-  // Tantra is a special case — it has its OWN dedicated webhook row (below),
-  // auto-provisioned the moment this page loads, so "a row exists" can't be
-  // the connected signal (it always exists). "It has actually received a
-  // real event" is.
-  const matched=INT_TOOL_HINTS.map(t=>({...t,hook:hooks.find(h=>t.match.test(h.label||"")),cap:byTool[t.key]}));
-  $("#int-tools-list").innerHTML=`<div style="display:flex;flex-direction:column;gap:8px">${matched.map(t=>{
-    let pill;
-    if(t.key==="tantra"){
-      pill=!tantraHook||!tantraHook.enabled
-        ?`<span class="status-pill" style="background:var(--neutral-bg);color:var(--neutral)">disabled</span>`
-        :tantraHook.request_count>0
-        ?`<span class="status-pill" style="background:var(--live-bg);color:var(--live)">connected</span>`
-        :`<span class="status-pill" style="background:var(--neutral-bg);color:var(--neutral)">not set up</span>`;
-    }else if(t.key==="webinargeek"){
-      pill=webinargeekConn&&webinargeekConn.connected
-        ?`<span class="status-pill" style="background:var(--live-bg);color:var(--live)">connected</span>`
-        :`<span class="status-pill" style="background:var(--neutral-bg);color:var(--neutral)">not set up</span>`;
-    }else{
-      pill=t.hook
-        ?`<span class="status-pill" style="background:var(--live-bg);color:var(--live)">connected</span>`
-        :t.cap
-        ?`<span class="status-pill" style="background:var(--warm-bg);color:var(--warm)">payload captured — needs mapping</span>`
-        :`<span class="status-pill" style="background:var(--neutral-bg);color:var(--neutral)">not set up</span>`;
-    }
-    return `<div style="display:flex;align-items:center;gap:10px;padding:10px 12px;border:1px solid var(--hair);border-radius:8px">
-      <span style="font-size:18px">${t.icon}</span>
-      <div style="flex:1">
-        <div style="font-size:13px;font-weight:600">${esc(t.name)}</div>
-        <div class="muted" style="font-size:11px">${esc(t.note)}</div>
-      </div>
-      ${pill}
-    </div>`;
-  }).join("")}
-    <div class="muted" style="font-size:11px;margin-top:2px">Any other tool that can send a webhook (or email) works the same way — it doesn't need to be on this list.</div>
-  </div>`;
 
   renderTantraCard(tantraHook);
   renderWebinargeekCard(webinargeekConn);
@@ -3344,6 +3295,7 @@ async function renderCaptureTools(byTool){
         <span style="font-size:18px">${t.icon}</span>
         <div style="flex:1">
           <div style="font-size:13px;font-weight:600">${esc(t.name)}</div>
+          <div class="muted" style="font-size:11px">${esc(t.note)}</div>
           <div class="muted" style="font-size:11px">${cap?`${cap.count} event${cap.count===1?"":"s"} captured · last ${fmtDate(cap.last_received_at)}`:"no test event received yet"}</div>
         </div>
         <button class="btn sm" data-view-capture="${esc(t.key)}" ${cap?"":"disabled"}>View last payload</button>
