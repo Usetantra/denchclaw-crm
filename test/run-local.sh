@@ -148,6 +148,7 @@ SUITES=(
   "unit-cpwc-webhook-captures|node test/unit-cpwc-webhook-captures.mjs"
   "unit-cptw-tantra-webhook|node test/unit-cptw-tantra-webhook.mjs"
   "unit-cpwg-webinargeek|node test/unit-cpwg-webinargeek.mjs"
+  "unit-cpcd-company-domains|node test/unit-cpcd-company-domains.mjs"
   "unit-cpf38-anchored-scheduling|node test/unit-cpf38-anchored-scheduling.mjs"
   "unit-cpf38b-webinar-anchor|node test/unit-cpf38b-webinar-anchor.mjs"
   # unit-cpg-auth is disabled for now — the custom auth routes it exercises

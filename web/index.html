@@ -851,8 +851,18 @@
       <button class="btn sm" id="add-sender" style="margin-top:14px">+ Add sender</button>
     </div>
     <div class="settings-card">
+      <h3>Your sending/receiving domain</h3>
+      <p class="muted" style="font-size:12px;margin:2px 0 16px;line-height:1.5">Connect your own domain to send and receive email as yourself instead of the shared address below. We register it in our Resend account on your behalf and hand you the DNS records — you paste those into whatever DNS provider you use (Cloudflare, GoDaddy, Namecheap, ...); we never touch your DNS directly.</p>
+      <div id="domains-list"><div class="muted">loading…</div></div>
+      <div style="display:flex;gap:8px;margin-top:14px">
+        <input id="domain-new-name" placeholder="mail.yourcompany.com" style="flex:1">
+        <button class="btn sm primary" id="domain-add">+ Connect domain</button>
+      </div>
+      <div id="domain-add-err" class="muted" style="font-size:12px;margin-top:8px;color:var(--hot)"></div>
+    </div>
+    <div class="settings-card">
       <h3>Email</h3>
-      <p class="muted" style="font-size:12px;margin:2px 0 16px;line-height:1.5">Email sends through one shared provider account (Resend) for every tenant — there's no per-tenant credential to connect. What you manage here is which "From" addresses the composer can send as.</p>
+      <p class="muted" style="font-size:12px;margin:2px 0 16px;line-height:1.5">A verified domain above unlocks its own addresses here; until then every tenant shares one provider account (Resend) and its addresses. What you manage here is which "From" addresses the composer can send as.</p>
       <div id="email-conn" class="muted" style="margin-bottom:14px">loading…</div>
       <div id="email-senders-list"></div>
       <button class="btn sm" id="add-email-sender" style="margin-top:14px">+ Add sending address</button>
@@ -2626,6 +2636,69 @@ async function loadChannelsSettings(){
       try{await post("channels/linkedin/connect",{account_id:v.account_id.trim(),display_name:v.display_name||null,timezone:v.timezone||null,engine_dispatch_disabled:true});
         closeModal();toast("LinkedIn account connected");loadChannelsSettings();}catch(e){toast(e.message,true);}
     };
+  };
+
+  loadDomains();
+}
+const DOMAIN_STATUS_LABEL={verified:"verified",pending:"pending",not_started:"pending",partially_verified:"partially verified",failed:"failed",temporary_failure:"temporary failure"};
+async function loadDomains(){
+  let domains=[];
+  try{domains=(await get("settings/domains")).domains||[];}catch(e){$("#domains-list").innerHTML=`<div class="empty">${esc(e.message)}</div>`;return;}
+  $("#domains-list").innerHTML=domains.length?domains.map(d=>{
+    const ok=d.status==="verified";
+    const label=DOMAIN_STATUS_LABEL[d.status]||d.status;
+    return `<div class="settings-card" style="max-width:none;margin-bottom:12px;padding:14px 16px" data-domain-row="${d.id}">
+      <div style="display:flex;align-items:center;gap:10px;margin-bottom:10px">
+        <b style="font-size:13px">${esc(d.domain)}</b>
+        <span class="status-pill" style="background:${ok?"var(--live-bg)":"var(--warm-bg)"};color:${ok?"var(--live)":"var(--warm)"}">${esc(label)}</span>
+        <span class="spacer" style="flex:1"></span>
+        <label style="display:flex;align-items:center;gap:6px;font-size:12px" class="muted">
+          <input type="checkbox" data-domain-receiving="${d.id}" ${d.receiving_enabled?"checked":""}> receiving
+        </label>
+        <button class="btn sm" data-domain-verify="${d.id}">Refresh / Verify</button>
+        <button class="btn sm" data-domain-del="${d.id}">Remove</button>
+      </div>
+      <div class="muted" style="font-size:11px;margin-bottom:6px">Paste these into your DNS provider (Cloudflare, GoDaddy, ...) for ${esc(d.domain)}:</div>
+      <div style="overflow-x:auto">
+        <table style="width:100%;font-size:11px"><thead><tr><th style="text-align:left">Type</th><th style="text-align:left">Name</th><th style="text-align:left">Value</th><th style="text-align:left">Priority</th><th style="text-align:left">Status</th></tr></thead>
+        <tbody>${(d.records||[]).map(r=>`<tr>
+          <td>${esc(r.type||"")}</td>
+          <td><code>${esc(r.name||"@")}</code></td>
+          <td style="max-width:340px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${esc(r.value||"")}"><code>${esc(r.value||"")}</code></td>
+          <td>${r.priority??""}</td>
+          <td>${esc(r.status||"")}</td>
+        </tr>`).join("")||`<tr><td colspan="5" class="muted">no records yet</td></tr>`}</tbody></table>
+      </div>
+    </div>`;
+  }).join(""):`<div class="empty">No domains connected yet — every send uses the shared address below.</div>`;
+
+  $$("[data-domain-verify]").forEach(b=>b.onclick=async()=>{
+    b.disabled=true;b.textContent="Checking…";
+    try{await post(`settings/domains/${b.dataset.domainVerify}/verify`,{});toast("Status refreshed");loadDomains();}
+    catch(e){toast(e.message,true);b.disabled=false;b.textContent="Refresh / Verify";}
+  });
+  $$("[data-domain-receiving]").forEach(cb=>cb.onchange=async()=>{
+    try{await patch(`settings/domains/${cb.dataset.domainReceiving}`,{receiving:cb.checked});toast("Updated");loadDomains();}
+    catch(e){toast(e.message,true);cb.checked=!cb.checked;}
+  });
+  $$("[data-domain-del]").forEach(b=>b.onclick=()=>{
+    confirmDelete("Remove this domain? It will stop sending/receiving as this domain immediately.",async()=>{
+      try{await del(`settings/domains/${b.dataset.domainDel}`);toast("Domain removed");loadDomains();}catch(e){toast(e.message,true);}
+    });
+  });
+  $("#domain-add").onclick=async()=>{
+    const name=$("#domain-new-name").value.trim().toLowerCase();
+    if(!name)return;
+    $("#domain-add-err").textContent="";
+    const btn=$("#domain-add");btn.disabled=true;btn.textContent="Connecting…";
+    try{
+      await post("settings/domains",{domain:name});
+      $("#domain-new-name").value="";
+      toast("Domain connected — add the DNS records below");
+      loadDomains();
+    }catch(e){
+      $("#domain-add-err").textContent=e.message||"failed to connect domain";
+    }finally{btn.disabled=false;btn.textContent="+ Connect domain";}
   };
 }
 

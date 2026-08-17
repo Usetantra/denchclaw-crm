@@ -377,6 +377,129 @@ router.get('/inbound-email-status', (req, res) => {
   });
 });
 
+// ── Custom domains (migration 038) — self-serve "connect your own domain" ──
+// A domain is registered in OUR Resend account on the tenant's behalf; we
+// never touch the tenant's actual DNS, only hand back the records Resend
+// generates for them to paste wherever their DNS is hosted.
+const companyDomainsDb = require('../db/models/company-domains');
+const resendDomains = require('../lib/resend-domains-client');
+
+function resendKeyOr503(res) {
+  const key = process.env.RESEND_API_KEY;
+  if (!key) {
+    res.status(503).json({ error: 'domain connection is not configured on this server (RESEND_API_KEY unset)' });
+    return null;
+  }
+  return key;
+}
+
+const DOMAIN_RE = /^(?!-)[a-z0-9-]{1,63}(?<!-)(\.(?!-)[a-z0-9-]{1,63}(?<!-))+$/i;
+
+router.get('/domains', async (req, res) => {
+  try {
+    const companyId = getUserCompanyId(req);
+    res.json({ domains: await companyDomainsDb.list(companyId) });
+  } catch (e) {
+    console.error('[Settings] GET domains', e.message);
+    res.status(500).json({ error: 'failed to load domains' });
+  }
+});
+
+router.post('/domains', async (req, res) => {
+  try {
+    const companyId = getUserCompanyId(req);
+    const key = resendKeyOr503(res);
+    if (!key) return;
+    const domain = String((req.body && req.body.domain) || '').trim().toLowerCase();
+    if (!domain || !DOMAIN_RE.test(domain)) return res.status(400).json({ error: 'a valid domain name is required (e.g. mail.yourcompany.com)' });
+
+    const existing = await companyDomainsDb.getByDomain(domain);
+    if (existing) return res.status(409).json({ error: existing.company_id === companyId ? 'this domain is already connected' : 'this domain is already connected to another tenant' });
+
+    let created;
+    try {
+      created = await resendDomains.createDomain(key, { name: domain });
+    } catch (err) {
+      return res.status(400).json({ error: `Resend rejected this domain: ${err.message}` });
+    }
+    const row = await companyDomainsDb.create(companyId, {
+      domain, resendDomainId: created.id, region: created.region, status: created.status, records: created.records || [],
+    });
+    res.status(201).json({ domain: row });
+  } catch (e) {
+    console.error('[Settings] POST domains', e.message);
+    res.status(500).json({ error: 'failed to connect domain' });
+  }
+});
+
+// POST /domains/:id/verify — kick off Resend's re-check, then poll once
+// immediately so the response already carries the freshest status/records
+// rather than making the operator click Refresh a second time.
+router.post('/domains/:id/verify', async (req, res) => {
+  try {
+    const companyId = getUserCompanyId(req);
+    const key = resendKeyOr503(res);
+    if (!key) return;
+    const row = await companyDomainsDb.get(companyId, req.params.id);
+    if (!row) return res.status(404).json({ error: 'domain not found' });
+
+    try { await resendDomains.verifyDomain(key, row.resend_domain_id); } catch (err) { /* best-effort kick; still poll below */ console.error('[Settings] verifyDomain kick failed', err.message); }
+    const fresh = await resendDomains.getDomain(key, row.resend_domain_id);
+    const updated = await companyDomainsDb.updateFromResend(companyId, row.id, {
+      status: fresh.status, records: fresh.records || [], receivingEnabled: fresh.capabilities && fresh.capabilities.receiving === 'enabled',
+    });
+    res.json({ domain: updated });
+  } catch (e) {
+    console.error('[Settings] POST domains/:id/verify', e.message);
+    res.status(502).json({ error: `Resend: ${e.message}` });
+  }
+});
+
+router.patch('/domains/:id', async (req, res) => {
+  try {
+    const companyId = getUserCompanyId(req);
+    const key = resendKeyOr503(res);
+    if (!key) return;
+    const row = await companyDomainsDb.get(companyId, req.params.id);
+    if (!row) return res.status(404).json({ error: 'domain not found' });
+    const { receiving } = req.body || {};
+    if (receiving === undefined) return res.status(400).json({ error: 'receiving is required' });
+
+    await resendDomains.updateDomain(key, row.resend_domain_id, { receiving });
+    const fresh = await resendDomains.getDomain(key, row.resend_domain_id);
+    const updated = await companyDomainsDb.updateFromResend(companyId, row.id, {
+      status: fresh.status, records: fresh.records || [], receivingEnabled: fresh.capabilities && fresh.capabilities.receiving === 'enabled',
+    });
+    res.json({ domain: updated });
+  } catch (e) {
+    console.error('[Settings] PATCH domains/:id', e.message);
+    res.status(502).json({ error: `Resend: ${e.message}` });
+  }
+});
+
+router.delete('/domains/:id', async (req, res) => {
+  try {
+    const companyId = getUserCompanyId(req);
+    const key = resendKeyOr503(res);
+    if (!key) return;
+    const row = await companyDomainsDb.get(companyId, req.params.id);
+    if (!row) return res.status(404).json({ error: 'domain not found' });
+    try {
+      await resendDomains.deleteDomain(key, row.resend_domain_id);
+    } catch (err) {
+      // Already gone from Resend's side (e.g. deleted out-of-band) is fine to
+      // proceed past — anything else leaves our row intact rather than
+      // silently forgetting a domain Resend still thinks is connected.
+      if (err.status !== 404) return res.status(502).json({ error: `Resend: ${err.message}` });
+    }
+    await companyDomainsDb.remove(companyId, row.id);
+    res.json({ ok: true });
+  } catch (e) {
+    console.error('[Settings] DELETE domains/:id', e.message);
+    res.status(500).json({ error: 'failed to remove domain' });
+  }
+});
+
 // GET /api/crm/settings/marketing-webhook-status — is the public landing-page
 // / calendar-RSVP / comment ingestion configured? Same posture as
 // inbound-email-status: never returns the secret itself, just whether ANY
