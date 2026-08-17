@@ -59,7 +59,15 @@ async function listSequences(companyId, { status, pipelineKey } = {}) {
 // (pipeline_key, stage) pair. Never throws into the caller's request path —
 // a sequence-enrollment failure must not turn an already-persisted stage
 // change into a 500, same posture as companies.js's identifyAndLink.
-async function enrollForTriggerStage(companyId, contactId, pipelineKey, stage) {
+// F38b: `anchorAt`, when the caller has one, is threaded straight into
+// enroll() — this is what makes a webinar registration able to drive an
+// ANCHORED reminder ladder ("1 day before", "1 hour before" the webinar
+// itself) rather than a relative one. Optional and null by default: every
+// other stage-triggered sequence (the overwhelming majority) still enrolls
+// exactly as before. The caller (marketing-events.js's registration handler)
+// is the one place that actually knows a webinar's scheduled_at — this
+// function only has to pass it through, not know where it came from.
+async function enrollForTriggerStage(companyId, contactId, pipelineKey, stage, anchorAt = null) {
   if (!companyId) throw new Error('sequences.enrollForTriggerStage requires companyId');
   try {
     const matches = await query(
@@ -73,7 +81,7 @@ async function enrollForTriggerStage(companyId, contactId, pipelineKey, stage) {
     // core stage-transition endpoint's latency budget when a tenant has
     // several sequences sharing one trigger_stage.
     const results = await Promise.all(
-      matches.rows.map((seq) => enroll(companyId, { sequenceId: seq.id, contactId }))
+      matches.rows.map((seq) => enroll(companyId, { sequenceId: seq.id, contactId, anchorAt }))
     );
     return results
       .map((enrollment, i) => (enrollment ? { sequence_id: matches.rows[i].id, enrollment_id: enrollment.id } : null))

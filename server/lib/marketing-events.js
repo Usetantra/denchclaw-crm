@@ -521,6 +521,11 @@ async function applyEvent(companyId, { eventId, eventType, channel, contact, web
     reason: interestNote || `marketing ${eventType}${webinar ? ` (${webinar.key})` : ''}`,
     actor: 'marketing-ingest',
     recordActivity,
+    // F38b: the ONE place that actually knows the webinar's start time — a
+    // registration is what makes an ANCHORED reminder ladder ("1 day before",
+    // "1 hour before") possible at all. Every other event_type (attendance,
+    // no_show, ...) has no natural anchor and correctly passes null.
+    anchorAt: eventType === 'registration' && webinar ? webinar.scheduled_at : null,
   });
 
   await writeActivity(recordActivity, contact, companyId, {

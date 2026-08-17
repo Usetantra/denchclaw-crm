@@ -140,7 +140,7 @@ function manualStageRefusal({ pipeline, pipelineKey, stage, automated }) {
 
 async function advanceContactStage({
   companyId, contact, pipelineKey, pipeline, stage,
-  automated = false, reason = null, actor = null, recordActivity,
+  automated = false, reason = null, actor = null, recordActivity, anchorAt = null,
 }) {
   const currentStage = contact.marketing_stage || 'sourced';
 
@@ -232,7 +232,7 @@ async function advanceContactStage({
   // into any active sequence configured to trigger on this stage. Ingestion
   // reaching this line is the whole point of CP-B — an observed registration
   // must start the same follow-up ladder a hand-typed one starts.
-  const sequenceEnrollments = await sequenceDb.enrollForTriggerStage(companyId, contact.id, pipelineKey, stage);
+  const sequenceEnrollments = await sequenceDb.enrollForTriggerStage(companyId, contact.id, pipelineKey, stage, anchorAt);
 
   await maybeCreateStageReminder({
     companyId, contactId: contact.id, contactName: contact.name,
