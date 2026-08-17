@@ -29,8 +29,8 @@ const FILTERS = ['all', 'unread', 'mine', 'theirs', 'starred'];
 // The connected sending identity for a channel — the same table the composer's
 // From selector is built from, resolved from crm.js rather than re-parsed here
 // so the two can never disagree. A user never free-types a From.
-function senderFor(channel) {
-  const senders = (require('./crm').channelSenders || {})[channel] || [];
+function pickSender(table, channel) {
+  const senders = (table && table[channel]) || [];
   const chosen = senders.find(s => s && s.default) || senders[0];
   return chosen ? chosen.identity : null;
 }
@@ -45,8 +45,8 @@ function senderFor(channel) {
 // one, and turning that into a 502 would make every inbox reply fail on a
 // deployment that has RESEND_API_KEY but no sending identity yet. Recording it
 // honestly is the correct outcome, and it is exactly what D5 asks for.
-function canDeliver(channel) {
-  return channel === 'email' && resendEmail.isConfigured() && !!senderFor(channel);
+function canDeliver(channel, table) {
+  return channel === 'email' && resendEmail.isConfigured() && !!pickSender(table, channel);
 }
 function deliveryNote(channel) {
   if (channel !== 'email') return `Logged — not delivered (no ${channel} provider configured)`;
@@ -185,6 +185,7 @@ router.get('/:contactId/thread', async (req, res) => {
 
     const thread = await inboxDb.getThread(companyId, contact.id, { limit: req.query.limit });
     const ctx = await inboxDb.getContactContext(companyId, contact.id);
+    const senderTable = await require('./crm').getChannelSenders(companyId);
     const deals = [];
     for (const d of ctx.deals) deals.push({ ...d, stage_chip: await stageChipFor(companyId, d, { siblings: ctx.deals }) });
 
@@ -214,7 +215,7 @@ router.get('/:contactId/thread', async (req, res) => {
       suppressed_globally: !!globalSuppression,
       suppressed_reason: globalSuppression ? globalSuppression.reason : null,
       suppressed_channels: suppressions.filter(s => s.channel).map(s => s.channel),
-      deliverable_channels: inboxDb.CHANNELS.filter(canDeliver),
+      deliverable_channels: inboxDb.CHANNELS.filter(ch => canDeliver(ch, senderTable)),
     });
   } catch (err) {
     console.error('[CRM] GET /inbox/:contactId/thread error:', err.message);
@@ -356,10 +357,11 @@ router.post('/:contactId/reply', async (req, res) => {
     let providerMessageId = null;
     let delivered = false;
     let note = null;
-    if (canDeliver(channel)) {
+    const senderTable = await require('./crm').getChannelSenders(companyId);
+    if (canDeliver(channel, senderTable)) {
       try {
         const sent = await resendEmail.sendEmail({
-          from: senderFor(channel),
+          from: pickSender(senderTable, channel),
           to: contact.email, subject: subject || 'Re: our conversation', text: String(body),
           replyTo: process.env.INBOUND_REPLY_TO || undefined,
         });

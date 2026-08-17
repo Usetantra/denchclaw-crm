@@ -808,6 +808,19 @@
       <div id="senders-list"><div class="muted">loading…</div></div>
       <button class="btn sm" id="add-sender" style="margin-top:14px">+ Add sender</button>
     </div>
+    <div class="settings-card">
+      <h3>Email</h3>
+      <p class="muted" style="font-size:12px;margin:2px 0 16px;line-height:1.5">Email sends through one shared provider account (Resend) for every tenant — there's no per-tenant credential to connect. What you manage here is which "From" addresses the composer can send as.</p>
+      <div id="email-conn" class="muted" style="margin-bottom:14px">loading…</div>
+      <div id="email-senders-list"></div>
+      <button class="btn sm" id="add-email-sender" style="margin-top:14px">+ Add sending address</button>
+    </div>
+    <div class="settings-card">
+      <h3>LinkedIn</h3>
+      <p class="muted" style="font-size:12px;margin:2px 0 16px;line-height:1.5">Connects an account already logged into Unipile (complete Unipile's own hosted LinkedIn login outside this app, then paste the account id it gives you). Caps, send window and the accept-gate all hang off the connected account.</p>
+      <div id="li-list"><div class="muted">loading…</div></div>
+      <button class="btn sm" id="add-li-account" style="margin-top:14px">+ Connect LinkedIn account</button>
+    </div>
   </div><!-- /settings-sub-channels -->
 
   <!-- ── Integrations ─────────────────────────────────────────────────────── -->
@@ -842,6 +855,7 @@
       <div><h2 id="m-name">—</h2><div class="msub" id="m-sub"></div></div>
       <button class="mclose" id="m-close" title="Close" aria-label="Close">×</button>
     </div>
+    <div id="m-call-actions" style="display:none;gap:8px;margin-bottom:14px"></div>
     <div class="fgrid" id="m-fields"></div>
     <div class="sechead" style="margin:8px 0 10px"><span class="eyebrow">Tags</span><span class="rule"></span></div>
     <div id="m-tags" style="display:flex;flex-wrap:wrap;gap:6px;align-items:center;margin-bottom:18px"></div>
@@ -997,6 +1011,14 @@ async function openContact(id){
     contactCustomFieldDefs=cfDefsRes.fields||[];
     $("#m-name").textContent=c.name||c.email||"—";
     $("#m-sub").textContent=[c.title,c.company_name].filter(Boolean).join(" · ");
+    const callActions=$("#m-call-actions");
+    if(c.phone){
+      callActions.style.display="flex";
+      callActions.innerHTML=`<a class="btn sm" href="tel:${esc(c.phone)}">📞 Call ${esc(c.phone)}</a><button class="btn sm" id="m-log-call">Log a call</button>`;
+      $("#m-log-call").onclick=()=>logCallModal(id,c.name||c.phone);
+    }else{
+      callActions.style.display="none";callActions.innerHTML="";
+    }
     // Editable fields render as inputs; system/derived fields (stage, numeric
     // score, UTMs, dates, id) stay read-only — stage is governed by the
     // pipeline state machine, not free-edited here.
@@ -1240,6 +1262,34 @@ $("#m-noteform").addEventListener("submit",async e=>{
 $("#contacts").addEventListener("click",e=>{
   const tr=e.target.closest("tr[data-contact]");if(tr)openContact(tr.dataset.contact);
 });
+
+// ── Click-to-call logging (no telephony backend — the "Call" button just opens
+// the rep's own phone/softphone via tel:; this records what happened) ─────────
+const CALL_OUTCOMES=[{value:"connected",label:"Connected"},{value:"voicemail",label:"Left voicemail"},
+  {value:"no_answer",label:"No answer"},{value:"wrong_number",label:"Wrong number"},{value:"other",label:"Other"}];
+function logCallModal(contactId,name){
+  openModal(`Log a call · ${esc(name||"")}`,
+    field("Outcome","outcome",{type:"select",value:"connected",options:CALL_OUTCOMES})+
+    field("Duration (minutes)","duration",{type:"number",value:""})+
+    `<div class="field"><label>Notes</label><textarea name="notes" rows="3" placeholder="What was discussed…"></textarea></div>`,
+    `<button class="btn" onclick="closeModal()">Cancel</button><button class="btn primary" id="save-call-log">Save</button>`);
+  $("#save-call-log").onclick=async()=>{
+    const v=formValues();
+    const outcomeLabel=(CALL_OUTCOMES.find(o=>o.value===v.outcome)||{}).label||v.outcome;
+    const mins=parseFloat(v.duration);
+    const message=`Call logged: ${outcomeLabel}${Number.isFinite(mins)&&mins>0?` · ${mins} min`:""}${v.notes?` — ${v.notes}`:""}`;
+    try{
+      await post(`contacts/${contactId}/activity`,{type:"call",channel:"call",message,agent:"dashboard",
+        data:{outcome:v.outcome,duration_minutes:Number.isFinite(mins)?mins:null,notes:v.notes||null}});
+      closeModal();toast("Call logged");
+      if($("#modal-wrap").dataset.contact===contactId){
+        const act=await get(`contacts/${contactId}/activity?limit=${FEED_PAGE_SIZE}&offset=0`);
+        feedItems=act.activity||[];feedTotal=act.total??feedItems.length;
+        renderFeed(feedItems,true);
+      }
+    }catch(e){toast(e.message,true);}
+  };
+}
 
 // ── Board ────────────────────────────────────────────────────────────────────
 let boardView="sales";
@@ -2216,6 +2266,86 @@ async function loadChannelsSettings(){
     try{await del("channels/senders/"+b.dataset.delSender);toast("Removed");loadChannelsSettings();}catch(e){toast(e.message,true);}});
   $("#add-sender").style.display=tw?"":"none";
   $("#add-sender").onclick=()=>senderModal(tw);
+
+  // email
+  $("#email-conn").innerHTML=data.email_configured
+    ?`<span class="li-ok">✓ Provider configured</span> · sending addresses below are what the composer can pick as "From"`
+    :`<span class="li-warn">Not configured.</span> The platform's email provider (RESEND_API_KEY) isn't set — ask whoever manages hosting to configure it before adding sending addresses.`;
+  const emailRows=(data.senders||[]).filter(s=>s.channel==="email");
+  $("#email-senders-list").innerHTML=emailRows.length?`<table><thead><tr><th>Address</th><th>Label</th><th>Default</th><th></th></tr></thead><tbody>${
+    emailRows.map(s=>`<tr>
+      <td><b>${esc(s.identifier)}</b></td>
+      <td class="muted">${esc(s.label||"—")}</td>
+      <td>${s.is_default?`<span class="li-ok">✓ default</span>`:`<button class="btn sm" data-email-default="${esc(s.id)}">Make default</button>`}</td>
+      <td style="text-align:right"><button class="btn sm danger" data-del-sender="${esc(s.id)}">Remove</button></td>
+    </tr>`).join("")
+  }</tbody></table>`:`<div class="empty">No sending addresses yet.</div>`;
+  $("#email-senders-list").querySelectorAll("[data-del-sender]").forEach(b=>b.onclick=async()=>{
+    try{await del("channels/senders/"+b.dataset.delSender);toast("Removed");loadChannelsSettings();}catch(e){toast(e.message,true);}});
+  $("#email-senders-list").querySelectorAll("[data-email-default]").forEach(b=>b.onclick=async()=>{
+    try{await apiFetch("PATCH","channels/senders/"+b.dataset.emailDefault,{is_default:true});toast("Default updated");loadChannelsSettings();}catch(e){toast(e.message,true);}});
+  $("#add-email-sender").onclick=()=>{
+    openModal("Add sending address",
+      field("Email address","identifier",{placeholder:"hello@yourcompany.com"})+
+      field("Label (optional)","label",{placeholder:"Support inbox"}),
+      `<button class="btn" onclick="closeModal()">Cancel</button><button class="btn primary" id="save-email-sender">Add</button>`);
+    $("#save-email-sender").onclick=async()=>{
+      const v=formValues();if(!v.identifier||!/^\S+@\S+\.\S+$/.test(v.identifier))return toast("A valid email address is required",true);
+      try{await post("channels/senders",{channel:"email",provider:"resend",identifier:v.identifier.trim(),label:v.label||null,is_default:emailRows.length===0});
+        closeModal();toast("Sending address added");loadChannelsSettings();}catch(e){toast(e.message,true);}
+    };
+  };
+
+  // linkedin
+  const liAccounts=data.linkedin_accounts||[];
+  const LI_STATUS_COLOR={connected:"#067647",paused:"#b54708",disconnected:"#98a2b3",errored:"#b42318"};
+  $("#li-list").innerHTML=liAccounts.length?liAccounts.map(a=>{
+    const col=LI_STATUS_COLOR[a.status]||"#98a2b3";
+    return `<div class="settings-card" style="max-width:none;margin-bottom:12px;padding:14px 16px">
+      <div style="display:flex;align-items:center;gap:10px;margin-bottom:8px;flex-wrap:wrap">
+        <b style="font-size:13px">${esc(a.display_name||a.account_id)}</b>
+        <span class="status-pill" style="background:${col}20;color:${col}">${esc(a.status)}</span>
+        ${a.engine_dispatch_disabled?"":`<span class="status-pill" style="background:#b4231820;color:#b42318">outreach-engine dispatch NOT confirmed off — sending is blocked</span>`}
+        <span class="spacer" style="flex:1"></span>
+        <span class="muted" style="font-size:11px">caps: ${a.daily_invite_limit}/day invite · ${a.daily_message_limit}/day message · ${a.weekly_invite_limit}/wk invite</span>
+      </div>
+      <div style="display:flex;gap:6px">
+        ${a.status==="connected"?`<button class="btn sm" data-li-pause="${esc(a.id)}">Pause</button>`:``}
+        ${a.status==="paused"?`<button class="btn sm" data-li-resume="${esc(a.id)}">Resume</button>`:``}
+        ${!a.engine_dispatch_disabled?`<button class="btn sm" data-li-confirm="${esc(a.id)}">Confirm outreach-engine dispatch is off</button>`:``}
+        <button class="btn sm danger" data-li-del="${esc(a.id)}">Disconnect</button>
+      </div>
+    </div>`;
+  }).join(""):`<div class="empty">No LinkedIn accounts connected yet.</div>`;
+  $("#li-list").querySelectorAll("[data-li-pause]").forEach(b=>b.onclick=async()=>{
+    try{await apiFetch("PATCH","channels/linkedin/"+b.dataset.liPause,{status:"paused"});toast("Paused");loadChannelsSettings();}catch(e){toast(e.message,true);}});
+  $("#li-list").querySelectorAll("[data-li-resume]").forEach(b=>b.onclick=async()=>{
+    try{await apiFetch("PATCH","channels/linkedin/"+b.dataset.liResume,{status:"connected"});toast("Resumed");loadChannelsSettings();}catch(e){toast(e.message,true);}});
+  $("#li-list").querySelectorAll("[data-li-confirm]").forEach(b=>b.onclick=()=>{
+    confirmDelete("Confirm that the separate outreach engine's LinkedIn dispatch is OFF for this account? Sending stays blocked otherwise, and two systems sending on the same account is exactly what blows through LinkedIn's daily/weekly caps unnoticed.",async()=>{
+      await apiFetch("PATCH","channels/linkedin/"+b.dataset.liConfirm,{engine_dispatch_disabled:true});toast("Confirmed — sending unblocked");loadChannelsSettings();});
+  });
+  $("#li-list").querySelectorAll("[data-li-del]").forEach(b=>b.onclick=()=>{
+    confirmDelete("Disconnect this LinkedIn account? Queued sends on it will stop being claimed.",async()=>{
+      await del("channels/linkedin/"+b.dataset.liDel);toast("Disconnected");loadChannelsSettings();});
+  });
+  $("#add-li-account").onclick=()=>{
+    openModal("Connect LinkedIn account",
+      field("Unipile account id","account_id",{placeholder:"obtained from Unipile's hosted login flow"})+
+      field("Display name (optional)","display_name",{placeholder:"e.g. Priya — Growth"})+
+      field("Timezone","timezone",{value:"Asia/Kolkata"})+
+      `<label style="display:flex;gap:8px;align-items:flex-start;margin-top:10px;font-size:12px;line-height:1.5">
+        <input type="checkbox" id="li-confirm-new" style="margin-top:3px">
+        <span>I've confirmed the separate outreach engine's LinkedIn dispatch is <b>OFF</b> for this account. Required — two systems sending on the same connected account silently blow through every cap below, since neither can see the other's sends.</span>
+      </label>`,
+      `<button class="btn" onclick="closeModal()">Cancel</button><button class="btn primary" id="save-li-account">Connect</button>`);
+    $("#save-li-account").onclick=async()=>{
+      const v=formValues();if(!v.account_id||!v.account_id.trim())return toast("Account id required",true);
+      if(!$("#li-confirm-new").checked)return toast("You must confirm the outreach engine's dispatch is off first",true);
+      try{await post("channels/linkedin/connect",{account_id:v.account_id.trim(),display_name:v.display_name||null,timezone:v.timezone||null,engine_dispatch_disabled:true});
+        closeModal();toast("LinkedIn account connected");loadChannelsSettings();}catch(e){toast(e.message,true);}
+    };
+  };
 }
 
 // ── Settings sub-tabs ────────────────────────────────────────────────────────

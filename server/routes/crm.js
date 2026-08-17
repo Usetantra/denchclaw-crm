@@ -29,25 +29,56 @@ const { requireAuth, getUserCompanyId } = require('../middleware/auth');
 router.use(requireAuth);
 
 // ─── Connected sending identities (the "From" on each channel) ────────────────
-// In production these are written when a user connects an email account / phone
-// number (the connect flow saves them here). Configurable via CHANNEL_SENDERS
-// (JSON env); a default is provided so the inbox composer's From selector is
-// populated and functional locally. The composer only ever shows these — a user
-// never free-types a From.
-const CHANNEL_SENDERS = (() => {
-  try { return process.env.CHANNEL_SENDERS ? JSON.parse(process.env.CHANNEL_SENDERS) : null; }
-  catch (e) { console.warn('[CRM] CHANNEL_SENDERS is not valid JSON — using defaults'); return null; }
+// The composer's From selector — the same real per-tenant senders Settings →
+// Channels manages (server/db/models/channels.js's channel_senders for email/
+// sms/whatsapp, server/db/models/linkedin-accounts.js for linkedin), not the
+// CHANNEL_SENDERS env var this used to read. That env var predated self-serve
+// Settings → Channels entirely and had gone stale the moment a real sender was
+// connected there: a tenant that connected a real Twilio number still saw only
+// the env var's fixed sandbox entry, and the automated dispatcher (which DOES
+// read the DB now, since CP-M2's Twilio rewire) could disagree with what the
+// composer showed. CHANNEL_SENDERS_FALLBACK (optional JSON env, same shape) is
+// consulted ONLY for a channel with zero connected senders, purely so a fresh
+// local dev environment still has something to pick from before connecting
+// anything real — never a substitute for a tenant that HAS connected senders.
+const channelsDb = require('../db/models/channels');
+const linkedinAccountsDb = require('../db/models/linkedin-accounts');
+const FALLBACK_SENDERS = (() => {
+  try { return process.env.CHANNEL_SENDERS_FALLBACK ? JSON.parse(process.env.CHANNEL_SENDERS_FALLBACK) : null; }
+  catch (e) { console.warn('[CRM] CHANNEL_SENDERS_FALLBACK is not valid JSON — ignoring'); return null; }
 })() || {
   email:    [{ identity: 'hello@usetantra.com', label: 'Tantra · hello@usetantra.com',        default: true }],
   whatsapp: [{ identity: '+14155550142',        label: 'Tantra WhatsApp · +1 415 555 0142',   default: true }],
   sms:      [{ identity: '+14155550142',        label: 'Tantra SMS · +1 415 555 0142',        default: true }],
   linkedin: [{ identity: 'tantra-growth',       label: 'Tantra Growth (LinkedIn)',            default: true }],
 };
-router.get('/channel-senders', (req, res) => res.json({ senders: CHANNEL_SENDERS }));
+
+async function getChannelSenders(companyId) {
+  const [senders, linkedin] = await Promise.all([
+    channelsDb.listSenders(companyId),
+    linkedinAccountsDb.list(companyId),
+  ]);
+  const table = { email: [], sms: [], whatsapp: [], linkedin: [] };
+  for (const s of senders) {
+    if (!table[s.channel]) continue;
+    table[s.channel].push({ identity: s.identifier, label: s.label || s.identifier, default: !!s.is_default });
+  }
+  for (const a of linkedin.filter(a => a.status === 'connected')) {
+    table.linkedin.push({ identity: a.account_id, label: a.display_name || a.account_id, default: table.linkedin.length === 0 });
+  }
+  for (const ch of Object.keys(table)) {
+    if (!table[ch].length) table[ch] = FALLBACK_SENDERS[ch] || [];
+  }
+  return table;
+}
+router.get('/channel-senders', async (req, res) => {
+  try { res.json({ senders: await getChannelSenders(getUserCompanyId(req)) }); }
+  catch (e) { console.error('[CRM] GET /channel-senders', e.message); res.status(500).json({ error: 'failed to load senders' }); }
+});
 // Exposed so other routers resolve the SAME connected identity rather than
-// re-deriving it (CP-I's inbox composer needs the "From" too, and a second copy
-// of this env parsing would drift the moment one is edited).
-router.channelSenders = CHANNEL_SENDERS;
+// re-deriving it (CP-I's inbox composer needs the "From" too, and a second
+// implementation would drift the moment one is edited).
+router.getChannelSenders = getChannelSenders;
 
 // No-op validator — engines send well-formed data; validation at API boundary
 const validate = () => (req, res, next) => next();
