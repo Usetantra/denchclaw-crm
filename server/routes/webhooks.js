@@ -446,4 +446,49 @@ router.post('/leads/:token', async (req, res) => {
   }
 });
 
+// ─── Capture (POST /webhooks/capture/:tool) — building a real connector ───────
+// Point WebinarGeek / Zoom / Instantly / anything else at this to see EXACTLY
+// what it sends, instead of a dedicated parser guessed from documentation
+// that may be stale or wrong. Public (no internal key — the whole point is a
+// third party can reach it) and NOT company-scoped (we don't know the
+// payload shape well enough yet to extract a tenant from it). Every capture
+// is a debugging aid pruned to the last 20 per tool (webhook-captures.js),
+// readable via GET /api/crm/settings/webhook-captures (authenticated).
+const webhookCaptures = require('../db/models/webhook-captures');
+const zoomCrypto = require('crypto');
+
+router.post('/capture/:tool', async (req, res) => {
+  const tool = String(req.params.tool || 'unknown').toLowerCase().replace(/[^a-z0-9_-]/g, '');
+  try {
+    await webhookCaptures.record(tool, { method: req.method, headers: req.headers, body: req.body });
+  } catch (err) {
+    console.error('[Webhooks] capture record failed:', err.message);
+    // Never let a logging failure be why a real provider sees an error —
+    // still respond 200 below.
+  }
+
+  // Zoom will not activate a webhook subscription until it gets the correct
+  // encrypted response to this ONE-TIME challenge — a plain 200 is not
+  // enough, and there is no error visible anywhere if this is wrong, it just
+  // silently never turns on. https://developers.zoom.us/docs/api/webhooks/
+  // ZOOM_WEBHOOK_SECRET_TOKEN is the app's "Secret Token" from the Zoom
+  // Marketplace app's Event Subscriptions page — not set yet, so this
+  // degrades to "captured, but cannot complete the handshake" rather than
+  // guessing at a value that would fail signature verification anyway.
+  if (tool === 'zoom' && req.body && req.body.event === 'endpoint.url_validation') {
+    const plainToken = req.body.payload && req.body.payload.plainToken;
+    const secret = process.env.ZOOM_WEBHOOK_SECRET_TOKEN;
+    if (plainToken && secret) {
+      const encryptedToken = zoomCrypto.createHmac('sha256', secret).update(plainToken).digest('hex');
+      return res.status(200).json({ plainToken, encryptedToken });
+    }
+    return res.status(200).json({
+      captured: true,
+      note: 'ZOOM_WEBHOOK_SECRET_TOKEN is not set on the server — cannot complete Zoom\'s validation handshake yet, so this subscription will not activate. Set it (from the Marketplace app\'s Event Subscriptions page) and resend the validation.',
+    });
+  }
+
+  res.status(200).json({ ok: true, captured: true });
+});
+
 module.exports = router;

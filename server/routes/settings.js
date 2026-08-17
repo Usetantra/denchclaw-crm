@@ -190,6 +190,22 @@ router.delete('/lead-webhooks/:id', async (req, res) => {
   }
 });
 
+// GET /api/crm/settings/webhook-captures — what's actually arrived at
+// POST /webhooks/capture/:tool, for building a real connector from real
+// payloads instead of guessed-at documentation. Not company-scoped (see
+// migration 035) — this is a shared debugging surface, same posture as the
+// inbound-email-status endpoint below.
+const webhookCapturesDb = require('../db/models/webhook-captures');
+router.get('/webhook-captures', async (req, res) => {
+  try {
+    if (req.query.tool) return res.json({ captures: await webhookCapturesDb.list(req.query.tool, req.query.limit) });
+    res.json({ tools: await webhookCapturesDb.listTools() });
+  } catch (e) {
+    console.error('[Settings] GET webhook-captures', e.message);
+    res.status(500).json({ error: 'failed to load webhook captures' });
+  }
+});
+
 // GET /api/crm/settings/inbound-email-status — is the server-wide inbound
 // email webhook configured? Never returns the secret itself (it's one
 // server-wide value from INBOUND_WEBHOOK_SECRET, not a per-tenant credential

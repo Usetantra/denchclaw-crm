@@ -873,6 +873,11 @@
       <div id="int-tools-list"></div>
     </div>
     <div class="settings-card">
+      <h3>🧪 Connector test capture</h3>
+      <p class="muted" style="font-size:12px;margin:2px 0 16px;line-height:1.5">For a tool without a confirmed payload shape yet: paste its capture URL into that tool's webhook/test-event setting and fire one real event. It's logged here so the exact field mapping can be built from what actually arrives, not guessed-at docs. Not a permanent log — only the last 20 events per tool are kept, and each event may contain a real prospect's data.</p>
+      <div id="int-captures-list"></div>
+    </div>
+    <div class="settings-card">
       <h3>📥 Inbound Lead Webhooks</h3>
       <p class="muted" style="font-size:12px;margin:2px 0 16px;line-height:1.5">Add prospects to the CRM from other tools — Zapier, Make, a website form, a webinar platform, a custom script. Each webhook has its own URL and token; no API key needed on the sending side. Accepts <code>name</code>/<code>full_name</code>, <code>email</code>, <code>phone</code>, <code>company</code>, <code>title</code>, <code>tags</code> (array or comma-separated), <code>source</code>. Give a webhook a default tag and a Settings → Workflows automation can fire the instant a lead lands.</p>
       <div id="lw-list"><div class="muted">loading…</div></div>
@@ -3112,10 +3117,10 @@ async function loadTagsSettings(){
 // one" without opening each one to read its label, and so a tool that hasn't
 // been wired up yet still shows as a visible next step, not a silent gap.
 const INT_TOOL_HINTS=[
-  {match:/tantra/i,icon:"📡",note:"Omnichannel outreach — connects once its webhook payload shape is confirmed."},
-  {match:/webinargeek/i,icon:"🎥",note:"Point its registration webhook at a lead webhook below with a tag like webinar_lead."},
-  {match:/zoom/i,icon:"🎦",note:"Point its Zoom Webinars registrant webhook at a lead webhook below."},
-  {match:/instantly/i,icon:"📧",note:"Point its reply/interested webhook at a lead webhook below."},
+  {key:"tantra",name:"Tantra",match:/tantra/i,icon:"📡",note:"Omnichannel outreach — connects once its webhook payload shape is confirmed."},
+  {key:"webinargeek",name:"WebinarGeek",match:/webinargeek/i,icon:"🎥",note:"Point its registration webhook at a lead webhook below with a tag like webinar_lead."},
+  {key:"zoom",name:"Zoom Webinars",match:/zoom/i,icon:"🎦",note:"Point its Zoom Webinars registrant webhook at a lead webhook below."},
+  {key:"instantly",name:"Instantly",match:/instantly/i,icon:"📧",note:"Point its reply/interested webhook at a lead webhook below."},
 ];
 async function loadLeadWebhooks(){
   let hooks=[];
@@ -3125,7 +3130,7 @@ async function loadLeadWebhooks(){
     <div style="display:flex;align-items:center;gap:10px;padding:10px 12px;border:1px solid var(--hair);border-radius:8px">
       <span style="font-size:18px">${t.icon}</span>
       <div style="flex:1">
-        <div style="font-size:13px;font-weight:600">${esc(t.match.source.replace(/[^a-z]/gi,""))}</div>
+        <div style="font-size:13px;font-weight:600">${esc(t.name)}</div>
         <div class="muted" style="font-size:11px">${esc(t.note)}</div>
       </div>
       ${t.hook?`<span class="status-pill" style="background:var(--live-bg);color:var(--live)">connected</span>`
@@ -3133,6 +3138,8 @@ async function loadLeadWebhooks(){
     </div>`).join("")}
     <div class="muted" style="font-size:11px;margin-top:2px">Any other tool that can send a webhook (or email) works the same way — it doesn't need to be on this list.</div>
   </div>`;
+
+  await renderCaptureTools();
 
   try{
     const st=await get("settings/inbound-email-status");
@@ -3144,6 +3151,39 @@ async function loadLeadWebhooks(){
   }catch(e){$("#int-email-status").innerHTML=`<div class="empty">${esc(e.message)}</div>`;}
 
   await renderLeadWebhooksList(hooks);
+}
+async function renderCaptureTools(){
+  let byTool={};
+  try{(await get("settings/webhook-captures")).tools.forEach(t=>byTool[t.tool]=t);}catch(e){}
+  $("#int-captures-list").innerHTML=`<div style="display:flex;flex-direction:column;gap:8px">${INT_TOOL_HINTS.map(t=>{
+    const url=`${location.origin}/webhooks/capture/${t.key}`;
+    const cap=byTool[t.key];
+    return `<div style="padding:10px 12px;border:1px solid var(--hair);border-radius:8px">
+      <div style="display:flex;align-items:center;gap:10px">
+        <span style="font-size:18px">${t.icon}</span>
+        <div style="flex:1">
+          <div style="font-size:13px;font-weight:600">${esc(t.name)}</div>
+          <div class="muted" style="font-size:11px">${cap?`${cap.count} event${cap.count===1?"":"s"} captured · last ${fmtDate(cap.last_received_at)}`:"no test event received yet"}</div>
+        </div>
+        <button class="btn sm" data-view-capture="${esc(t.key)}" ${cap?"":"disabled"}>View last payload</button>
+      </div>
+      <div class="field" style="margin-top:8px"><input readonly value="${esc(url)}" onclick="this.select()"></div>
+    </div>`;
+  }).join("")}</div>`;
+  $$("[data-view-capture]").forEach(b=>b.onclick=()=>viewCapture(b.dataset.viewCapture));
+}
+async function viewCapture(tool){
+  let captures=[];
+  try{captures=(await get(`settings/webhook-captures?tool=${encodeURIComponent(tool)}&limit=5`)).captures||[];}catch(e){}
+  const hint=INT_TOOL_HINTS.find(t=>t.key===tool);
+  openModal(`${hint?hint.icon+" "+hint.name:tool} — captured payloads`,
+    captures.length?captures.map(c=>`
+      <div style="margin-bottom:14px">
+        <div class="muted" style="font-size:11px;margin-bottom:4px">${esc(c.method)} · ${fmtDate(c.received_at)}</div>
+        <pre style="background:var(--panel-2);border:1px solid var(--hair);border-radius:8px;padding:10px;font-size:11px;overflow:auto;max-height:260px">${esc(JSON.stringify(c.body ?? c.raw_body,null,2))}</pre>
+      </div>`).join("")
+      :`<div class="empty">No captures yet.</div>`,
+    `<button class="btn" onclick="closeModal()">Close</button>`);
 }
 async function renderLeadWebhooksList(hooks){
   $("#lw-list").innerHTML=hooks.length?hooks.map(h=>{
