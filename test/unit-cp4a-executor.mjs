@@ -20,6 +20,7 @@ import tenantDb from '../server/db/models/tenants.js';
 import contactDb from '../server/db/models/contacts.js';
 import seqDb from '../server/db/models/sequences.js';
 import templatesDb from '../server/db/models/templates.js';
+import channelsDb from '../server/db/models/channels.js';
 
 const KEY = process.env.INTERNAL_API_KEY;
 const RUN = process.env.RUN || String(Date.now());
@@ -58,7 +59,6 @@ async function main() {
   process.env.RESEND_API_KEY = 'stub-key-not-real';
   process.env.RESEND_TIMEOUT_MS = '600';
   process.env.EMAIL_EXECUTOR_ENABLED = '1';
-  process.env.CHANNEL_SENDERS = '{"email":[{"identity":"crm@stub.test","default":true}]}';
 
   const executor = (await import('../server/lib/email-executor.js')).default
     || await import('../server/lib/email-executor.js');
@@ -67,6 +67,11 @@ async function main() {
   await db.initDatabase();
   await tenantDb.create({ id: CO, name: CO, slug: CO });
   await tenantDb.create({ id: CO2, name: CO2, slug: CO2 });
+  // The connected identity is per-tenant, DB-backed (channel_senders — the
+  // SAME table SMS/WhatsApp/LinkedIn already use), resolved via preflight()
+  // each tick, not a single global CHANNEL_SENDERS env var. CO2 deliberately
+  // gets NO sender, so the multi-tenant check below has a real refusal to see.
+  await channelsDb.addSender(CO, { channel: 'email', provider: 'resend', identifier: 'crm@stub.test', is_default: true });
 
   const jobsFor = async (enrId) => (await db.query('SELECT * FROM scheduled_actions WHERE enrollment_id=$1 ORDER BY created_at', [enrId])).rows;
   const jobRow = async (id) => (await db.query('SELECT * FROM scheduled_actions WHERE id=$1', [id])).rows[0];
@@ -99,31 +104,35 @@ async function main() {
   check('X1 the send-attempt columns exist', cols.length === 5, JSON.stringify(cols.map(c=>c.column_name)));
 
   // ── X2 — the boot gate (HIGH-5) ───────────────────────────────────────────
+  // The SYNC bootGate() is now only the global "is anything configured at
+  // all" check (enabled flag + provider key) — the per-tenant sender answer
+  // moved to preflight(), resolved inside tick() per company, exactly like
+  // Twilio/LinkedIn already work. So the sender-specific cases below assert
+  // against tick()'s `blocked` field instead of the sync bootGate().
   process.env.EMAIL_EXECUTOR_ENABLED = '0';
   check('X2 disabled by default-ish: EMAIL_EXECUTOR_ENABLED!=1 blocks sending', !!exec.bootGate());
   process.env.EMAIL_EXECUTOR_ENABLED = '1';
-  process.env.CHANNEL_SENDERS = '{"email":[{"identity":"crm@stub.test","default":true}]}';
   const realKey = process.env.RESEND_API_KEY;
   delete process.env.RESEND_API_KEY;
   check('X2 no provider key blocks sending', /RESEND_API_KEY/.test(exec.bootGate() || ''));
   process.env.RESEND_API_KEY = realKey;
-  // THE LADDER-SHREDDING CASE: a key present but no connected sender. Before the
-  // gate covered this, sendEmail threw 'no connected sender', the ack path
-  // consumed 3 retries, dead-lettered, and a dead-letter sets
-  // enrollments.status='exited' — TERMINAL. Enabling the executor on a
-  // misconfigured deployment killed every active ladder within minutes.
-  const savedSenders = process.env.CHANNEL_SENDERS;
-  process.env.CHANNEL_SENDERS = '{"email":[]}';
-  check('X2 a key WITHOUT a connected sender blocks sending (the ladder-shredding case)',
-    /sending address/.test(exec.bootGate() || ''), String(exec.bootGate()));
-  check('X2 …and senderFor reports none', exec.senderFor('email') === null, String(exec.senderFor('email')));
-  process.env.CHANNEL_SENDERS = '{"email":[{"identity":"crm@stub.test","default":true}]}';
-  check('X2 a malformed CHANNEL_SENDERS fails CLOSED, never open',
-    (() => { process.env.CHANNEL_SENDERS = '{not json'; const b = exec.bootGate();
-             process.env.CHANNEL_SENDERS = '{"email":[{"identity":"crm@stub.test","default":true}]}';
-             return /sending address/.test(b || ''); })());
-  check('X2 fully configured ⇒ the gate opens', exec.bootGate() === null, String(exec.bootGate()));
-  if (savedSenders === undefined) { /* keep the stub sender for the rest of the run */ }
+  check('X2 fully configured (globally) ⇒ the sync gate opens', exec.bootGate() === null, String(exec.bootGate()));
+
+  // THE LADDER-SHREDDING CASE: a key present but no connected sender for THIS
+  // tenant. Before the gate covered this, sendEmail threw 'no connected
+  // sender', the ack path consumed 3 retries, dead-lettered, and a
+  // dead-letter sets enrollments.status='exited' — TERMINAL. Enabling the
+  // executor on a misconfigured tenant killed every active ladder within
+  // minutes. CO2 has no channel_senders row at all (by construction above).
+  const noSenderTick = await exec.tick(CO2);
+  check('X2 a tenant WITHOUT a connected sender is blocked per-tick (the ladder-shredding case)',
+    noSenderTick.ok === false && /sending address/.test(noSenderTick.blocked || ''), JSON.stringify(noSenderTick));
+
+  // The multi-tenant point of this whole rewire: CO2 having no sender must
+  // never block CO, which DOES have one (added above) — a shared env var
+  // could not express this at all.
+  const senderForCO = await exec.tick(CO);
+  check('X2 …while a DIFFERENT tenant with its own sender is NOT blocked', senderForCO.blocked === undefined, JSON.stringify(senderForCO));
 
   // ── X3 — the happy path, asserting CONTENT not just status ───────────────
   stub.mode = 'ok'; stub.requests.length = 0;
@@ -349,12 +358,13 @@ async function main() {
     check('R4b …and is not quarantined, just deferred', rlRow.outcome_unknown_at === null, String(rlRow.outcome_unknown_at));
     check('R4b …with the in-flight marker released so it can go later', rlRow.send_started_at === null);
 
-    // R5 (MEDIUM) — the boot gate must not accept a hardcoded default sender.
-    const savedCS = process.env.CHANNEL_SENDERS;
-    delete process.env.CHANNEL_SENDERS;
-    check('R5 with NO CHANNEL_SENDERS configured the gate REFUSES (no sending from a default identity)',
-      /sending address/.test(exec.bootGate() || ''), String(exec.bootGate()));
-    process.env.CHANNEL_SENDERS = savedCS;
+    // R5 (MEDIUM) — a tenant with no connected sender must not fall back to
+    // some hardcoded default identity. Re-proven here (not just at X2) since
+    // this is deep enough into the run that a regression reintroducing a
+    // shared fallback would plausibly only show up under real traffic.
+    const r5 = await exec.tick(CO2);
+    check('R5 a tenant with NO connected sender still REFUSES here (no fallback to a default identity)',
+      r5.ok === false && /sending address/.test(r5.blocked || ''), JSON.stringify(r5));
 
     // R6 (MEDIUM) — crash limbo is visible to a human.
     const limbo = await mkJob({});

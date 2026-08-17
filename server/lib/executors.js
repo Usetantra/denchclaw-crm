@@ -19,6 +19,7 @@
 // from another's number until the session is banned. Business API only.
 const { makeExecutor } = require('./channel-executor');
 const resendEmail = require('./email-resend');
+const channelsDb = require('../db/models/channels');
 const { twilioCompliantProvider } = require('./twilio-compliant-provider');
 const unipile = require('./unipile-send');
 const linkedinGate = require('./linkedin-gate');
@@ -29,26 +30,30 @@ const tasksDb = require('../db/models/tasks');
 
 // Email keeps its exact boot-gate wording: CP4a's banked tests assert it, and
 // naming the real env var is what makes the refusal actionable.
+//
+// The connected identity used to come from a single global CHANNEL_SENDERS
+// env var — one sender for every tenant, which cannot be right for a
+// multi-tenant product where each company connects its own domain (migration
+// 038) and picks its own "From" addresses (Settings -> Channels -> Email,
+// server/db/models/channels.js's channel_senders table — the SAME table
+// SMS/WhatsApp/LinkedIn already use). `preflight` is how every other channel
+// here resolves a per-tenant identity per tick; email now does the same
+// instead of being the one channel still reading a shared env var.
 const emailProvider = {
   isConfigured: () => resendEmail.isConfigured(),
   configReason: 'RESEND_API_KEY is not configured',
-  senderReason: 'no explicitly configured sending address for email — set CHANNEL_SENDERS',
-  senderFor: () => {
-    // The connected identity comes from CHANNEL_SENDERS, read FRESH — a safety
-    // gate must not depend on module load order — and with NO fallback to the
-    // built-in defaults, which exist only to populate the composer's picker.
-    // An operator who configured nothing must not have real outreach go out
-    // from an address they never chose.
-    if (!process.env.CHANNEL_SENDERS) return null;
-    let table;
-    try { table = JSON.parse(process.env.CHANNEL_SENDERS); }
-    catch {
-      console.error('[CRM][email-executor] CHANNEL_SENDERS is not valid JSON — refusing to send rather than falling back to a default sender');
-      return null;
+  senderReason: 'no explicitly configured sending address for email',
+  // Global "is anything configured at all" check only (see channel-executor.js
+  // bootGate) — the real per-tenant answer is preflight() below, whose
+  // `ctx.sender` takes priority over this at send time.
+  senderFor: () => 'per-tenant (channel_senders)',
+  preflight: async (companyId) => {
+    const senders = await channelsDb.listSenders(companyId, 'email');
+    const chosen = senders.find(s => s && s.is_default) || senders[0];
+    if (!chosen || !chosen.identifier) {
+      return { blocked: 'no configured sending address for email — connect a domain and add a sending address in Settings → Channels → Email' };
     }
-    const senders = (table && table.email) || [];
-    const chosen = senders.find(s => s && s.default) || senders[0];
-    return chosen && chosen.identity ? chosen.identity : null;
+    return { sender: chosen.identifier };
   },
   send: async ({ from, to, payload, idempotencyKey }) => {
     const sent = await resendEmail.sendEmail({

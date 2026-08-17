@@ -10,6 +10,7 @@ const channels = require('../db/models/channels');
 const linkedinAccounts = require('../db/models/linkedin-accounts');
 const twilio = require('../lib/twilio');
 const resendEmail = require('../lib/email-resend');
+const companyDomainsDb = require('../db/models/company-domains');
 
 router.use(requireAuth);
 
@@ -128,11 +129,30 @@ router.get('/twilio/whatsapp-senders', async (req, res) => {
 });
 
 // POST /api/crm/channels/senders { channel, identifier, label?, country?, ... }
+//
+// Email specifically gates on domain OWNERSHIP: an address's domain must be
+// one of THIS tenant's connected domains (migration 038) with sending
+// actually verifiable — never someone else's domain, and never a domain this
+// tenant merely typed in without proving it via DNS. This is what makes
+// "every tenant shares one address" (the old CHANNEL_SENDERS-era default)
+// actually go away, rather than just becoming unused code.
 router.post('/senders', async (req, res) => {
   try {
     const companyId = getUserCompanyId(req);
     const s = req.body || {};
     if (!s.channel || !s.identifier) return res.status(400).json({ error: 'channel and identifier required' });
+    if (s.channel === 'email') {
+      const at = String(s.identifier).lastIndexOf('@');
+      const domain = at > -1 ? s.identifier.slice(at + 1).toLowerCase() : '';
+      if (!domain) return res.status(400).json({ error: 'a valid email address is required' });
+      const owned = await companyDomainsDb.getByDomain(domain);
+      if (!owned || owned.company_id !== companyId) {
+        return res.status(400).json({ error: `${domain} isn't a connected domain for this account yet — connect it above first` });
+      }
+      if (!['verified', 'partially_verified'].includes(owned.status)) {
+        return res.status(400).json({ error: `${domain} is connected but not verified yet (status: ${owned.status}) — add its DNS records and click Refresh / Verify first` });
+      }
+    }
     res.json({ sender: await channels.addSender(companyId, s) });
   } catch (e) { console.error('[Channels] addSender', e.message); res.status(500).json({ error: 'failed' }); }
 });
