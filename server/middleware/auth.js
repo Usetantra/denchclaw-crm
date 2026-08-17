@@ -286,7 +286,7 @@ async function requireAuthAsync(req, res, next) {
     // one tenant, unlike the legacy env-based keys below which are bound to
     // a SET of companies and still need the header to pick one.
     req.auth = { userId: 'internal-agent', companyId: dbCompanyId, role: 'agent' };
-    return applySessionOverride(req, res, next);
+    return next();
   }
 
   const companyId = await canonicalCompanyId(req.headers['x-company-id'] || DEFAULT_COMPANY_ID);
@@ -300,18 +300,14 @@ async function requireAuthAsync(req, res, next) {
     companyId,
     role: 'agent',
   };
-  return applySessionOverride(req, res, next);
+  return next();
 }
 
-// A real per-person session (migration 033), layered ON TOP of the key check
-// above rather than replacing it — the key remains "is this caller allowed to
-// talk to the API at all" (nginx/the dev proxy inject it server-side, a
-// browser never sees it); a session identifies WHO within that. When a valid
-// session cookie is present, its company_id and role OVERRIDE whatever the
-// key resolution above decided — a logged-in user can never act as a
-// different tenant by sending an X-Company-Id header, no matter what the key
-// itself is bound to. No session cookie (every test/automation/webhook
-// caller today) means zero behavior change from before this existed.
+// A real per-person session (migration 033) — DISABLED for now (Clerk will
+// replace this wholesale, not layer on top of it). Left defined, unused, as
+// reference for whenever that lands. When it WAS wired in, requireAuthAsync
+// called this instead of next() directly, and a valid session cookie's
+// company_id/role overrode whatever the key resolution above decided.
 async function applySessionOverride(req, res, next) {
   const token = readSessionCookie(req);
   if (!token) return next();

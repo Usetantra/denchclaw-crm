@@ -146,7 +146,9 @@ SUITES=(
   "unit-cpm3-settings|node test/unit-cpm3-settings.mjs"
   "unit-cpm4-tasks-webhooks|node test/unit-cpm4-tasks-webhooks.mjs"
   "unit-cpf38-anchored-scheduling|node test/unit-cpf38-anchored-scheduling.mjs"
-  "unit-cpg-auth|node test/unit-cpg-auth.mjs"
+  # unit-cpg-auth is disabled for now — the custom auth routes it exercises
+  # are unmounted (server/server.js) pending the Clerk migration. Re-enable
+  # this line if/when server/routes/auth.js is remounted.
   "unit-cpwf-workflows|env ACTION_EXECUTOR_ENABLED=1 node test/unit-cpwf-workflows.mjs"
 )
 

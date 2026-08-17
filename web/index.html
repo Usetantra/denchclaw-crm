@@ -52,7 +52,7 @@
   input,select,textarea{color:var(--ink);background:var(--surface);font-family:var(--sans)}
   body{margin:0;background:var(--bg);color:var(--ink);font:16px/1.6 var(--sans);-webkit-font-smoothing:antialiased}
   #app-shell{min-height:100vh;display:flex;flex-direction:column}
-  #auth-gate{min-height:100vh;display:flex;align-items:center;justify-content:center;padding:24px}
+  #auth-gate{min-height:100vh;display:none;align-items:center;justify-content:center;padding:24px}
   .auth-card{width:100%;max-width:380px;border:1px solid var(--hair);border-radius:10px;padding:32px;background:var(--surface)}
   .auth-card .brand{display:flex;align-items:baseline;gap:10px;justify-content:center;margin-bottom:4px}
   .auth-card .brand .mark{font-family:var(--serif);font-weight:400;font-style:italic;font-size:24px}
@@ -459,7 +459,7 @@
 </head>
 <body>
 <div id="auth-gate"></div>
-<div id="app-shell" style="display:none;min-height:100vh;flex-direction:column">
+<div id="app-shell" style="display:flex;min-height:100vh;flex-direction:column">
 <header>
   <div class="brand"><span class="mark">DenchClaw</span><span class="sub">CRM</span></div>
   <div style="display:flex;align-items:center;gap:14px">
@@ -774,7 +774,6 @@
     <button data-sub="tags">Tags</button>
     <button data-sub="channels">Channels</button>
     <button data-sub="integrations">Integrations</button>
-    <button data-sub="team">Team</button>
     <button data-sub="sequences">Sequences</button>
     <button data-sub="workflows">Workflows</button>
   </div>
@@ -3087,7 +3086,11 @@ function setSeqSubtab(sub){
 $("#seq-subtab").addEventListener("click",e=>{const b=e.target.closest("button[data-sub]");if(b)setSeqSubtab(b.dataset.sub);});
 
 // ── Boot ──────────────────────────────────────────────────────────────────────
-initBoardDnD();bootAuth();
+// Login gate disabled for now (Clerk will replace the custom auth entirely,
+// not layer on top of it — no point half-wiring a system about to be
+// swapped). bootAuth()/showAuthGate() are still defined below, dormant, in
+// case they're useful reference when Clerk goes in.
+initBoardDnD();load();setInterval(load,30000);
 </script>
 
 <script>
