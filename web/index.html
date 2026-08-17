@@ -476,6 +476,7 @@
   <button data-tab="companies">Companies</button>
   <button data-tab="inbox">Conversations</button>
   <button data-tab="marketing">Marketing</button>
+  <button data-tab="workflows">Workflows</button>
   <button data-tab="analytics">Analytics</button>
   <button data-tab="settings">Settings</button>
 </div></div>
@@ -775,7 +776,6 @@
     <button data-sub="channels">Channels</button>
     <button data-sub="integrations">Integrations</button>
     <button data-sub="sequences">Sequences</button>
-    <button data-sub="workflows">Workflows</button>
   </div>
   <div class="settings-content">
 
@@ -844,10 +844,20 @@
   <!-- ── Integrations ─────────────────────────────────────────────────────── -->
   <div id="settings-sub-integrations" style="display:none">
     <div class="settings-card">
-      <h3>Inbound Lead Webhooks</h3>
-      <p class="muted" style="font-size:12px;margin:2px 0 16px;line-height:1.5">Add prospects to the CRM from other tools — Zapier, Make, a website form, a custom script. Each webhook has its own URL and token; no API key needed on the sending side. Accepts <code>name</code>/<code>full_name</code>, <code>email</code>, <code>phone</code>, <code>company</code>, <code>title</code>, <code>tags</code> (array or comma-separated), <code>source</code>.</p>
+      <h3>🔌 Connected tools</h3>
+      <p class="muted" style="font-size:12px;margin:2px 0 16px;line-height:1.5">External platforms this CRM talks to. Anything that can send a webhook can feed leads in below — a connected tool here is just a lead webhook (or the inbound email address) with a name attached to it, plus a note on what tag it applies, since a tag is what a Workflow triggers on.</p>
+      <div id="int-tools-list"></div>
+    </div>
+    <div class="settings-card">
+      <h3>📥 Inbound Lead Webhooks</h3>
+      <p class="muted" style="font-size:12px;margin:2px 0 16px;line-height:1.5">Add prospects to the CRM from other tools — Zapier, Make, a website form, a webinar platform, a custom script. Each webhook has its own URL and token; no API key needed on the sending side. Accepts <code>name</code>/<code>full_name</code>, <code>email</code>, <code>phone</code>, <code>company</code>, <code>title</code>, <code>tags</code> (array or comma-separated), <code>source</code>. Give a webhook a default tag and a Settings → Workflows automation can fire the instant a lead lands.</p>
       <div id="lw-list"><div class="muted">loading…</div></div>
       <button class="btn sm primary" id="lw-add" style="margin-top:14px">+ New webhook</button>
+    </div>
+    <div class="settings-card">
+      <h3>✉️ Inbound email</h3>
+      <p class="muted" style="font-size:12px;margin:2px 0 16px;line-height:1.5">A reply landing in your connected inbox is recorded on the matching contact's conversation automatically — no per-tenant setup here, this is one server-wide connection.</p>
+      <div id="int-email-status"></div>
     </div>
   </div><!-- /settings-sub-integrations -->
 
@@ -869,19 +879,19 @@
     </div>
   </div><!-- /settings-sub-team -->
 
-  <!-- ── Workflows (GHL-style trigger -> ordered actions) ─────────────────── -->
-  <div id="settings-sub-workflows" style="display:none">
-    <div class="settings-card">
-      <h3>Workflows</h3>
-      <p class="muted" style="font-size:12px;margin:2px 0 16px;line-height:1.5">A trigger (a tag gets added, or a contact reaches a pipeline stage) followed by an ordered list of actions — send a message, add/remove a tag, change stage, create a task, or call an outbound webhook. Same engine as Sequences under the hood; this is the GHL-style way to build one.</p>
-      <div id="wf-list"><div class="muted">loading…</div></div>
-      <button class="btn sm primary" id="wf-add" style="margin-top:14px">+ New workflow</button>
-    </div>
-  </div><!-- /settings-sub-workflows -->
-
   </div><!-- /settings-content -->
   </div><!-- /settings-layout -->
   </div><!-- /view-settings -->
+
+  <!-- ── WORKFLOWS (GHL-style trigger -> ordered actions) ─────────────────── -->
+  <div id="view-workflows" style="display:none">
+    <div style="display:flex;align-items:center;gap:14px;margin-bottom:18px">
+      <h1 class="h1" style="flex:1">Workflows</h1>
+      <button class="btn primary" id="wf-add">+ New workflow</button>
+    </div>
+    <p class="muted" style="font-size:13px;margin:-10px 0 20px;max-width:720px;line-height:1.5">A trigger fires, then an ordered chain of actions runs — send a message, add/remove a tag, move a pipeline stage, create a task, wait, or call an outbound webhook. Runs on the same engine as Sequences, just framed the way GHL/HubSpot workflows are.</p>
+    <div id="wf-list"><div class="muted">loading…</div></div>
+  </div><!-- /view-workflows -->
 
 </main>
 
@@ -2599,38 +2609,83 @@ $("#team-invite-add").onclick=()=>{
 // ── Workflows (F-WF: trigger + ordered actions, built on the sequences API) ───
 const WF_ACTION_LABEL={send_email:"Send email",send_sms:"Send SMS",send_whatsapp:"Send WhatsApp",
   add_tag:"Add tag",remove_tag:"Remove tag",change_stage:"Change pipeline stage",create_task:"Create task",webhook_out:"Call webhook"};
+const WF_ACTION_ICON={send_email:"✉️",send_sms:"💬",send_whatsapp:"📱",add_tag:"🏷️",remove_tag:"🗑️",change_stage:"🔀",create_task:"✅",webhook_out:"🔗"};
+const WF_DELAY_UNITS=[{value:"minutes",label:"minutes",secs:60},{value:"hours",label:"hours",secs:3600},{value:"days",label:"days",secs:86400}];
+function wfDelayLabel(delaySeconds){
+  if(!delaySeconds)return"";
+  if(delaySeconds%86400===0)return`${delaySeconds/86400}d`;
+  if(delaySeconds%3600===0)return`${delaySeconds/3600}h`;
+  if(delaySeconds%60===0)return`${delaySeconds/60}m`;
+  return`${delaySeconds}s`;
+}
 async function loadWorkflows(){
   let seqs=[];
   try{seqs=(await get("sequences")).sequences||[];}catch(e){$("#wf-list").innerHTML=`<div class="empty">${esc(e.message)}</div>`;return;}
-  const workflows=seqs.filter(s=>s.trigger_tag||s.trigger_stage);
-  $("#wf-list").innerHTML=workflows.length?`<table><thead><tr><th>Name</th><th>Trigger</th><th>Status</th><th></th></tr></thead><tbody>${
-    workflows.map(w=>{
-      const trig=w.trigger_tag?`tag "<b>${esc(w.trigger_tag)}</b>" added`:`reaches <b>${esc(w.trigger_stage)}</b> (${esc(w.pipeline_key||"sales")})`;
-      return `<tr><td><b>${esc(w.name)}</b></td><td class="muted" style="font-size:12px">${trig}</td>
-        <td><span class="status-pill" style="background:${w.status==="active"?"var(--live-bg)":"var(--neutral-bg)"};color:${w.status==="active"?"var(--live)":"var(--neutral)"}">${esc(w.status)}</span></td>
-        <td style="text-align:right"><button class="btn sm" data-wf-toggle="${esc(w.id)}" data-status="${esc(w.status)}">${w.status==="active"?"Pause":"Activate"}</button></td></tr>`;
-    }).join("")
-  }</tbody></table>`:`<div class="empty">No workflows yet.</div>`;
+  const workflows=seqs.filter(s=>(s.trigger_tag||s.trigger_stage)&&s.status!=="archived");
+  if(!workflows.length){
+    $("#wf-list").innerHTML=`<div class="empty" style="padding:40px 20px;text-align:center">
+      <div style="font-size:32px;margin-bottom:10px">⚡</div>
+      <div style="font-weight:600;margin-bottom:4px">No workflows yet</div>
+      <div class="muted" style="font-size:13px">Build one: a trigger, then a chain of actions — send messages, tag, move stages, create tasks, or call a webhook.</div>
+    </div>`;
+    return;
+  }
+  $("#wf-list").innerHTML=`<div style="display:flex;flex-direction:column;gap:10px">${workflows.map(w=>{
+    const steps=(w.steps||[]).slice().sort((a,b)=>a.step_order-b.step_order);
+    const trigIcon=w.trigger_tag?"🏷️":"🔀";
+    const trig=w.trigger_tag?`Tag <b>${esc(w.trigger_tag)}</b> added`:`Reaches <b>${esc(nice(w.trigger_stage))}</b> <span class="muted">(${esc(w.pipeline_key||"sales")})</span>`;
+    const chain=steps.map(s=>{
+      const icon=s.channel==="action"?(WF_ACTION_ICON[s.action_type]||"⚙️"):(WF_ACTION_ICON["send_"+s.channel]||"✉️");
+      const dly=wfDelayLabel(s.delay_seconds);
+      return `<span class="ch-badge" title="${esc(s.channel==="action"?WF_ACTION_LABEL[s.action_type]||s.action_type:"Send "+s.channel)}">${dly?`⏱ ${dly} → `:""}${icon}</span>`;
+    }).join(`<span class="muted" style="margin:0 2px">→</span>`);
+    return `<div class="settings-card" style="max-width:none;margin:0;padding:16px 18px">
+      <div style="display:flex;align-items:center;gap:12px;flex-wrap:wrap">
+        <div style="flex:1;min-width:220px">
+          <div style="display:flex;align-items:center;gap:8px;margin-bottom:4px">
+            <b style="font-size:14px">${esc(w.name)}</b>
+            <span class="status-pill" style="background:${w.status==="active"?"var(--live-bg)":"var(--neutral-bg)"};color:${w.status==="active"?"var(--live)":"var(--neutral)"}">${esc(w.status)}</span>
+          </div>
+          <div class="muted" style="font-size:12px">${trigIcon} ${trig}</div>
+        </div>
+        <div style="display:flex;align-items:center;gap:2px;flex-wrap:wrap">${chain||`<span class="muted" style="font-size:12px">no actions</span>`}</div>
+        <div style="display:flex;gap:6px">
+          <button class="btn sm" data-wf-toggle="${esc(w.id)}" data-status="${esc(w.status)}">${w.status==="active"?"Pause":"Activate"}</button>
+          <button class="btn sm danger" data-wf-del="${esc(w.id)}">Delete</button>
+        </div>
+      </div>
+    </div>`;
+  }).join("")}</div>`;
   $("#wf-list").querySelectorAll("[data-wf-toggle]").forEach(b=>b.onclick=async()=>{
     const next=b.dataset.status==="active"?"paused":"active";
     try{await patch(`sequences/${b.dataset.wfToggle}`,{status:next});toast(next==="active"?"Activated":"Paused");loadWorkflows();}
     catch(e){toast(e.message,true);}
   });
+  $("#wf-list").querySelectorAll("[data-wf-del]").forEach(b=>b.onclick=()=>{
+    confirmDelete("Delete this workflow? Contacts already mid-way through keep running, but no one new will be enrolled.",async()=>{
+      await patch(`sequences/${b.dataset.wfDel}`,{status:"archived"});toast("Workflow deleted");loadWorkflows();});
+  });
 }
 $("#wf-add").onclick=async()=>{
   await ensureDealPipes();
   const pipeOpts=DEAL_PIPES.map(p=>({value:p.key,label:p.name}));
-  let tags=[];try{tags=(await get("settings/tags")).tags||[];}catch(e){}
-  const wfActions=[]; // {kind, config, delay_days}
+  const wfActions=[]; // {kind, config, delay_seconds}
 
   const renderActions=()=>{
     const list=$("#wf-actions-list");if(!list)return;
     list.innerHTML=wfActions.length?wfActions.map((a,i)=>`
-      <div class="cvrow" style="align-items:center;margin-bottom:6px;padding:8px 10px;border:1px solid var(--hair);border-radius:6px">
-        <span style="flex:1;font-size:13px"><b>${i+1}.</b> ${esc(WF_ACTION_LABEL[a.kind]||a.kind)}${a.delay_days?` <span class="muted">(wait ${a.delay_days}d first)</span>`:""}
-          <div class="muted" style="font-size:11px">${esc(JSON.stringify(a.config))}</div></span>
-        <button type="button" class="btn sm danger" data-wf-rm="${i}">Remove</button>
-      </div>`).join(""):`<div class="muted" style="font-size:12px">No actions yet — add at least one below.</div>`;
+      <div style="display:flex;align-items:flex-start;gap:10px;margin-bottom:8px">
+        <div style="width:26px;height:26px;border-radius:50%;background:var(--surface-3);display:flex;align-items:center;justify-content:center;font-size:12px;font-weight:700;flex-shrink:0;margin-top:2px">${i+1}</div>
+        <div style="flex:1;border:1px solid var(--hair);border-radius:8px;padding:10px 12px">
+          <div style="display:flex;align-items:center;gap:8px">
+            <span style="font-size:15px">${WF_ACTION_ICON[a.kind]||"⚙️"}</span>
+            <b style="font-size:13px;flex:1">${esc(WF_ACTION_LABEL[a.kind]||a.kind)}</b>
+            ${a.delay_seconds?`<span class="muted" style="font-size:11px">⏱ wait ${esc(wfDelayLabel(a.delay_seconds))} first</span>`:""}
+            <button type="button" class="btn sm danger" data-wf-rm="${i}">Remove</button>
+          </div>
+          <div class="muted" style="font-size:11px;margin-top:4px;word-break:break-word">${esc(Object.values(a.config).filter(Boolean).join(" · ")||"—")}</div>
+        </div>
+      </div>`).join(""):`<div class="muted" style="font-size:12px;padding:8px 0">No actions yet — add the first one below.</div>`;
     list.querySelectorAll("[data-wf-rm]").forEach(b=>b.onclick=()=>{wfActions.splice(+b.dataset.wfRm,1);renderActions();});
   };
 
@@ -2646,17 +2701,25 @@ $("#wf-add").onclick=async()=>{
 
   openModal("New workflow",
     field("Name","name",{placeholder:"e.g. Welcome new leads"})+
-    field("Trigger","trigger_type",{type:"select",value:"tag",options:[{value:"tag",label:"Tag added"},{value:"stage",label:"Pipeline stage reached"}]})+
+    field("Trigger","trigger_type",{type:"select",value:"tag",options:[{value:"tag",label:"🏷️ Tag added"},{value:"stage",label:"🔀 Pipeline stage reached"}]})+
     `<div id="wf-trigger-tag">${field("Tag","trigger_tag_value",{placeholder:"e.g. lead_in"})}</div>
      <div id="wf-trigger-stage" style="display:none">
        <div class="cvrow">${field("Pipeline","trigger_pipeline",{type:"select",options:pipeOpts})}<div class="field"><label>Stage key</label><input name="trigger_stage_value" placeholder="e.g. accepted"></div></div>
      </div>
-     <div class="sechead" style="margin:16px 0 8px"><span class="eyebrow">Actions (run in order)</span><span class="rule"></span></div>
+     <div class="sechead" style="margin:16px 0 8px"><span class="eyebrow">Actions — run in order</span><span class="rule"></span></div>
      <div id="wf-actions-list"></div>
-     <div style="border:1px dashed var(--hair);border-radius:6px;padding:10px;margin-top:8px">
-       <div class="cvrow">${field("Add action","new_action_kind",{type:"select",options:Object.entries(WF_ACTION_LABEL).map(([value,label])=>({value,label}))})}${field("Wait first (days, optional)","new_action_delay",{type:"number",value:0})}</div>
+     <div style="border:1px dashed var(--hair);border-radius:8px;padding:12px">
+       <div class="muted" style="font-size:11px;text-transform:uppercase;letter-spacing:.04em;margin-bottom:8px">+ Add an action</div>
+       <div class="cvrow">${field("Action","new_action_kind",{type:"select",options:Object.entries(WF_ACTION_LABEL).map(([value,label])=>({value,label:(WF_ACTION_ICON[value]||"")+" "+label}))})}
+         <div class="field"><label>Wait first (optional)</label>
+           <div style="display:flex;gap:6px">
+             <input name="new_action_delay_value" type="number" min="0" value="0" style="width:80px">
+             <select name="new_action_delay_unit">${WF_DELAY_UNITS.map(u=>`<option value="${u.value}">${u.label}</option>`).join("")}</select>
+           </div>
+         </div>
+       </div>
        <div id="wf-action-config">${actionFormFor("send_email")}</div>
-       <button type="button" class="btn sm" id="wf-action-add" style="margin-top:8px">+ Add this action</button>
+       <button type="button" class="btn sm primary" id="wf-action-add" style="margin-top:8px">+ Add this action</button>
      </div>`,
     `<button class="btn" onclick="closeModal()">Cancel</button><button class="btn primary" id="save-wf">Create workflow</button>`);
   renderActions();
@@ -2668,7 +2731,9 @@ $("#wf-add").onclick=async()=>{
   $("[name=new_action_kind]").onchange=e=>{$("#wf-action-config").innerHTML=actionFormFor(e.target.value);};
   $("#wf-action-add").onclick=()=>{
     const kind=$("[name=new_action_kind]").value;
-    const delay=parseFloat($("[name=new_action_delay]").value)||0;
+    const delayVal=parseFloat($("[name=new_action_delay_value]").value)||0;
+    const delayUnit=$("[name=new_action_delay_unit]").value;
+    const unitSecs=(WF_DELAY_UNITS.find(u=>u.value===delayUnit)||{secs:1}).secs;
     const g=n=>{const el=$(`[name=${n}]`);return el?el.value.trim():"";};
     let config={};
     if(kind==="send_email")config={subject:g("a_subject"),body:g("a_body")};
@@ -2677,12 +2742,12 @@ $("#wf-add").onclick=async()=>{
     else if(kind==="change_stage")config={pipeline_key:g("a_pipeline"),stage:g("a_stage")};
     else if(kind==="create_task")config={title:g("a_title"),due_in_days:parseFloat(g("a_due_days"))||1};
     else if(kind==="webhook_out")config={url:g("a_url")};
-    wfActions.push({kind,config,delay_days:delay});
+    wfActions.push({kind,config,delay_seconds:Math.round(delayVal*unitSecs)});
     renderActions();
     // Reset the add-action mini-form so the next action doesn't silently
     // inherit this one's delay or field values (a delay especially is easy
     // to not notice carried over — it changes WHEN the next action runs).
-    $("[name=new_action_delay]").value="0";
+    $("[name=new_action_delay_value]").value="0";
     $("[name=new_action_kind]").value="send_email";
     $("#wf-action-config").innerHTML=actionFormFor("send_email");
   };
@@ -2707,7 +2772,7 @@ $("#wf-add").onclick=async()=>{
       const seq=await post("sequences",body);
       for(let i=0;i<wfActions.length;i++){
         const a=wfActions[i];
-        const step={step_order:i+1,delay_seconds:Math.round((a.delay_days||0)*86400)};
+        const step={step_order:i+1,delay_seconds:a.delay_seconds||0};
         if(a.kind==="send_email"){step.channel="email";step.subject=a.config.subject||"";step.body=a.config.body||"";}
         else if(a.kind==="send_sms"){step.channel="sms";step.body=a.config.body||"";}
         else if(a.kind==="send_whatsapp"){step.channel="whatsapp";step.body=a.config.body||"";}
@@ -2733,7 +2798,7 @@ document.querySelector(".settings-content").appendChild($("#view-sequences"));
 function setSettingsSubtab(sub){
   _settingsSubtab=sub;
   $$("#settings-subtab button").forEach(b=>b.classList.toggle("active",b.dataset.sub===sub));
-  ["profile","fields","tags","channels","integrations","team","workflows"].forEach(s=>{
+  ["profile","fields","tags","channels","integrations","team"].forEach(s=>{
     const el=$(`#settings-sub-${s}`);if(el)el.style.display=s===sub?"":"none";
   });
   $("#view-sequences").style.display=sub==="sequences"?"":"none";
@@ -2744,7 +2809,6 @@ function setSettingsSubtab(sub){
   if(sub==="channels")loadChannelsSettings();
   if(sub==="integrations")loadLeadWebhooks();
   if(sub==="team")loadTeamSettings();
-  if(sub==="workflows")loadWorkflows();
 }
 $("#settings-subtab").addEventListener("click",e=>{const b=e.target.closest("button[data-sub]");if(b)setSettingsSubtab(b.dataset.sub);});
 
@@ -2844,10 +2908,48 @@ async function loadTagsSettings(){
 }
 
 // ── Integrations — inbound lead webhooks ──────────────────────────────────────
+// ── Connected tools + inbound email status (Integrations panel) ───────────────
+// "Connected tools" isn't a separate credential store — WebinarGeek, Zoom,
+// Instantly, an outreach engine like Tantra, all just POST to a lead webhook
+// (or the inbound email address) the same as Zapier would. This section
+// exists so an operator sees at a glance WHICH webhook is "the WebinarGeek
+// one" without opening each one to read its label, and so a tool that hasn't
+// been wired up yet still shows as a visible next step, not a silent gap.
+const INT_TOOL_HINTS=[
+  {match:/tantra/i,icon:"📡",note:"Omnichannel outreach — connects once its webhook payload shape is confirmed."},
+  {match:/webinargeek/i,icon:"🎥",note:"Point its registration webhook at a lead webhook below with a tag like webinar_lead."},
+  {match:/zoom/i,icon:"🎦",note:"Point its Zoom Webinars registrant webhook at a lead webhook below."},
+  {match:/instantly/i,icon:"📧",note:"Point its reply/interested webhook at a lead webhook below."},
+];
 async function loadLeadWebhooks(){
   let hooks=[];
-  try{hooks=(await get("settings/lead-webhooks")).webhooks||[];}
-  catch(e){$("#lw-list").innerHTML=`<div class="empty">${esc(e.message)}</div>`;return;}
+  try{hooks=(await get("settings/lead-webhooks")).webhooks||[];}catch(e){}
+  const matched=INT_TOOL_HINTS.map(t=>({...t,hook:hooks.find(h=>t.match.test(h.label||""))}));
+  $("#int-tools-list").innerHTML=`<div style="display:flex;flex-direction:column;gap:8px">${matched.map(t=>`
+    <div style="display:flex;align-items:center;gap:10px;padding:10px 12px;border:1px solid var(--hair);border-radius:8px">
+      <span style="font-size:18px">${t.icon}</span>
+      <div style="flex:1">
+        <div style="font-size:13px;font-weight:600">${esc(t.match.source.replace(/[^a-z]/gi,""))}</div>
+        <div class="muted" style="font-size:11px">${esc(t.note)}</div>
+      </div>
+      ${t.hook?`<span class="status-pill" style="background:var(--live-bg);color:var(--live)">connected</span>`
+        :`<span class="status-pill" style="background:var(--neutral-bg);color:var(--neutral)">not set up</span>`}
+    </div>`).join("")}
+    <div class="muted" style="font-size:11px;margin-top:2px">Any other tool that can send a webhook (or email) works the same way — it doesn't need to be on this list.</div>
+  </div>`;
+
+  try{
+    const st=await get("settings/inbound-email-status");
+    $("#int-email-status").innerHTML=st.configured
+      ?`<div><span class="li-ok">✓ Configured</span> — a provider (Resend inbound, Cloudflare Email Routing, etc.) POSTs here:</div>
+         <div class="field" style="margin-top:8px"><input readonly value="${esc(st.path)}" onclick="this.select()"></div>
+         <div class="muted" style="font-size:11px;margin-top:4px">Header <code>${esc(st.header)}</code> must match <code>INBOUND_WEBHOOK_SECRET</code> in the server's environment. The domain receiving inbound mail also needs its own MX record + a route configured in that provider's dashboard — this only covers the CRM's side.</div>`
+      :`<span class="li-warn">Not configured.</span> Set <code>INBOUND_WEBHOOK_SECRET</code> in the server's environment to enable ${esc(st.path)}.`;
+  }catch(e){$("#int-email-status").innerHTML=`<div class="empty">${esc(e.message)}</div>`;}
+
+  await renderLeadWebhooksList(hooks);
+}
+async function renderLeadWebhooksList(hooks){
   $("#lw-list").innerHTML=hooks.length?hooks.map(h=>{
     const url=`${location.origin}/webhooks/leads/${h.token}`;
     return `<div class="settings-card" style="max-width:none;margin-bottom:12px;padding:14px 16px">
@@ -3045,7 +3147,7 @@ async function templateVersions(t){
 // ── Tab switching ─────────────────────────────────────────────────────────────
 function setTab(tab){
   document.querySelectorAll(".tabbar button").forEach(b=>b.classList.toggle("active",b.dataset.tab===tab));
-  ["dashboard","board","contacts","companies","inbox","marketing","analytics","settings"].forEach(v=>{
+  ["dashboard","board","contacts","companies","inbox","marketing","workflows","analytics","settings"].forEach(v=>{
     const el=$(`#view-${v}`);if(el)el.style.display=v===tab?"":"none";
   });
   // Every tab refetches on entry so numbers are always live (get() is no-store).
@@ -3057,6 +3159,7 @@ function setTab(tab){
   if(tab==="companies")loadCompanies();
   if(tab==="board")setBoardSubtab(_boardSubtab);
   if(tab==="marketing")loadMarketingTab();
+  if(tab==="workflows")loadWorkflows();
   if(tab==="settings")setSettingsSubtab(_settingsSubtab);
 }
 $(".tabbar").addEventListener("click",e=>{const b=e.target.closest("button[data-tab]");if(!b)return;setTab(b.dataset.tab);});

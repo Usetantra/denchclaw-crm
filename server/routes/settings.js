@@ -190,4 +190,17 @@ router.delete('/lead-webhooks/:id', async (req, res) => {
   }
 });
 
+// GET /api/crm/settings/inbound-email-status — is the server-wide inbound
+// email webhook configured? Never returns the secret itself (it's one
+// server-wide value from INBOUND_WEBHOOK_SECRET, not a per-tenant credential
+// worth round-tripping through an API response) — just enough for the
+// Integrations panel to say "set up" vs "needs INBOUND_WEBHOOK_SECRET".
+router.get('/inbound-email-status', (req, res) => {
+  res.json({
+    configured: !!process.env.INBOUND_WEBHOOK_SECRET,
+    path: '/webhooks/email/inbound',
+    header: 'x-webhook-secret',
+  });
+});
+
 module.exports = router;
