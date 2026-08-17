@@ -474,7 +474,6 @@
   <button data-tab="board">Opportunities</button>
   <button data-tab="contacts">Contacts</button>
   <button data-tab="companies">Companies</button>
-  <button data-tab="sequences">Sequences</button>
   <button data-tab="inbox">Conversations</button>
   <button data-tab="marketing">Marketing</button>
   <button data-tab="analytics">Analytics</button>
@@ -776,6 +775,7 @@
     <button data-sub="channels">Channels</button>
     <button data-sub="integrations">Integrations</button>
     <button data-sub="team">Team</button>
+    <button data-sub="sequences">Sequences</button>
   </div>
   <div class="settings-content">
 
@@ -2482,7 +2482,7 @@ async function loadChannelsSettings(){
     openModal("Connect LinkedIn account",
       field("Unipile account id","account_id",{placeholder:"obtained from Unipile's hosted login flow"})+
       field("Display name (optional)","display_name",{placeholder:"e.g. Priya — Growth"})+
-      field("Timezone","timezone",{value:"Asia/Kolkata"})+
+      field("Timezone","timezone",{type:"select",value:DEFAULT_TZ(),options:TZ_OPTIONS()})+
       `<label style="display:flex;gap:8px;align-items:flex-start;margin-top:10px;font-size:12px;line-height:1.5">
         <input type="checkbox" id="li-confirm-new" style="margin-top:3px">
         <span>I've confirmed the separate outreach engine's LinkedIn dispatch is <b>OFF</b> for this account. Required — two systems sending on the same connected account silently blow through every cap below, since neither can see the other's sends.</span>
@@ -2589,12 +2589,23 @@ $("#team-invite-add").onclick=()=>{
 
 // ── Settings sub-tabs ────────────────────────────────────────────────────────
 let _settingsSubtab="profile";
+// Sequences moved under Settings (a menu item, not a separate top-level tab)
+// — relocate its view into .settings-content ONCE so it shares the same
+// persistent left nav every other panel here does, rather than hiding that
+// nav entirely to show a sibling view (which was the bug: the nav lives
+// INSIDE #view-settings, so hiding that to show Sequences also hid the way
+// back to every other settings panel). No change to Sequences' own markup —
+// only where its container node lives in the DOM.
+document.querySelector(".settings-content").appendChild($("#view-sequences"));
+
 function setSettingsSubtab(sub){
   _settingsSubtab=sub;
   $$("#settings-subtab button").forEach(b=>b.classList.toggle("active",b.dataset.sub===sub));
   ["profile","fields","tags","channels","integrations","team"].forEach(s=>{
     const el=$(`#settings-sub-${s}`);if(el)el.style.display=s===sub?"":"none";
   });
+  $("#view-sequences").style.display=sub==="sequences"?"":"none";
+  if(sub==="sequences"){setSeqSubtab(_seqSubtab);return;}
   if(sub==="profile")loadBusinessProfile();
   if(sub==="fields")loadCustomFields();
   if(sub==="tags")loadTagsSettings();
@@ -2613,7 +2624,7 @@ async function loadBusinessProfile(){
   $("#bp-form").innerHTML=
     `<div class="cvrow">${field("Business name","name",{value:p.name||""})}${field("Industry","industry",{value:p.industry||""})}</div>
      <div class="cvrow">${field("Website","website",{value:p.website||"",placeholder:"https://…"})}${field("Phone","phone",{value:p.phone||""})}</div>
-     <div class="cvrow">${field("Timezone","timezone",{value:p.timezone||"",placeholder:"e.g. Asia/Kolkata"})}${field("Currency","currency",{value:p.currency||"USD",placeholder:"USD"})}</div>
+     <div class="cvrow">${field("Timezone","timezone",{type:"select",value:p.timezone||DEFAULT_TZ(),options:TZ_OPTIONS()})}${field("Currency","currency",{value:p.currency||"USD",placeholder:"USD"})}</div>
      <div class="cvrow">${field("City","city",{value:a.city||""})}${field("Country","country",{value:a.country||""})}</div>
      <div class="cvf"><label>Street address</label><input id="bp-street" value="${esc(a.street||"")}"></div>
      <button class="btn sm primary" id="bp-save" style="margin-top:12px">Save profile</button>`;
@@ -2901,7 +2912,7 @@ async function templateVersions(t){
 // ── Tab switching ─────────────────────────────────────────────────────────────
 function setTab(tab){
   document.querySelectorAll(".tabbar button").forEach(b=>b.classList.toggle("active",b.dataset.tab===tab));
-  ["dashboard","board","contacts","companies","sequences","inbox","marketing","analytics","settings"].forEach(v=>{
+  ["dashboard","board","contacts","companies","inbox","marketing","analytics","settings"].forEach(v=>{
     const el=$(`#view-${v}`);if(el)el.style.display=v===tab?"":"none";
   });
   // Every tab refetches on entry so numbers are always live (get() is no-store).
@@ -2912,7 +2923,6 @@ function setTab(tab){
   if(tab==="contacts")loadContacts();
   if(tab==="companies")loadCompanies();
   if(tab==="board")setBoardSubtab(_boardSubtab);
-  if(tab==="sequences")setSeqSubtab(_seqSubtab);
   if(tab==="marketing")loadMarketingTab();
   if(tab==="settings")setSettingsSubtab(_settingsSubtab);
 }
@@ -2986,6 +2996,23 @@ document.addEventListener("click",e=>{
 document.addEventListener("keydown",e=>{if(e.key==="Escape")closeRowMenu();});
 $("#modal-x").onclick=closeModal;
 $("#modal").addEventListener("click",e=>{if(e.target.id==="modal")closeModal();});
+// Real IANA zones from the browser itself (Intl.supportedValuesOf), so the
+// list is always accurate and never a hand-maintained subset going stale.
+// Falls back to a short hand-picked list on a browser too old to support it.
+let _TZ_CACHE=null;
+function TZ_OPTIONS(){
+  if(_TZ_CACHE)return _TZ_CACHE;
+  try{_TZ_CACHE=Intl.supportedValuesOf("timeZone").map(z=>({value:z,label:z.replace(/_/g," ")}));}
+  catch(e){_TZ_CACHE=["UTC","Asia/Calcutta","America/New_York","America/Los_Angeles","America/Chicago","Europe/London","Europe/Berlin","Asia/Dubai","Asia/Singapore","Australia/Sydney"].map(z=>({value:z,label:z.replace(/_/g," ")}));}
+  return _TZ_CACHE;
+}
+// The browser's own zone is guaranteed to be one Intl actually supports —
+// safer than hardcoding a specific IANA string, since which name is
+// "canonical" for a given city has shifted across ICU versions (e.g. some
+// only expose Asia/Calcutta, not the Asia/Kolkata alias) and a default that
+// isn't literally in the <select>'s option list silently falls back to
+// whatever sorts first, which is wrong in a way that's easy not to notice.
+function DEFAULT_TZ(){try{return Intl.DateTimeFormat().resolvedOptions().timeZone||"UTC";}catch(e){return "UTC";}}
 function field(label,name,opts={}){
   const val=opts.value!=null?esc(opts.value):"";
   if(opts.type==="select"){
