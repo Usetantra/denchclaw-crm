@@ -86,6 +86,22 @@
   .err-banner{display:none;border:1px solid var(--hot);background:var(--hot-bg);color:var(--hot);
               padding:12px 16px;border-radius:var(--radius);margin-bottom:22px;font-size:14px}
   .layout{display:grid;grid-template-columns:1fr 372px;gap:28px;align-items:start}
+
+  /* ── Workflow builder — a full page, not a modal ─────────────────────── */
+  .wf-name-input{font-family:var(--serif);font-weight:300;font-size:22px;border:none;background:none;outline:none;color:var(--ink);
+    border-bottom:1px solid transparent;padding:2px 0;flex:0 1 480px;min-width:260px}
+  .wf-name-input:hover,.wf-name-input:focus{border-bottom-color:var(--hair)}
+  .wf-builder-grid{display:grid;grid-template-columns:340px 1fr;gap:24px;align-items:start}
+  @media(max-width:900px){.wf-builder-grid{grid-template-columns:1fr}}
+  .wf-builder-col{position:sticky;top:calc(var(--nav-h) + 20px)}
+  .wf-steps-col{position:static}
+  .wf-trigger-card select,.wf-trigger-card input{width:100%}
+  .wf-step-card{border:1px solid var(--hair);border-radius:8px;padding:12px 14px;margin-bottom:0}
+  .wf-step-node{display:flex;align-items:flex-start;gap:10px;margin-bottom:4px}
+  .wf-step-num{width:26px;height:26px;border-radius:50%;background:var(--surface-3);display:flex;align-items:center;
+    justify-content:center;font-size:12px;font-weight:700;flex-shrink:0;margin-top:2px}
+  .wf-step-connector{width:1px;flex:1;background:var(--hair);margin:2px 0 2px 13px;min-height:16px}
+  .wf-add-step-card{border:1px dashed var(--hair);border-radius:8px;padding:14px;margin-top:14px}
   @media(max-width:920px){.layout{grid-template-columns:1fr}}
 
   .sechead{display:flex;align-items:center;gap:14px;margin:30px 0 14px}
@@ -885,12 +901,68 @@
 
   <!-- ── WORKFLOWS (GHL-style trigger -> ordered actions) ─────────────────── -->
   <div id="view-workflows" style="display:none">
+
+  <!-- ── list mode ─────────────────────────────────────────────────────── -->
+  <div id="wf-list-panel">
     <div style="display:flex;align-items:center;gap:14px;margin-bottom:18px">
       <h1 class="h1" style="flex:1">Workflows</h1>
       <button class="btn primary" id="wf-add">+ New workflow</button>
     </div>
     <p class="muted" style="font-size:13px;margin:-10px 0 20px;max-width:720px;line-height:1.5">A trigger fires, then an ordered chain of actions runs — send a message, add/remove a tag, move a pipeline stage, create a task, wait, or call an outbound webhook. Runs on the same engine as Sequences, just framed the way GHL/HubSpot workflows are.</p>
     <div id="wf-list"><div class="muted">loading…</div></div>
+  </div><!-- /wf-list-panel -->
+
+  <!-- ── builder mode — a real page, not a modal ──────────────────────────── -->
+  <div id="wf-builder-panel" class="wf-builder" style="display:none">
+    <div style="display:flex;align-items:center;gap:14px;margin-bottom:18px">
+      <button class="btn sm" id="wf-back">← Back to Workflows</button>
+      <input id="wf-b-name" class="wf-name-input" placeholder="Untitled workflow">
+      <span class="spacer" style="flex:1"></span>
+      <button class="btn primary" id="wf-b-save">Save workflow</button>
+    </div>
+    <div class="wf-builder-grid">
+      <div class="wf-builder-col wf-trigger-col">
+        <div class="eyebrow" style="margin-bottom:10px">Trigger</div>
+        <div class="settings-card wf-trigger-card" style="max-width:none;margin:0">
+          <label style="display:block;font-size:11px;font-weight:600;letter-spacing:.04em;text-transform:uppercase;color:var(--ink-4);margin-bottom:6px">This workflow starts when…</label>
+          <select id="wf-b-trigger-type" style="width:100%;margin-bottom:14px">
+            <option value="tag">🏷️ A tag is added</option>
+            <option value="stage">🔀 A contact reaches a pipeline stage</option>
+          </select>
+          <div id="wf-b-trigger-tag">
+            <label style="display:block;font-size:11px;color:var(--ink-4);margin-bottom:4px">Tag</label>
+            <input id="wf-b-trigger-tag-value" placeholder="e.g. lead_in" style="width:100%">
+            <p class="muted" style="font-size:11px;margin-top:8px;line-height:1.5">Any tool — a lead webhook, a manual tag, another workflow's "Add tag" action — that applies this tag fires this workflow.</p>
+          </div>
+          <div id="wf-b-trigger-stage" style="display:none">
+            <label style="display:block;font-size:11px;color:var(--ink-4);margin-bottom:4px">Pipeline</label>
+            <select id="wf-b-trigger-pipeline" style="width:100%;margin-bottom:10px"></select>
+            <label style="display:block;font-size:11px;color:var(--ink-4);margin-bottom:4px">Stage key</label>
+            <input id="wf-b-trigger-stage-value" placeholder="e.g. accepted" style="width:100%">
+          </div>
+        </div>
+      </div>
+      <div class="wf-builder-col wf-steps-col">
+        <div class="eyebrow" style="margin-bottom:10px">Then do this, in order</div>
+        <div id="wf-b-steps"></div>
+        <div class="wf-add-step-card">
+          <div class="muted" style="font-size:11px;text-transform:uppercase;letter-spacing:.04em;margin-bottom:10px">+ Add a step</div>
+          <div class="cvrow">
+            <div class="field"><label>Action</label><select id="wf-b-new-kind"></select></div>
+            <div class="field"><label>Wait first (optional)</label>
+              <div style="display:flex;gap:6px">
+                <input id="wf-b-new-delay-value" type="number" min="0" value="0" style="width:80px">
+                <select id="wf-b-new-delay-unit"></select>
+              </div>
+            </div>
+          </div>
+          <div id="wf-b-new-config"></div>
+          <button type="button" class="btn sm primary" id="wf-b-add-step" style="margin-top:8px">+ Add this step</button>
+        </div>
+      </div>
+    </div>
+  </div><!-- /wf-builder-panel -->
+
   </div><!-- /view-workflows -->
 
 </main>
@@ -2666,75 +2738,72 @@ async function loadWorkflows(){
       await patch(`sequences/${b.dataset.wfDel}`,{status:"archived"});toast("Workflow deleted");loadWorkflows();});
   });
 }
-$("#wf-add").onclick=async()=>{
+// ── Workflow builder — a real page (list ⇄ builder inside #view-workflows),
+// not a modal. GHL/HubSpot shape: trigger on the left, the step chain builds
+// down the right. wfActions is the in-progress draft; nothing is written
+// until "Save workflow".
+let wfActions=[];
+function wfActionFormFor(kind,pipeOpts){
+  if(kind==="send_email")return field("Subject","a_subject",{})+field("Body","a_body",{type:"textarea"});
+  if(kind==="send_sms"||kind==="send_whatsapp")return field("Message","a_body",{type:"textarea"});
+  if(kind==="add_tag"||kind==="remove_tag")return field("Tag","a_tag",{placeholder:"e.g. customer"});
+  if(kind==="change_stage")return field("Pipeline","a_pipeline",{type:"select",options:pipeOpts})+`<div class="field"><label>Stage key</label><input name="a_stage" placeholder="e.g. qualified"></div>`;
+  if(kind==="create_task")return field("Task title","a_title",{})+field("Due in (days)","a_due_days",{type:"number",value:1});
+  if(kind==="webhook_out")return field("Webhook URL","a_url",{placeholder:"https://…"});
+  return "";
+}
+function wfRenderSteps(){
+  const list=$("#wf-b-steps");if(!list)return;
+  if(!wfActions.length){
+    list.innerHTML=`<div class="wf-add-step-card" style="border-style:solid;text-align:center;padding:28px 14px">
+      <div class="muted" style="font-size:13px">No steps yet — add the first one below.</div></div>`;
+    return;
+  }
+  list.innerHTML=wfActions.map((a,i)=>`
+    ${i>0?`<div class="wf-step-connector"></div>`:""}
+    <div class="wf-step-node">
+      <div class="wf-step-num">${i+1}</div>
+      <div class="wf-step-card" style="flex:1">
+        <div style="display:flex;align-items:center;gap:8px">
+          <span style="font-size:16px">${WF_ACTION_ICON[a.kind]||"⚙️"}</span>
+          <b style="font-size:13px;flex:1">${esc(WF_ACTION_LABEL[a.kind]||a.kind)}</b>
+          ${a.delay_seconds?`<span class="muted" style="font-size:11px">⏱ wait ${esc(wfDelayLabel(a.delay_seconds))} first</span>`:""}
+          <button type="button" class="btn sm danger" data-wf-rm="${i}">Remove</button>
+        </div>
+        <div class="muted" style="font-size:11px;margin-top:4px;word-break:break-word">${esc(Object.values(a.config).filter(Boolean).join(" · ")||"—")}</div>
+      </div>
+    </div>`).join("");
+  list.querySelectorAll("[data-wf-rm]").forEach(b=>b.onclick=()=>{wfActions.splice(+b.dataset.wfRm,1);wfRenderSteps();});
+}
+async function openWorkflowBuilder(){
   await ensureDealPipes();
   const pipeOpts=DEAL_PIPES.map(p=>({value:p.key,label:p.name}));
-  const wfActions=[]; // {kind, config, delay_seconds}
+  wfActions=[];
+  $("#wf-list-panel").style.display="none";
+  $("#wf-builder-panel").style.display="block";
+  $("#wf-b-name").value="";
+  $("#wf-b-trigger-type").value="tag";
+  $("#wf-b-trigger-tag-value").value="";
+  $("#wf-b-trigger-stage-value").value="";
+  $("#wf-b-trigger-tag").style.display="";
+  $("#wf-b-trigger-stage").style.display="none";
+  $("#wf-b-trigger-pipeline").innerHTML=pipeOpts.map(o=>`<option value="${esc(o.value)}">${esc(o.label)}</option>`).join("");
+  $("#wf-b-new-kind").innerHTML=Object.entries(WF_ACTION_LABEL).map(([value,label])=>`<option value="${esc(value)}">${esc((WF_ACTION_ICON[value]||"")+" "+label)}</option>`).join("");
+  $("#wf-b-new-delay-unit").innerHTML=WF_DELAY_UNITS.map(u=>`<option value="${u.value}">${u.label}</option>`).join("");
+  $("#wf-b-new-config").innerHTML=wfActionFormFor("send_email",pipeOpts);
+  wfRenderSteps();
 
-  const renderActions=()=>{
-    const list=$("#wf-actions-list");if(!list)return;
-    list.innerHTML=wfActions.length?wfActions.map((a,i)=>`
-      <div style="display:flex;align-items:flex-start;gap:10px;margin-bottom:8px">
-        <div style="width:26px;height:26px;border-radius:50%;background:var(--surface-3);display:flex;align-items:center;justify-content:center;font-size:12px;font-weight:700;flex-shrink:0;margin-top:2px">${i+1}</div>
-        <div style="flex:1;border:1px solid var(--hair);border-radius:8px;padding:10px 12px">
-          <div style="display:flex;align-items:center;gap:8px">
-            <span style="font-size:15px">${WF_ACTION_ICON[a.kind]||"⚙️"}</span>
-            <b style="font-size:13px;flex:1">${esc(WF_ACTION_LABEL[a.kind]||a.kind)}</b>
-            ${a.delay_seconds?`<span class="muted" style="font-size:11px">⏱ wait ${esc(wfDelayLabel(a.delay_seconds))} first</span>`:""}
-            <button type="button" class="btn sm danger" data-wf-rm="${i}">Remove</button>
-          </div>
-          <div class="muted" style="font-size:11px;margin-top:4px;word-break:break-word">${esc(Object.values(a.config).filter(Boolean).join(" · ")||"—")}</div>
-        </div>
-      </div>`).join(""):`<div class="muted" style="font-size:12px;padding:8px 0">No actions yet — add the first one below.</div>`;
-    list.querySelectorAll("[data-wf-rm]").forEach(b=>b.onclick=()=>{wfActions.splice(+b.dataset.wfRm,1);renderActions();});
+  $("#wf-b-trigger-type").onchange=e=>{
+    $("#wf-b-trigger-tag").style.display=e.target.value==="tag"?"":"none";
+    $("#wf-b-trigger-stage").style.display=e.target.value==="stage"?"":"none";
   };
-
-  const actionFormFor=kind=>{
-    if(kind==="send_email")return field("Subject","a_subject",{})+field("Body","a_body",{type:"textarea"});
-    if(kind==="send_sms"||kind==="send_whatsapp")return field("Message","a_body",{type:"textarea"});
-    if(kind==="add_tag"||kind==="remove_tag")return field("Tag","a_tag",{placeholder:"e.g. customer"});
-    if(kind==="change_stage")return field("Pipeline","a_pipeline",{type:"select",options:pipeOpts})+`<div class="field"><label>Stage key</label><input name="a_stage" placeholder="e.g. qualified"></div>`;
-    if(kind==="create_task")return field("Task title","a_title",{})+field("Due in (days)","a_due_days",{type:"number",value:1});
-    if(kind==="webhook_out")return field("Webhook URL","a_url",{placeholder:"https://…"});
-    return "";
-  };
-
-  openModal("New workflow",
-    field("Name","name",{placeholder:"e.g. Welcome new leads"})+
-    field("Trigger","trigger_type",{type:"select",value:"tag",options:[{value:"tag",label:"🏷️ Tag added"},{value:"stage",label:"🔀 Pipeline stage reached"}]})+
-    `<div id="wf-trigger-tag">${field("Tag","trigger_tag_value",{placeholder:"e.g. lead_in"})}</div>
-     <div id="wf-trigger-stage" style="display:none">
-       <div class="cvrow">${field("Pipeline","trigger_pipeline",{type:"select",options:pipeOpts})}<div class="field"><label>Stage key</label><input name="trigger_stage_value" placeholder="e.g. accepted"></div></div>
-     </div>
-     <div class="sechead" style="margin:16px 0 8px"><span class="eyebrow">Actions — run in order</span><span class="rule"></span></div>
-     <div id="wf-actions-list"></div>
-     <div style="border:1px dashed var(--hair);border-radius:8px;padding:12px">
-       <div class="muted" style="font-size:11px;text-transform:uppercase;letter-spacing:.04em;margin-bottom:8px">+ Add an action</div>
-       <div class="cvrow">${field("Action","new_action_kind",{type:"select",options:Object.entries(WF_ACTION_LABEL).map(([value,label])=>({value,label:(WF_ACTION_ICON[value]||"")+" "+label}))})}
-         <div class="field"><label>Wait first (optional)</label>
-           <div style="display:flex;gap:6px">
-             <input name="new_action_delay_value" type="number" min="0" value="0" style="width:80px">
-             <select name="new_action_delay_unit">${WF_DELAY_UNITS.map(u=>`<option value="${u.value}">${u.label}</option>`).join("")}</select>
-           </div>
-         </div>
-       </div>
-       <div id="wf-action-config">${actionFormFor("send_email")}</div>
-       <button type="button" class="btn sm primary" id="wf-action-add" style="margin-top:8px">+ Add this action</button>
-     </div>`,
-    `<button class="btn" onclick="closeModal()">Cancel</button><button class="btn primary" id="save-wf">Create workflow</button>`);
-  renderActions();
-
-  $("[name=trigger_type]").onchange=e=>{
-    $("#wf-trigger-tag").style.display=e.target.value==="tag"?"":"none";
-    $("#wf-trigger-stage").style.display=e.target.value==="stage"?"":"none";
-  };
-  $("[name=new_action_kind]").onchange=e=>{$("#wf-action-config").innerHTML=actionFormFor(e.target.value);};
-  $("#wf-action-add").onclick=()=>{
-    const kind=$("[name=new_action_kind]").value;
-    const delayVal=parseFloat($("[name=new_action_delay_value]").value)||0;
-    const delayUnit=$("[name=new_action_delay_unit]").value;
+  $("#wf-b-new-kind").onchange=e=>{$("#wf-b-new-config").innerHTML=wfActionFormFor(e.target.value,pipeOpts);};
+  $("#wf-b-add-step").onclick=()=>{
+    const kind=$("#wf-b-new-kind").value;
+    const delayVal=parseFloat($("#wf-b-new-delay-value").value)||0;
+    const delayUnit=$("#wf-b-new-delay-unit").value;
     const unitSecs=(WF_DELAY_UNITS.find(u=>u.value===delayUnit)||{secs:1}).secs;
-    const g=n=>{const el=$(`[name=${n}]`);return el?el.value.trim():"";};
+    const g=n=>{const el=$(`#wf-b-new-config [name=${n}]`);return el?el.value.trim():"";};
     let config={};
     if(kind==="send_email")config={subject:g("a_subject"),body:g("a_body")};
     else if(kind==="send_sms"||kind==="send_whatsapp")config={body:g("a_body")};
@@ -2743,31 +2812,31 @@ $("#wf-add").onclick=async()=>{
     else if(kind==="create_task")config={title:g("a_title"),due_in_days:parseFloat(g("a_due_days"))||1};
     else if(kind==="webhook_out")config={url:g("a_url")};
     wfActions.push({kind,config,delay_seconds:Math.round(delayVal*unitSecs)});
-    renderActions();
-    // Reset the add-action mini-form so the next action doesn't silently
-    // inherit this one's delay or field values (a delay especially is easy
-    // to not notice carried over — it changes WHEN the next action runs).
-    $("[name=new_action_delay_value]").value="0";
-    $("[name=new_action_kind]").value="send_email";
-    $("#wf-action-config").innerHTML=actionFormFor("send_email");
+    wfRenderSteps();
+    // Reset the add-step mini-form so the next step doesn't silently inherit
+    // this one's delay or field values (a delay especially is easy to not
+    // notice carried over — it changes WHEN the next step runs).
+    $("#wf-b-new-delay-value").value="0";
+    $("#wf-b-new-kind").value="send_email";
+    $("#wf-b-new-config").innerHTML=wfActionFormFor("send_email",pipeOpts);
   };
 
-  $("#save-wf").onclick=async()=>{
-    const v=formValues();
-    if(!v.name)return toast("Name required",true);
-    if(!wfActions.length)return toast("Add at least one action",true);
-    const triggerType=$("[name=trigger_type]").value;
-    const body={name:v.name};
+  $("#wf-b-save").onclick=async()=>{
+    const name=$("#wf-b-name").value.trim();
+    if(!name)return toast("Name the workflow first",true);
+    if(!wfActions.length)return toast("Add at least one step",true);
+    const triggerType=$("#wf-b-trigger-type").value;
+    const body={name};
     if(triggerType==="tag"){
-      const tag=$("[name=trigger_tag_value]").value.trim();
+      const tag=$("#wf-b-trigger-tag-value").value.trim();
       if(!tag)return toast("Trigger tag required",true);
       body.trigger_tag=tag;
     }else{
-      const pipeline=$("[name=trigger_pipeline]").value,stage=$("[name=trigger_stage_value]").value.trim();
+      const pipeline=$("#wf-b-trigger-pipeline").value,stage=$("#wf-b-trigger-stage-value").value.trim();
       if(!pipeline||!stage)return toast("Trigger pipeline and stage required",true);
       body.pipeline_key=pipeline;body.trigger_stage=stage;
     }
-    const btn=$("#save-wf");btn.disabled=true;btn.textContent="Creating…";
+    const btn=$("#wf-b-save");btn.disabled=true;btn.textContent="Saving…";
     try{
       const seq=await post("sequences",body);
       for(let i=0;i<wfActions.length;i++){
@@ -2779,10 +2848,17 @@ $("#wf-add").onclick=async()=>{
         else{step.channel="action";step.action_type=a.kind;step.action_config=a.config;}
         await post(`sequences/${seq.id}/steps`,step);
       }
-      closeModal();toast("Workflow created");loadWorkflows();
-    }catch(e){toast(e.message,true);btn.disabled=false;btn.textContent="Create workflow";}
+      toast("Workflow created");closeWorkflowBuilder();
+    }catch(e){toast(e.message,true);btn.disabled=false;btn.textContent="Save workflow";}
   };
-};
+}
+function closeWorkflowBuilder(){
+  $("#wf-builder-panel").style.display="none";
+  $("#wf-list-panel").style.display="";
+  loadWorkflows();
+}
+$("#wf-add").onclick=()=>openWorkflowBuilder();
+$("#wf-back").onclick=()=>closeWorkflowBuilder();
 
 // ── Settings sub-tabs ────────────────────────────────────────────────────────
 let _settingsSubtab="profile";
@@ -3159,7 +3235,7 @@ function setTab(tab){
   if(tab==="companies")loadCompanies();
   if(tab==="board")setBoardSubtab(_boardSubtab);
   if(tab==="marketing")loadMarketingTab();
-  if(tab==="workflows")loadWorkflows();
+  if(tab==="workflows"){$("#wf-builder-panel").style.display="none";$("#wf-list-panel").style.display="";loadWorkflows();}
   if(tab==="settings")setSettingsSubtab(_settingsSubtab);
 }
 $(".tabbar").addEventListener("click",e=>{const b=e.target.closest("button[data-tab]");if(!b)return;setTab(b.dataset.tab);});
