@@ -77,6 +77,7 @@ app.use('/api/crm/templates', templatesRouter);
 // to CP4a-0's sequence-content templates (message_templates), a different concept
 // entirely. Not wired into the automated channel-jobs executor; see
 // .loop/DECISIONS_PENDING.md (CP-M2) for the deferred replace-vs-coexist decision.
+app.use('/api/crm/auth', require('./routes/auth'));
 app.use('/api/crm/compliance', require('./routes/compliance'));
 app.use('/api/crm/channels', require('./routes/channels'));
 app.use('/api/crm/channel-templates', require('./routes/channel-templates'));

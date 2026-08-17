@@ -2,6 +2,8 @@
 const { v4: uuidv4 } = require('uuid');
 const tenantDb = require('../db/models/tenants');
 const apiKeysDb = require('../db/models/apiKeys');
+const usersDb = require('../db/models/users');
+const { readSessionCookie } = require('../lib/session-cookie');
 
 const INTERNAL_API_KEY = process.env.INTERNAL_API_KEY || (() => {
   const k = 'denchclaw-dev-' + uuidv4();
@@ -284,7 +286,7 @@ async function requireAuthAsync(req, res, next) {
     // one tenant, unlike the legacy env-based keys below which are bound to
     // a SET of companies and still need the header to pick one.
     req.auth = { userId: 'internal-agent', companyId: dbCompanyId, role: 'agent' };
-    return next();
+    return applySessionOverride(req, res, next);
   }
 
   const companyId = await canonicalCompanyId(req.headers['x-company-id'] || DEFAULT_COMPANY_ID);
@@ -298,6 +300,30 @@ async function requireAuthAsync(req, res, next) {
     companyId,
     role: 'agent',
   };
+  return applySessionOverride(req, res, next);
+}
+
+// A real per-person session (migration 033), layered ON TOP of the key check
+// above rather than replacing it — the key remains "is this caller allowed to
+// talk to the API at all" (nginx/the dev proxy inject it server-side, a
+// browser never sees it); a session identifies WHO within that. When a valid
+// session cookie is present, its company_id and role OVERRIDE whatever the
+// key resolution above decided — a logged-in user can never act as a
+// different tenant by sending an X-Company-Id header, no matter what the key
+// itself is bound to. No session cookie (every test/automation/webhook
+// caller today) means zero behavior change from before this existed.
+async function applySessionOverride(req, res, next) {
+  const token = readSessionCookie(req);
+  if (!token) return next();
+  try {
+    const user = await usersDb.resolveSession(token);
+    if (user) {
+      req.auth = { userId: user.id, companyId: user.company_id, role: user.role };
+      req.user = user;
+    }
+  } catch (err) {
+    console.error('[Auth] session resolution failed:', err.message);
+  }
   next();
 }
 
@@ -320,8 +346,36 @@ function requireAdmin(req, res, next) {
   });
 }
 
+// Requires an actual logged-in person (req.user, set only by a resolved
+// session — see applySessionOverride), not just a valid internal key. Every
+// server-to-server/automation caller has no session and is correctly refused
+// here — this gate is for routes a human, not a script, should be doing
+// (managing teammates, changing your own password).
+function requireUser(req, res, next) {
+  requireAuth(req, res, () => {
+    if (!req.user) return res.status(401).json({ error: 'not logged in' });
+    next();
+  });
+}
+
+// role hierarchy: owner > admin > member. `min` is the lowest role allowed.
+const ROLE_RANK = { member: 0, admin: 1, owner: 2 };
+function requireRole(min) {
+  return (req, res, next) => {
+    requireUser(req, res, () => {
+      if ((ROLE_RANK[req.user.role] ?? -1) < ROLE_RANK[min]) {
+        return res.status(403).json({ error: `requires ${min} role or higher` });
+      }
+      next();
+    });
+  };
+}
+
 // CP-M union (D2): the branch's requireAdmin survives, and the export surface is
 // the UNION of both sides — the branch's four plus main's ipAllowed/ipInCidr.
 // Nothing outside auth.js imports the CIDR helpers today, but exporting them is
 // what lets M9 probe the allowlist behaviourally instead of by reading the code.
-module.exports = { requireAuth, requireAdmin, getUserCompanyId, INTERNAL_API_KEY, ipAllowed, ipInCidr };
+module.exports = {
+  requireAuth, requireAdmin, requireUser, requireRole, getUserCompanyId,
+  INTERNAL_API_KEY, ipAllowed, ipInCidr,
+};

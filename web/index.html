@@ -50,8 +50,19 @@
      for color+background — more specific rules elsewhere (.toolbar select,
      .field input, etc.) still win by specificity; this only fills the gaps. */
   input,select,textarea{color:var(--ink);background:var(--surface);font-family:var(--sans)}
-  body{margin:0;background:var(--bg);color:var(--ink);font:16px/1.6 var(--sans);-webkit-font-smoothing:antialiased;
-       min-height:100vh;display:flex;flex-direction:column}
+  body{margin:0;background:var(--bg);color:var(--ink);font:16px/1.6 var(--sans);-webkit-font-smoothing:antialiased}
+  #app-shell{min-height:100vh;display:flex;flex-direction:column}
+  #auth-gate{min-height:100vh;display:flex;align-items:center;justify-content:center;padding:24px}
+  .auth-card{width:100%;max-width:380px;border:1px solid var(--hair);border-radius:10px;padding:32px;background:var(--surface)}
+  .auth-card .brand{display:flex;align-items:baseline;gap:10px;justify-content:center;margin-bottom:4px}
+  .auth-card .brand .mark{font-family:var(--serif);font-weight:400;font-style:italic;font-size:24px}
+  .auth-card h2{font-family:var(--serif);font-weight:300;font-size:20px;margin:18px 0 4px;text-align:center}
+  .auth-card p.muted{text-align:center;font-size:12.5px;margin:0 0 20px}
+  .auth-card .field{margin-bottom:12px}
+  .auth-card .btn.primary{width:100%;margin-top:6px}
+  .auth-switch{text-align:center;font-size:12.5px;margin-top:16px;color:var(--ink-4)}
+  .auth-switch a{color:var(--ink);cursor:pointer;text-decoration:underline}
+  .auth-err{background:var(--hot-bg);color:var(--hot);border:1px solid var(--hot);border-radius:6px;padding:8px 12px;font-size:12.5px;margin-bottom:14px;display:none}
   .eyebrow{font-size:11px;letter-spacing:.18em;text-transform:uppercase;color:var(--ink-4);font-weight:500}
 
   header{height:var(--nav-h);display:flex;align-items:center;justify-content:space-between;
@@ -447,9 +458,15 @@
 </style>
 </head>
 <body>
+<div id="auth-gate"></div>
+<div id="app-shell" style="display:none;min-height:100vh;flex-direction:column">
 <header>
   <div class="brand"><span class="mark">DenchClaw</span><span class="sub">CRM</span></div>
-  <span id="status" class="status"><span class="dot"></span><span id="statusText">Connecting</span></span>
+  <div style="display:flex;align-items:center;gap:14px">
+    <span class="muted" id="auth-whoami" style="font-size:12px;cursor:pointer"></span>
+    <button class="btn sm" id="auth-logout" style="display:none">Log out</button>
+    <span id="status" class="status"><span class="dot"></span><span id="statusText">Connecting</span></span>
+  </div>
 </header>
 
 <div class="tabbar"><div class="tabbar-inner">
@@ -758,6 +775,7 @@
     <button data-sub="tags">Tags</button>
     <button data-sub="channels">Channels</button>
     <button data-sub="integrations">Integrations</button>
+    <button data-sub="team">Team</button>
   </div>
   <div class="settings-content">
 
@@ -833,6 +851,24 @@
     </div>
   </div><!-- /settings-sub-integrations -->
 
+  <!-- ── Team ──────────────────────────────────────────────────────────────── -->
+  <div id="settings-sub-team" style="display:none">
+    <div class="settings-card">
+      <h3>Your profile</h3>
+      <div id="team-me"></div>
+    </div>
+    <div class="settings-card">
+      <h3>Team members</h3>
+      <p class="muted" style="font-size:12px;margin:2px 0 16px;line-height:1.5">People with their own login into this workspace. Owners can do anything; admins can manage members but not other admins/owners; members cannot manage the team.</p>
+      <div id="team-list"><div class="muted">loading…</div></div>
+    </div>
+    <div class="settings-card">
+      <h3>Pending invites</h3>
+      <div id="team-invites"></div>
+      <button class="btn sm primary" id="team-invite-add" style="margin-top:14px">+ Invite someone</button>
+    </div>
+  </div><!-- /settings-sub-team -->
+
   </div><!-- /settings-content -->
   </div><!-- /settings-layout -->
   </div><!-- /view-settings -->
@@ -895,6 +931,7 @@
   <span class="eyebrow">DenchClaw CRM · Tantra RevOps</span>
   <span>Live dashboard · <code>denchclaw-crm</code> on <code>127.0.0.1:3100</code> · <span id="refreshed"></span></span>
 </footer>
+</div><!-- /app-shell -->
 
 <script>
 const API=(location.pathname.replace(/\/+$/,"").replace(/\/[^/]*$/,"")||"/crm")+"/api";
@@ -935,6 +972,118 @@ async function apiFetch(method,path,body){
 }
 const post=(p,b)=>apiFetch("POST",p,b);
 const patch=(p,b)=>apiFetch("PATCH",p,b);
+
+// ── Auth gate ────────────────────────────────────────────────────────────────
+// A session cookie (server/lib/session-cookie.js) is the real login layer, on
+// top of the X-Internal-Key the dev proxy / nginx already injects — see
+// migration 033. Every fetch above sends cookies automatically (same-origin
+// default), so no changes were needed there; this just decides whether to show
+// the app or a login/register screen before anything else runs.
+let CURRENT_USER=null;
+async function bootAuth(){
+  const inviteToken=new URLSearchParams(location.search).get("invite");
+  if(inviteToken)return showAcceptInvite(inviteToken);
+  try{
+    const r=await get("auth/me");
+    CURRENT_USER=r.user;
+    showApp();
+  }catch(e){
+    showAuthGate("login");
+  }
+}
+async function showAcceptInvite(token){
+  $("#app-shell").style.display="none";
+  const gate=$("#auth-gate");
+  gate.style.display="flex";
+  let preview;
+  try{preview=await get(`auth/invite/${token}`);}
+  catch(e){
+    gate.innerHTML=`<div class="auth-card"><div class="brand"><span class="mark">DenchClaw</span></div>
+      <h2>Invite not found</h2><p class="muted">${esc(e.message)} — ask whoever invited you to send a new one.</p>
+      <div class="auth-switch"><a id="auth-switch-link">Back to login</a></div></div>`;
+    $("#auth-switch-link").onclick=()=>{history.replaceState({},"",location.pathname);showAuthGate("login");};
+    return;
+  }
+  gate.innerHTML=`
+    <div class="auth-card">
+      <div class="brand"><span class="mark">DenchClaw</span></div>
+      <h2>Join ${esc(preview.company_name)}</h2>
+      <p class="muted">You've been invited as ${esc(ROLE_LABEL[preview.role]||preview.role)} · ${esc(preview.email)}</p>
+      <div class="auth-err" id="auth-err"></div>
+      <div class="field"><label>Your name</label><input id="auth-name" placeholder="Ada Lovelace"></div>
+      <div class="field"><label>Password</label><input id="auth-password" type="password" autocomplete="new-password" placeholder="At least 8 characters"></div>
+      <button class="btn primary" id="auth-submit">Join the team</button>
+    </div>`;
+  $("#auth-submit").onclick=async()=>{
+    const name=$("#auth-name").value.trim(),password=$("#auth-password").value;
+    if(!password)return authErr("Password is required");
+    const btn=$("#auth-submit");btn.disabled=true;
+    try{
+      const r=await post("auth/accept-invite",{token,name,password});
+      CURRENT_USER=r.user;history.replaceState({},"",location.pathname);showApp();
+    }catch(e){authErr(e.message);btn.disabled=false;}
+  };
+}
+function showApp(){
+  $("#auth-gate").style.display="none";
+  $("#auth-gate").innerHTML="";
+  $("#app-shell").style.display="flex";
+  const who=$("#auth-whoami");
+  who.textContent=`${CURRENT_USER.name||CURRENT_USER.email} · ${nice(CURRENT_USER.role)}`;
+  who.onclick=()=>{setTab("settings");setSettingsSubtab("team");};
+  const lo=$("#auth-logout");lo.style.display="";
+  lo.onclick=async()=>{try{await post("auth/logout",{});}catch{}CURRENT_USER=null;location.reload();};
+  load();setInterval(load,30000);
+}
+function authErr(msg){const e=$("#auth-err");if(!e)return;e.textContent=msg;e.style.display="block";}
+function showAuthGate(mode){
+  $("#app-shell").style.display="none";
+  const gate=$("#auth-gate");
+  gate.style.display="flex";
+  if(mode==="register")gate.innerHTML=`
+      <div class="auth-card">
+        <div class="brand"><span class="mark">DenchClaw</span></div>
+        <h2>Create your agency account</h2>
+        <p class="muted">Sets you up as the owner of a brand-new workspace.</p>
+        <div class="auth-err" id="auth-err"></div>
+        <div class="field"><label>Company name</label><input id="auth-company" placeholder="Acme Growth"></div>
+        <div class="field"><label>Your name</label><input id="auth-name" placeholder="Ada Lovelace"></div>
+        <div class="field"><label>Email</label><input id="auth-email" type="email" autocomplete="username"></div>
+        <div class="field"><label>Password</label><input id="auth-password" type="password" autocomplete="new-password" placeholder="At least 8 characters"></div>
+        <button class="btn primary" id="auth-submit">Create account</button>
+        <div class="auth-switch">Already have an account? <a id="auth-switch-link">Log in</a></div>
+      </div>`;
+  else gate.innerHTML=`
+      <div class="auth-card">
+        <div class="brand"><span class="mark">DenchClaw</span></div>
+        <h2>Log in</h2>
+        <p class="muted">Welcome back — sign in to your workspace.</p>
+        <div class="auth-err" id="auth-err"></div>
+        <div class="field"><label>Email</label><input id="auth-email" type="email" autocomplete="username"></div>
+        <div class="field"><label>Password</label><input id="auth-password" type="password" autocomplete="current-password"></div>
+        <button class="btn primary" id="auth-submit">Log in</button>
+        <div class="auth-switch">New agency? <a id="auth-switch-link">Create an account</a></div>
+      </div>`;
+  $("#auth-switch-link").onclick=()=>showAuthGate(mode==="register"?"login":"register");
+  const submit=async()=>{
+    const email=$("#auth-email").value.trim(),password=$("#auth-password").value;
+    const btn=$("#auth-submit");btn.disabled=true;
+    try{
+      let r;
+      if(mode==="register"){
+        const company_name=$("#auth-company").value.trim(),name=$("#auth-name").value.trim();
+        if(!company_name||!email||!password){authErr("Company name, email and password are required");btn.disabled=false;return;}
+        r=await post("auth/register",{company_name,name,email,password});
+      }else{
+        if(!email||!password){authErr("Email and password are required");btn.disabled=false;return;}
+        r=await post("auth/login",{email,password});
+      }
+      CURRENT_USER=r.user;showApp();
+    }catch(e){authErr(e.message);btn.disabled=false;}
+  };
+  $("#auth-submit").onclick=submit;
+  gate.querySelectorAll("input").forEach(i=>i.addEventListener("keydown",e=>{if(e.key==="Enter")submit();}));
+}
 
 // ── UI helpers ───────────────────────────────────────────────────────────────
 function setStatus(ok,msg){const el=$("#status");el.className="status "+(ok?"ok":"err");$("#statusText").textContent=msg;}
@@ -2348,12 +2497,102 @@ async function loadChannelsSettings(){
   };
 }
 
+// ── Team (migration 033: real user accounts) ──────────────────────────────────
+const ROLE_LABEL={owner:"Owner",admin:"Admin",member:"Member"};
+async function loadTeamSettings(){
+  // your profile
+  $("#team-me").innerHTML=`
+    <div class="cvrow">${field("Name","team-name",{value:CURRENT_USER.name||""})}<div class="field"><label>Email</label><input value="${esc(CURRENT_USER.email)}" disabled></div></div>
+    <div class="field"><label>Role</label><input value="${esc(ROLE_LABEL[CURRENT_USER.role]||CURRENT_USER.role)}" disabled></div>
+    <button class="btn sm primary" id="team-me-save">Save name</button>
+    <div class="sechead" style="margin:20px 0 10px"><span class="eyebrow">Change password</span><span class="rule"></span></div>
+    <div class="cvrow">${field("Current password","cur-pw",{type:"password"})}${field("New password","new-pw",{type:"password"})}</div>
+    <button class="btn sm" id="team-pw-save">Update password</button>`;
+  $("[name=team-name]").value=CURRENT_USER.name||"";
+  $("#team-me-save").onclick=async()=>{
+    try{const r=await patch("auth/me",{name:$("[name=team-name]").value.trim()});CURRENT_USER=r.user;toast("Saved");loadTeamSettings();}
+    catch(e){toast(e.message,true);}
+  };
+  $("#team-pw-save").onclick=async()=>{
+    const cur=$("[name=cur-pw]").value,nw=$("[name=new-pw]").value;
+    if(!cur||!nw)return toast("Both fields required",true);
+    try{await patch("auth/me",{current_password:cur,password:nw});toast("Password updated");loadTeamSettings();}
+    catch(e){toast(e.message,true);}
+  };
+
+  const canManage=CURRENT_USER.role==="owner"||CURRENT_USER.role==="admin";
+  if(!canManage){
+    $("#team-list").innerHTML=`<div class="empty">Only owners and admins can manage the team.</div>`;
+    $("#team-invites").innerHTML="";$("#team-invite-add").style.display="none";
+    return;
+  }
+  $("#team-invite-add").style.display="";
+
+  let users=[];
+  try{users=(await get("auth/users")).users||[];}catch(e){$("#team-list").innerHTML=`<div class="empty">${esc(e.message)}</div>`;return;}
+  const canTouch=u=>u.id!==CURRENT_USER.id&&(CURRENT_USER.role==="owner"||u.role==="member");
+  $("#team-list").innerHTML=`<table><thead><tr><th>Name</th><th>Email</th><th>Role</th><th>Status</th><th></th></tr></thead><tbody>${
+    users.map(u=>`<tr>
+      <td><b>${esc(u.name||"—")}</b>${u.id===CURRENT_USER.id?` <span class="muted" style="font-size:11px">(you)</span>`:""}</td>
+      <td class="muted">${esc(u.email)}</td>
+      <td>${canTouch(u)?`<select data-role="${esc(u.id)}"><option value="member" ${u.role==="member"?"selected":""}>Member</option><option value="admin" ${u.role==="admin"?"selected":""}>Admin</option>${CURRENT_USER.role==="owner"?`<option value="owner" ${u.role==="owner"?"selected":""}>Owner</option>`:""}</select>`:esc(ROLE_LABEL[u.role]||u.role)}</td>
+      <td><span class="status-pill" style="background:${u.status==="active"?"var(--live-bg)":"var(--hot-bg)"};color:${u.status==="active"?"var(--live)":"var(--hot)"}">${esc(u.status)}</span></td>
+      <td style="text-align:right">${canTouch(u)?`
+        <button class="btn sm" data-toggle-status="${esc(u.id)}" data-cur="${esc(u.status)}">${u.status==="active"?"Suspend":"Reactivate"}</button>
+        ${CURRENT_USER.role==="owner"?`<button class="btn sm danger" data-del-user="${esc(u.id)}">Remove</button>`:""}`:""}</td>
+    </tr>`).join("")
+  }</tbody></table>`;
+  $("#team-list").querySelectorAll("[data-role]").forEach(sel=>sel.onchange=async()=>{
+    try{await patch("auth/users/"+sel.dataset.role,{role:sel.value});toast("Role updated");loadTeamSettings();}
+    catch(e){toast(e.message,true);loadTeamSettings();}
+  });
+  $("#team-list").querySelectorAll("[data-toggle-status]").forEach(b=>b.onclick=async()=>{
+    const next=b.dataset.cur==="active"?"suspended":"active";
+    try{await patch("auth/users/"+b.dataset.toggleStatus,{status:next});toast(next==="active"?"Reactivated":"Suspended");loadTeamSettings();}
+    catch(e){toast(e.message,true);}
+  });
+  $("#team-list").querySelectorAll("[data-del-user]").forEach(b=>b.onclick=()=>{
+    confirmDelete("Remove this person from the team? Their login stops working immediately.",async()=>{
+      await del("auth/users/"+b.dataset.delUser);toast("Removed");loadTeamSettings();});
+  });
+
+  let invites=[];
+  try{invites=(await get("auth/invites")).invites||[];}catch(e){}
+  const pending=invites.filter(i=>!i.accepted_at);
+  $("#team-invites").innerHTML=pending.length?`<table><thead><tr><th>Email</th><th>Role</th><th>Expires</th><th></th></tr></thead><tbody>${
+    pending.map(i=>`<tr><td>${esc(i.email)}</td><td>${esc(ROLE_LABEL[i.role]||i.role)}</td><td class="muted">${fmtDate(i.expires_at)}</td>
+      <td style="text-align:right"><button class="btn sm danger" data-revoke="${esc(i.id)}">Revoke</button></td></tr>`).join("")
+  }</tbody></table>`:`<div class="empty">No pending invites.</div>`;
+  $("#team-invites").querySelectorAll("[data-revoke]").forEach(b=>b.onclick=async()=>{
+    try{await del("auth/invites/"+b.dataset.revoke);toast("Invite revoked");loadTeamSettings();}catch(e){toast(e.message,true);}
+  });
+}
+$("#team-invite-add").onclick=()=>{
+  openModal("Invite a teammate",
+    field("Email","email",{type:"email",placeholder:"teammate@company.com"})+
+    field("Role","role",{type:"select",value:"member",options:[{value:"member",label:"Member"},{value:"admin",label:"Admin"}].concat(CURRENT_USER.role==="owner"?[{value:"owner",label:"Owner"}]:[])}),
+    `<button class="btn" onclick="closeModal()">Cancel</button><button class="btn primary" id="save-invite">Send invite</button>`);
+  $("#save-invite").onclick=async()=>{
+    const v=formValues();if(!v.email)return toast("Email required",true);
+    try{
+      const r=await post("auth/invite",{email:v.email.trim(),role:v.role||"member"});
+      closeModal();
+      toast(r.emailed?"Invite emailed":"Invite created — share the link manually");
+      if(!r.emailed)openModal("Invite link",
+        `<p class="muted" style="font-size:13px">Email isn't configured, so share this link directly:</p>
+         <div class="field"><input readonly value="${esc(location.origin+r.accept_url)}" onclick="this.select()"></div>`,
+        `<button class="btn primary" onclick="closeModal()">Done</button>`);
+      loadTeamSettings();
+    }catch(e){toast(e.message,true);}
+  };
+};
+
 // ── Settings sub-tabs ────────────────────────────────────────────────────────
 let _settingsSubtab="profile";
 function setSettingsSubtab(sub){
   _settingsSubtab=sub;
   $$("#settings-subtab button").forEach(b=>b.classList.toggle("active",b.dataset.sub===sub));
-  ["profile","fields","tags","channels","integrations"].forEach(s=>{
+  ["profile","fields","tags","channels","integrations","team"].forEach(s=>{
     const el=$(`#settings-sub-${s}`);if(el)el.style.display=s===sub?"":"none";
   });
   if(sub==="profile")loadBusinessProfile();
@@ -2361,6 +2600,7 @@ function setSettingsSubtab(sub){
   if(sub==="tags")loadTagsSettings();
   if(sub==="channels")loadChannelsSettings();
   if(sub==="integrations")loadLeadWebhooks();
+  if(sub==="team")loadTeamSettings();
 }
 $("#settings-subtab").addEventListener("click",e=>{const b=e.target.closest("button[data-sub]");if(b)setSettingsSubtab(b.dataset.sub);});
 
@@ -2703,7 +2943,7 @@ function setSeqSubtab(sub){
 $("#seq-subtab").addEventListener("click",e=>{const b=e.target.closest("button[data-sub]");if(b)setSeqSubtab(b.dataset.sub);});
 
 // ── Boot ──────────────────────────────────────────────────────────────────────
-initBoardDnD();load();setInterval(load,30000);
+initBoardDnD();bootAuth();
 </script>
 
 <script>
