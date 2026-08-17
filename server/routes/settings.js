@@ -377,4 +377,20 @@ router.get('/inbound-email-status', (req, res) => {
   });
 });
 
+// GET /api/crm/settings/marketing-webhook-status — is the public landing-page
+// / calendar-RSVP / comment ingestion configured? Same posture as
+// inbound-email-status: never returns the secret itself, just whether ANY
+// binding exists (MARKETING_WEBHOOK_SECRET or the per-tenant _SECRETS map).
+router.get('/marketing-webhook-status', (req, res) => {
+  let multiTenantCount = 0;
+  if (process.env.MARKETING_WEBHOOK_SECRETS) {
+    try { multiTenantCount = Object.keys(JSON.parse(process.env.MARKETING_WEBHOOK_SECRETS)).length; } catch (_e) {}
+  }
+  res.json({
+    configured: !!process.env.MARKETING_WEBHOOK_SECRET || multiTenantCount > 0,
+    paths: ['/webhooks/marketing/registration', '/webhooks/marketing/rsvp', '/webhooks/marketing/comment'],
+    header: 'x-marketing-secret',
+  });
+});
+
 module.exports = router;

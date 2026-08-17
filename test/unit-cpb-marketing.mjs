@@ -481,6 +481,12 @@ function bootProbe({ withSecret }) {
     INTERNAL_API_KEY: key,
     INTERNAL_API_KEYS: JSON.stringify({ [key]: '*' }),
     AUTOMATION_ENV_FILE: '/nonexistent',
+    // A real developer ./.env can (and, since MARKETING_WEBHOOK_SECRET was
+    // enabled for real, now DOES) carry its own MARKETING_WEBHOOK_SECRET —
+    // dotenv.config() would fill that into this "unconfigured" child from the
+    // real file otherwise, since it only skips vars ALREADY set, and this
+    // probe's whole point is a server that has genuinely never heard of one.
+    DOTENV_PATH: '/nonexistent',
     RESEND_API_KEY: '', CLOUDFLARE_AI_TOKEN: '',
   };
   if (withSecret) env.MARKETING_WEBHOOK_SECRET = SECRET;

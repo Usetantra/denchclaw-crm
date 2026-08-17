@@ -6,7 +6,11 @@
 const fs = require('fs');
 const path = require('path');
 const dotenv = require('dotenv');
-dotenv.config(); // local ./.env + OS env take priority
+// DOTENV_PATH lets a test spawn a server process that is DELIBERATELY blind to
+// the real ./.env (e.g. a fail-closed probe for an unconfigured secret) — same
+// convention as AUTOMATION_ENV_FILE below. Point it at /nonexistent for that;
+// dotenv.config() no-ops silently on a missing path rather than throwing.
+dotenv.config({ path: process.env.DOTENV_PATH || '.env' }); // local ./.env + OS env take priority
 const _hadDbUrl = !!process.env.DATABASE_URL;
 let _shared = process.env.AUTOMATION_ENV_FILE;
 if (!_shared || !fs.existsSync(_shared)) {

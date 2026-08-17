@@ -893,6 +893,11 @@
       <p class="muted" style="font-size:12px;margin:2px 0 16px;line-height:1.5">A reply landing in your connected inbox is recorded on the matching contact's conversation automatically — no per-tenant setup here, this is one server-wide connection.</p>
       <div id="int-email-status"></div>
     </div>
+    <div class="settings-card">
+      <h3>📢 Public marketing webhooks</h3>
+      <p class="muted" style="font-size:12px;margin:2px 0 16px;line-height:1.5">For a landing page, calendar-invite RSVP, or social-comment listener that can't hold an API key — a shared secret in the <code>x-marketing-secret</code> header instead. No per-tenant setup here either yet (one server-wide secret), this covers <code>registration</code>, <code>rsvp</code>, and <code>comment</code> events.</p>
+      <div id="int-marketing-status"></div>
+    </div>
   </div><!-- /settings-sub-integrations -->
 
   <!-- ── Team ──────────────────────────────────────────────────────────────── -->
@@ -3144,6 +3149,17 @@ async function loadLeadWebhooks(){
          <div class="muted" style="font-size:11px;margin-top:4px">Header <code>${esc(st.header)}</code> must match <code>INBOUND_WEBHOOK_SECRET</code> in the server's environment. The domain receiving inbound mail also needs its own MX record + a route configured in that provider's dashboard — this only covers the CRM's side.</div>`
       :`<span class="li-warn">Not configured.</span> Set <code>INBOUND_WEBHOOK_SECRET</code> in the server's environment to enable ${esc(st.path)}.`;
   }catch(e){$("#int-email-status").innerHTML=`<div class="empty">${esc(e.message)}</div>`;}
+
+  try{
+    const st=await get("settings/marketing-webhook-status");
+    $("#int-marketing-status").innerHTML=st.configured
+      ?`<div><span class="li-ok">✓ Configured</span> — a caller proves its tenant with the shared secret in this header:</div>
+         <div class="field" style="margin-top:8px"><input readonly value="${esc(st.header)}" onclick="this.select()"></div>
+         <div class="muted" style="font-size:11px;margin-top:8px">Endpoints:</div>
+         ${st.paths.map(p=>`<div class="field" style="margin-top:4px"><input readonly value="${esc(p)}" onclick="this.select()"></div>`).join("")}
+         <div class="muted" style="font-size:11px;margin-top:8px">The secret value itself isn't shown here — it's whatever <code>MARKETING_WEBHOOK_SECRET</code> is set to in the server's environment.</div>`
+      :`<span class="li-warn">Not configured.</span> Set <code>MARKETING_WEBHOOK_SECRET</code> in the server's environment to enable these endpoints.`;
+  }catch(e){$("#int-marketing-status").innerHTML=`<div class="empty">${esc(e.message)}</div>`;}
 
   await renderLeadWebhooksList(hooks);
 }
