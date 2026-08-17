@@ -891,7 +891,7 @@
       <div><h2 id="m-name">—</h2><div class="msub" id="m-sub"></div></div>
       <button class="mclose" id="m-close" title="Close" aria-label="Close">×</button>
     </div>
-    <div id="m-call-actions" style="display:none;gap:8px;margin-bottom:14px"></div>
+    <div id="m-call-actions" style="display:none;gap:8px;flex-wrap:wrap;margin-bottom:14px"></div>
     <div class="fgrid" id="m-fields"></div>
     <div class="sechead" style="margin:8px 0 10px"><span class="eyebrow">Tags</span><span class="rule"></span></div>
     <div id="m-tags" style="display:flex;flex-wrap:wrap;gap:6px;align-items:center;margin-bottom:18px"></div>
@@ -1161,13 +1161,12 @@ async function openContact(id){
     $("#m-name").textContent=c.name||c.email||"—";
     $("#m-sub").textContent=[c.title,c.company_name].filter(Boolean).join(" · ");
     const callActions=$("#m-call-actions");
-    if(c.phone){
-      callActions.style.display="flex";
-      callActions.innerHTML=`<a class="btn sm" href="tel:${esc(c.phone)}">📞 Call ${esc(c.phone)}</a><button class="btn sm" id="m-log-call">Log a call</button>`;
-      $("#m-log-call").onclick=()=>logCallModal(id,c.name||c.phone);
-    }else{
-      callActions.style.display="none";callActions.innerHTML="";
-    }
+    callActions.style.display="flex";
+    callActions.innerHTML=
+      (c.phone?`<a class="btn sm" href="tel:${esc(c.phone)}">📞 Call ${esc(c.phone)}</a><button class="btn sm" id="m-log-call">Log a call</button>`:"")+
+      `<button class="btn sm primary" id="m-new-opp">+ New opportunity</button>`;
+    if(c.phone)$("#m-log-call").onclick=()=>logCallModal(id,c.name||c.phone);
+    $("#m-new-opp").onclick=()=>newOpportunityModal({id:c.id,name:c.name,email:c.email,company_name:c.company_name});
     // Editable fields render as inputs; system/derived fields (stage, numeric
     // score, UTMs, dates, id) stay read-only — stage is governed by the
     // pipeline state machine, not free-edited here.
@@ -3566,35 +3565,72 @@ function renderDealBoard(def,buckets){
   }).join("")||`<div class="gempty">This pipeline has no stages.</div>`;
 }
 $("#deal-pipe-sel").addEventListener("change",e=>{selDealPipe=e.target.value;loadBoard();});
-$("#new-deal").onclick=async()=>{
+// Shared "create an opportunity" modal — used by the Opportunities board's own
+// + New button AND from a contact's drawer (previously there was no way to
+// open an opportunity against a contact except via the board, which forced
+// picking them out of a full contact list rather than the one already open).
+// presetContact, when given, skips the contact picker entirely.
+async function newOpportunityModal(presetContact,preferredPipeKey){
+  await ensureDealPipes();
+  const dealPipes=DEAL_PIPES.filter(p=>p.applies_to==="deal");
+  if(!dealPipes.length)return toast("No opportunity pipeline is configured",true);
+  let pipeKey=dealPipes.find(p=>p.key===(preferredPipeKey||selDealPipe))?.key||dealPipes[0].key;
+  const stageOptsFor=key=>{const def=dealPipes.find(p=>p.key===key);return (def?def.stages:[]).map(s=>({value:s.key,label:s.name}));};
+
+  let dealContacts=[],contactOpts=[];
+  if(!presetContact){
+    // GHL-style: an opportunity is opened against an EXISTING contact — the
+    // user picks from contacts already in the CRM (no free-typing a new
+    // person here).
+    try{const r=await get("contacts?limit=500");dealContacts=r.contacts||r.data||[];}catch(e){return toast(e.message,true);}
+    if(!dealContacts.length){
+      openModal("New opportunity",
+        `<p style="margin:4px 0 0;color:var(--ink-2)">You need a contact first. Add one in the <b>Contacts</b> tab, then create the opportunity against it.</p>`,
+        `<button class="btn" onclick="closeModal()">Close</button>`);
+      return;
+    }
+    contactOpts=[{value:"",label:"— Select a contact —"},
+      ...dealContacts.map(c=>({value:c.id,label:`${c.name||c.email||"Unnamed"}${c.company_name?" · "+c.company_name:""}${c.email?" · "+c.email:""}`}))];
+  }
+  const contactField=presetContact
+    ?`<p class="muted" style="font-size:12px;margin:0 0 10px">Contact: <b>${esc(presetContact.name||presetContact.email||"Unnamed")}</b></p>`
+    :field("Contact","contact_id",{type:"select",options:contactOpts});
+
+  openModal("New opportunity",
+    (dealPipes.length>1?field("Pipeline","pipeline_key",{type:"select",value:pipeKey,options:dealPipes.map(p=>({value:p.key,label:p.name}))}):"")+
+    contactField+
+    field("Title","title",{placeholder:"Opportunity name"})+
+    // Explicitly optional — the sales/revenue pipeline is where a real deal
+    // value usually matters, but nothing downstream requires it (the board
+    // just omits the $ total for a card/column that has none), so it should
+    // never block creating an opportunity in any pipeline.
+    field("Value ($) — optional","value",{type:"number",placeholder:"0"})+
+    field("Stage","stage",{type:"select",options:stageOptsFor(pipeKey)}),
+    `<button class="btn" onclick="closeModal()">Cancel</button><button class="btn primary" id="save-deal">Create</button>`);
+  if(dealPipes.length>1){
+    $("[name=pipeline_key]").onchange=e=>{
+      $("[name=stage]").innerHTML=stageOptsFor(e.target.value).map(o=>`<option value="${esc(o.value)}">${esc(o.label)}</option>`).join("");
+    };
+  }
+  $("#save-deal").onclick=async()=>{
+    const v=formValues();
+    const contact=presetContact||dealContacts.find(c=>c.id===v.contact_id);
+    if(!presetContact&&!v.contact_id)return toast("Select a contact for this opportunity",true);
+    if(!v.title)return toast("Title required",true);
+    const usePipe=dealPipes.length>1?v.pipeline_key:pipeKey;
+    try{
+      await post("deals",{title:v.title,value:parseFloat(v.value)||0,contact_id:contact.id,
+        contact_name:contact.name||contact.email||"",company:contact.company_name||"",stage:v.stage,pipeline_key:usePipe});
+      closeModal();toast("Opportunity created");loadBoard();
+    }catch(e){toast(e.message,true);}
+  };
+}
+$("#new-deal").onclick=()=>{
   const def=DEAL_PIPES.find(p=>p.key===selDealPipe);
   // Contact pipeline (Marketing): the "New" button adds a contact (enters at the
   // first marketing stage), not an opportunity.
   if(def&&def.applies_to==="contact"){contactModal();return;}
-  const stageOpts=(def?def.stages:[]).map(s=>({value:s.key,label:s.name}));
-  // GHL-style: an opportunity is opened against an EXISTING contact — the user
-  // picks from contacts already in the CRM (no free-typing a new person here).
-  let dealContacts=[];
-  try{const r=await get("contacts?limit=500");dealContacts=r.contacts||r.data||[];}catch(e){return toast(e.message,true);}
-  if(!dealContacts.length){
-    openModal("New opportunity",
-      `<p style="margin:4px 0 0;color:var(--ink-2)">You need a contact first. Add one in the <b>Contacts</b> tab, then create the opportunity against it.</p>`,
-      `<button class="btn" onclick="closeModal()">Close</button>`);
-    return;
-  }
-  const contactOpts=[{value:"",label:"— Select a contact —"},
-    ...dealContacts.map(c=>({value:c.id,label:`${c.name||c.email||"Unnamed"}${c.company_name?" · "+c.company_name:""}${c.email?" · "+c.email:""}`}))];
-  openModal("New opportunity",
-    field("Contact","contact_id",{type:"select",options:contactOpts})+
-    field("Title","title",{placeholder:"Opportunity name"})+field("Value ($)","value",{type:"number"})+
-    field("Stage","stage",{type:"select",options:stageOpts}),
-    `<button class="btn" onclick="closeModal()">Cancel</button><button class="btn primary" id="save-deal">Create</button>`);
-  $("#save-deal").onclick=async()=>{const v=formValues();
-    if(!v.contact_id)return toast("Select a contact for this opportunity",true);
-    if(!v.title)return toast("Title required",true);
-    const picked=dealContacts.find(c=>c.id===v.contact_id);
-    try{await post("deals",{title:v.title,value:parseFloat(v.value)||0,contact_id:v.contact_id,contact_name:picked?.name||picked?.email||"",company:picked?.company_name||"",stage:v.stage,pipeline_key:selDealPipe});closeModal();toast("Opportunity created");loadBoard();}
-    catch(e){toast(e.message,true);}};
+  newOpportunityModal(null,selDealPipe);
 };
 
 // ── Deal detail modal (click a deal card) ─────────────────────────────────────
