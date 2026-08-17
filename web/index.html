@@ -776,6 +776,7 @@
     <button data-sub="integrations">Integrations</button>
     <button data-sub="team">Team</button>
     <button data-sub="sequences">Sequences</button>
+    <button data-sub="workflows">Workflows</button>
   </div>
   <div class="settings-content">
 
@@ -868,6 +869,16 @@
       <button class="btn sm primary" id="team-invite-add" style="margin-top:14px">+ Invite someone</button>
     </div>
   </div><!-- /settings-sub-team -->
+
+  <!-- ── Workflows (GHL-style trigger -> ordered actions) ─────────────────── -->
+  <div id="settings-sub-workflows" style="display:none">
+    <div class="settings-card">
+      <h3>Workflows</h3>
+      <p class="muted" style="font-size:12px;margin:2px 0 16px;line-height:1.5">A trigger (a tag gets added, or a contact reaches a pipeline stage) followed by an ordered list of actions — send a message, add/remove a tag, change stage, create a task, or call an outbound webhook. Same engine as Sequences under the hood; this is the GHL-style way to build one.</p>
+      <div id="wf-list"><div class="muted">loading…</div></div>
+      <button class="btn sm primary" id="wf-add" style="margin-top:14px">+ New workflow</button>
+    </div>
+  </div><!-- /settings-sub-workflows -->
 
   </div><!-- /settings-content -->
   </div><!-- /settings-layout -->
@@ -2586,6 +2597,129 @@ $("#team-invite-add").onclick=()=>{
   };
 };
 
+// ── Workflows (F-WF: trigger + ordered actions, built on the sequences API) ───
+const WF_ACTION_LABEL={send_email:"Send email",send_sms:"Send SMS",send_whatsapp:"Send WhatsApp",
+  add_tag:"Add tag",remove_tag:"Remove tag",change_stage:"Change pipeline stage",create_task:"Create task",webhook_out:"Call webhook"};
+async function loadWorkflows(){
+  let seqs=[];
+  try{seqs=(await get("sequences")).sequences||[];}catch(e){$("#wf-list").innerHTML=`<div class="empty">${esc(e.message)}</div>`;return;}
+  const workflows=seqs.filter(s=>s.trigger_tag||s.trigger_stage);
+  $("#wf-list").innerHTML=workflows.length?`<table><thead><tr><th>Name</th><th>Trigger</th><th>Status</th><th></th></tr></thead><tbody>${
+    workflows.map(w=>{
+      const trig=w.trigger_tag?`tag "<b>${esc(w.trigger_tag)}</b>" added`:`reaches <b>${esc(w.trigger_stage)}</b> (${esc(w.pipeline_key||"sales")})`;
+      return `<tr><td><b>${esc(w.name)}</b></td><td class="muted" style="font-size:12px">${trig}</td>
+        <td><span class="status-pill" style="background:${w.status==="active"?"var(--live-bg)":"var(--neutral-bg)"};color:${w.status==="active"?"var(--live)":"var(--neutral)"}">${esc(w.status)}</span></td>
+        <td style="text-align:right"><button class="btn sm" data-wf-toggle="${esc(w.id)}" data-status="${esc(w.status)}">${w.status==="active"?"Pause":"Activate"}</button></td></tr>`;
+    }).join("")
+  }</tbody></table>`:`<div class="empty">No workflows yet.</div>`;
+  $("#wf-list").querySelectorAll("[data-wf-toggle]").forEach(b=>b.onclick=async()=>{
+    const next=b.dataset.status==="active"?"paused":"active";
+    try{await patch(`sequences/${b.dataset.wfToggle}`,{status:next});toast(next==="active"?"Activated":"Paused");loadWorkflows();}
+    catch(e){toast(e.message,true);}
+  });
+}
+$("#wf-add").onclick=async()=>{
+  await ensureDealPipes();
+  const pipeOpts=DEAL_PIPES.map(p=>({value:p.key,label:p.name}));
+  let tags=[];try{tags=(await get("settings/tags")).tags||[];}catch(e){}
+  const wfActions=[]; // {kind, config, delay_days}
+
+  const renderActions=()=>{
+    const list=$("#wf-actions-list");if(!list)return;
+    list.innerHTML=wfActions.length?wfActions.map((a,i)=>`
+      <div class="cvrow" style="align-items:center;margin-bottom:6px;padding:8px 10px;border:1px solid var(--hair);border-radius:6px">
+        <span style="flex:1;font-size:13px"><b>${i+1}.</b> ${esc(WF_ACTION_LABEL[a.kind]||a.kind)}${a.delay_days?` <span class="muted">(wait ${a.delay_days}d first)</span>`:""}
+          <div class="muted" style="font-size:11px">${esc(JSON.stringify(a.config))}</div></span>
+        <button type="button" class="btn sm danger" data-wf-rm="${i}">Remove</button>
+      </div>`).join(""):`<div class="muted" style="font-size:12px">No actions yet — add at least one below.</div>`;
+    list.querySelectorAll("[data-wf-rm]").forEach(b=>b.onclick=()=>{wfActions.splice(+b.dataset.wfRm,1);renderActions();});
+  };
+
+  const actionFormFor=kind=>{
+    if(kind==="send_email")return field("Subject","a_subject",{})+field("Body","a_body",{type:"textarea"});
+    if(kind==="send_sms"||kind==="send_whatsapp")return field("Message","a_body",{type:"textarea"});
+    if(kind==="add_tag"||kind==="remove_tag")return field("Tag","a_tag",{placeholder:"e.g. customer"});
+    if(kind==="change_stage")return field("Pipeline","a_pipeline",{type:"select",options:pipeOpts})+`<div class="field"><label>Stage key</label><input name="a_stage" placeholder="e.g. qualified"></div>`;
+    if(kind==="create_task")return field("Task title","a_title",{})+field("Due in (days)","a_due_days",{type:"number",value:1});
+    if(kind==="webhook_out")return field("Webhook URL","a_url",{placeholder:"https://…"});
+    return "";
+  };
+
+  openModal("New workflow",
+    field("Name","name",{placeholder:"e.g. Welcome new leads"})+
+    field("Trigger","trigger_type",{type:"select",value:"tag",options:[{value:"tag",label:"Tag added"},{value:"stage",label:"Pipeline stage reached"}]})+
+    `<div id="wf-trigger-tag">${field("Tag","trigger_tag_value",{placeholder:"e.g. lead_in"})}</div>
+     <div id="wf-trigger-stage" style="display:none">
+       <div class="cvrow">${field("Pipeline","trigger_pipeline",{type:"select",options:pipeOpts})}<div class="field"><label>Stage key</label><input name="trigger_stage_value" placeholder="e.g. accepted"></div></div>
+     </div>
+     <div class="sechead" style="margin:16px 0 8px"><span class="eyebrow">Actions (run in order)</span><span class="rule"></span></div>
+     <div id="wf-actions-list"></div>
+     <div style="border:1px dashed var(--hair);border-radius:6px;padding:10px;margin-top:8px">
+       <div class="cvrow">${field("Add action","new_action_kind",{type:"select",options:Object.entries(WF_ACTION_LABEL).map(([value,label])=>({value,label}))})}${field("Wait first (days, optional)","new_action_delay",{type:"number",value:0})}</div>
+       <div id="wf-action-config">${actionFormFor("send_email")}</div>
+       <button type="button" class="btn sm" id="wf-action-add" style="margin-top:8px">+ Add this action</button>
+     </div>`,
+    `<button class="btn" onclick="closeModal()">Cancel</button><button class="btn primary" id="save-wf">Create workflow</button>`);
+  renderActions();
+
+  $("[name=trigger_type]").onchange=e=>{
+    $("#wf-trigger-tag").style.display=e.target.value==="tag"?"":"none";
+    $("#wf-trigger-stage").style.display=e.target.value==="stage"?"":"none";
+  };
+  $("[name=new_action_kind]").onchange=e=>{$("#wf-action-config").innerHTML=actionFormFor(e.target.value);};
+  $("#wf-action-add").onclick=()=>{
+    const kind=$("[name=new_action_kind]").value;
+    const delay=parseFloat($("[name=new_action_delay]").value)||0;
+    const g=n=>{const el=$(`[name=${n}]`);return el?el.value.trim():"";};
+    let config={};
+    if(kind==="send_email")config={subject:g("a_subject"),body:g("a_body")};
+    else if(kind==="send_sms"||kind==="send_whatsapp")config={body:g("a_body")};
+    else if(kind==="add_tag"||kind==="remove_tag")config={tag:g("a_tag")};
+    else if(kind==="change_stage")config={pipeline_key:g("a_pipeline"),stage:g("a_stage")};
+    else if(kind==="create_task")config={title:g("a_title"),due_in_days:parseFloat(g("a_due_days"))||1};
+    else if(kind==="webhook_out")config={url:g("a_url")};
+    wfActions.push({kind,config,delay_days:delay});
+    renderActions();
+    // Reset the add-action mini-form so the next action doesn't silently
+    // inherit this one's delay or field values (a delay especially is easy
+    // to not notice carried over — it changes WHEN the next action runs).
+    $("[name=new_action_delay]").value="0";
+    $("[name=new_action_kind]").value="send_email";
+    $("#wf-action-config").innerHTML=actionFormFor("send_email");
+  };
+
+  $("#save-wf").onclick=async()=>{
+    const v=formValues();
+    if(!v.name)return toast("Name required",true);
+    if(!wfActions.length)return toast("Add at least one action",true);
+    const triggerType=$("[name=trigger_type]").value;
+    const body={name:v.name};
+    if(triggerType==="tag"){
+      const tag=$("[name=trigger_tag_value]").value.trim();
+      if(!tag)return toast("Trigger tag required",true);
+      body.trigger_tag=tag;
+    }else{
+      const pipeline=$("[name=trigger_pipeline]").value,stage=$("[name=trigger_stage_value]").value.trim();
+      if(!pipeline||!stage)return toast("Trigger pipeline and stage required",true);
+      body.pipeline_key=pipeline;body.trigger_stage=stage;
+    }
+    const btn=$("#save-wf");btn.disabled=true;btn.textContent="Creating…";
+    try{
+      const seq=await post("sequences",body);
+      for(let i=0;i<wfActions.length;i++){
+        const a=wfActions[i];
+        const step={step_order:i+1,delay_seconds:Math.round((a.delay_days||0)*86400)};
+        if(a.kind==="send_email"){step.channel="email";step.subject=a.config.subject||"";step.body=a.config.body||"";}
+        else if(a.kind==="send_sms"){step.channel="sms";step.body=a.config.body||"";}
+        else if(a.kind==="send_whatsapp"){step.channel="whatsapp";step.body=a.config.body||"";}
+        else{step.channel="action";step.action_type=a.kind;step.action_config=a.config;}
+        await post(`sequences/${seq.id}/steps`,step);
+      }
+      closeModal();toast("Workflow created");loadWorkflows();
+    }catch(e){toast(e.message,true);btn.disabled=false;btn.textContent="Create workflow";}
+  };
+};
+
 // ── Settings sub-tabs ────────────────────────────────────────────────────────
 let _settingsSubtab="profile";
 // Sequences moved under Settings (a menu item, not a separate top-level tab)
@@ -2600,7 +2734,7 @@ document.querySelector(".settings-content").appendChild($("#view-sequences"));
 function setSettingsSubtab(sub){
   _settingsSubtab=sub;
   $$("#settings-subtab button").forEach(b=>b.classList.toggle("active",b.dataset.sub===sub));
-  ["profile","fields","tags","channels","integrations","team"].forEach(s=>{
+  ["profile","fields","tags","channels","integrations","team","workflows"].forEach(s=>{
     const el=$(`#settings-sub-${s}`);if(el)el.style.display=s===sub?"":"none";
   });
   $("#view-sequences").style.display=sub==="sequences"?"":"none";
@@ -2611,6 +2745,7 @@ function setSettingsSubtab(sub){
   if(sub==="channels")loadChannelsSettings();
   if(sub==="integrations")loadLeadWebhooks();
   if(sub==="team")loadTeamSettings();
+  if(sub==="workflows")loadWorkflows();
 }
 $("#settings-subtab").addEventListener("click",e=>{const b=e.target.closest("button[data-sub]");if(b)setSettingsSubtab(b.dataset.sub);});
 

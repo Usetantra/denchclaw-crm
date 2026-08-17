@@ -16,13 +16,19 @@ const templatesDb = require('./templates');
 
 // ─── sequences ─────────────────────────────────────────────────────────────
 
-async function createSequence({ companyId, name, pipelineKey = null, triggerStage = null }) {
+// F-WF: triggerTag (migration 034) is the workflow-style alternative to
+// triggerStage — "when a contact gets tagged X, run this" instead of "when a
+// contact enters stage Y". A sequence has at most one trigger (the DB
+// constraint enforces it too); passing both here is a caller error, not
+// silently resolved by preferring one.
+async function createSequence({ companyId, name, pipelineKey = null, triggerStage = null, triggerTag = null }) {
   if (!companyId) throw new Error('sequences.createSequence requires companyId');
   if (!name) throw new Error('sequences.createSequence requires name');
+  if (triggerStage && triggerTag) throw new Error('a sequence can have trigger_stage or trigger_tag, not both');
   const result = await query(
-    `INSERT INTO sequences (company_id, name, pipeline_key, trigger_stage)
-     VALUES ($1,$2,$3,$4) RETURNING *`,
-    [companyId, name, pipelineKey, triggerStage]
+    `INSERT INTO sequences (company_id, name, pipeline_key, trigger_stage, trigger_tag)
+     VALUES ($1,$2,$3,$4,$5) RETURNING *`,
+    [companyId, name, pipelineKey, triggerStage, triggerTag]
   );
   return result.rows[0];
 }
@@ -100,6 +106,40 @@ async function enrollForTriggerStage(companyId, contactId, pipelineKey, stage) {
   }
 }
 
+// F-WF: the tag-triggered twin of enrollForTriggerStage — called wherever a
+// tag actually lands on a contact (PATCH /contacts/:id, the bulk-tag action),
+// never wherever a tag is merely PRESENT, so re-saving a contact that already
+// has the tag doesn't re-enroll them into a workflow that already ran. Same
+// "never throws into the caller" posture, for the same reason: a workflow
+// misconfiguration must not turn an otherwise-successful tag write into a 500.
+async function enrollForTriggerTag(companyId, contactId, tag) {
+  if (!companyId) throw new Error('sequences.enrollForTriggerTag requires companyId');
+  try {
+    const matches = await query(
+      `SELECT id FROM sequences WHERE company_id = $1 AND status = 'active' AND trigger_tag = $2`,
+      [companyId, tag]
+    );
+    const results = await Promise.all(
+      matches.rows.map((seq) => enroll(companyId, { sequenceId: seq.id, contactId }))
+    );
+    return results
+      .map((enrollment, i) => (enrollment ? { sequence_id: matches.rows[i].id, enrollment_id: enrollment.id } : null))
+      .filter(Boolean);
+  } catch (err) {
+    console.error(`[CRM][workflow-enrollment-failure] company=${companyId} tag=${tag}: ${err.message}`);
+    try {
+      await contactDb.addActivity(contactId, {
+        type: 'sequence_enrollment_failed',
+        message: `Workflow enrollment failed for tag '${tag}' — no actions were scheduled`,
+        data: { tag, error: err.message },
+      }, companyId);
+    } catch (activityErr) {
+      console.error(`[CRM][workflow-enrollment-failure] could not record activity: ${activityErr.message}`);
+    }
+    return [];
+  }
+}
+
 // CP2 — re-materialize the queue for a sequence coming back from paused/archived.
 //
 // D5b says a non-active sequence enqueues nothing. Without this, that skip is
@@ -149,7 +189,7 @@ async function updateSequenceStatus(id, companyId, status) {
 // and a future direct query against this table that forgets to join through
 // sequences would otherwise have no defense-in-depth layer at all.
 
-async function addStep(sequenceId, companyId, { stepOrder, channel, delaySeconds = 0, anchorOffsetSeconds = null, templateRef = null, entryConditions = {}, exitConditions = {}, stageWriteback = null, subject = null, body = null, linkedinAction = null }) {
+async function addStep(sequenceId, companyId, { stepOrder, channel, delaySeconds = 0, anchorOffsetSeconds = null, templateRef = null, entryConditions = {}, exitConditions = {}, stageWriteback = null, subject = null, body = null, linkedinAction = null, actionType = null, actionConfig = {} }) {
   if (!companyId) throw new Error('sequences.addStep requires companyId');
   const owned = await getSequenceById(sequenceId, companyId);
   if (!owned) return null;
@@ -170,11 +210,17 @@ async function addStep(sequenceId, companyId, { stepOrder, channel, delaySeconds
   // negative is "before the anchor" (a reminder), positive is "after". Passing
   // both this and a non-zero delaySeconds is rejected by the DB constraint
   // (sequence_steps_anchor_xor_delay) — one step cannot mean both at once.
+  // F-WF: `actionType`/`actionConfig` (migration 034) make this an ACTION step
+  // — add/remove tag, change stage, create a task, or an outbound webhook —
+  // instead of a message send. The DB constraint enforces the pairing
+  // (channel='action' iff action_type is set), so a mismatch here surfaces as
+  // a clean constraint violation rather than a step that silently does nothing.
   const result = await query(
-    `INSERT INTO sequence_steps (company_id, sequence_id, step_order, channel, delay_seconds, anchor_offset_seconds, template_ref, entry_conditions, exit_conditions, stage_writeback, subject, body, linkedin_action)
-     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13) RETURNING *`,
+    `INSERT INTO sequence_steps (company_id, sequence_id, step_order, channel, delay_seconds, anchor_offset_seconds, template_ref, entry_conditions, exit_conditions, stage_writeback, subject, body, linkedin_action, action_type, action_config)
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15) RETURNING *`,
     [companyId, sequenceId, stepOrder, channel, delaySeconds, anchorOffsetSeconds, templateRef, JSON.stringify(entryConditions), JSON.stringify(exitConditions), stageWriteback, subject, body,
-     channel === 'linkedin' ? linkedinAction : null]
+     channel === 'linkedin' ? linkedinAction : null,
+     channel === 'action' ? actionType : null, JSON.stringify(channel === 'action' ? (actionConfig || {}) : {})]
   );
   return result.rows[0];
 }
@@ -379,6 +425,26 @@ async function materializeNextStep(companyId, enrollmentId, { client = null, aft
     return inserted.rows[0] || null;
   }
 
+  // F-WF: an ACTION step has no message to resolve — templatesDb's whole
+  // subject/body machinery doesn't apply. content_resolved:true and a
+  // placeholder body are stamped anyway so the shared content guard in
+  // channel-executor.js (written for every OTHER channel, which all send a
+  // real message) doesn't need a special case for the one channel that
+  // doesn't. The 'action' provider (server/lib/executors.js) reads
+  // action_type/action_config, never body.
+  if (step.channel === 'action') {
+    const inserted = await run(
+      `INSERT INTO scheduled_actions (company_id, enrollment_id, step_id, contact_id, channel, template_ref, payload, scheduled_for)
+       VALUES ($1,$2,$3,$4,$5,$6,$9::jsonb, $7::timestamptz + ($8 || ' seconds')::interval)
+       ON CONFLICT (enrollment_id, step_id) DO NOTHING
+       RETURNING *`,
+      [companyId, enrollment.id, step.id, enrollment.contact_id, step.channel, step.template_ref,
+       after instanceof Date ? after.toISOString() : after, String(step.delay_seconds),
+       JSON.stringify({ content_resolved: true, body: `(${step.action_type})`, action_type: step.action_type, action_config: step.action_config || {} })]
+    );
+    return inserted.rows[0] || null;
+  }
+
   // CP4a-0: freeze the RESOLVED message content into the job.
   //
   // The payload used to be literally '{}'::jsonb, so the queue said WHEN and TO
@@ -575,5 +641,5 @@ module.exports = {
   addStep, listSteps, listStepsForSequences,
   enroll, getEnrollment, listEnrollments, listEnrollmentsWithQueue, updateEnrollment,
   scheduleAction, listScheduledActions, materializeNextStep,
-  enrollForTriggerStage,
+  enrollForTriggerStage, enrollForTriggerTag,
 };

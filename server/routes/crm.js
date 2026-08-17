@@ -560,12 +560,21 @@ router.post('/contacts/bulk', async (req, res) => {
       affected = r.rowCount;
     } else if (action === 'tag') {
       if (!value) return res.status(400).json({ error: 'value (tag) required' });
+      // F-WF: who's NEWLY getting this tag, so a workflow triggered on it
+      // fires only for them — same "added, not merely present" rule PATCH
+      // /contacts/:id follows, checked BEFORE the write since after it every
+      // targeted contact has the tag either way.
+      const newly = await query(
+        `SELECT id FROM contacts WHERE company_id=$1 AND id = ANY($2::uuid[]) AND NOT ($3 = ANY(COALESCE(tags,'{}')))`,
+        [companyId, ids, value]
+      );
       const r = await query(
         `UPDATE contacts SET tags = (SELECT ARRAY(SELECT DISTINCT unnest(COALESCE(tags,'{}') || $1::text[]))),
                 updated_at = NOW() WHERE company_id = $2 AND id = ANY($3::uuid[])`,
         [[value], companyId, ids]
       );
       affected = r.rowCount;
+      for (const row of newly.rows) sequenceDb.enrollForTriggerTag(companyId, row.id, value).catch(() => {});
     } else {
       return res.status(400).json({ error: `unknown action: ${action}` });
     }
@@ -699,6 +708,15 @@ router.patch('/contacts/:id', async (req, res) => {
     // Employer name changed → re-identify/link the account.
     if (updateData.company_name !== undefined) {
       await companyDb.identifyAndLink(companyId, updateData.company_name);
+    }
+    // F-WF: enroll into any workflow triggered on a tag that's NEWLY present
+    // — diffed against the row before this write, so re-saving a contact that
+    // already had the tag never re-fires it. Only newly ADDED tags trigger;
+    // removing one is not itself an event a workflow starts from.
+    if (updateData.tags !== undefined) {
+      const before = existing.tags || [];
+      const added = (updateData.tags || []).filter(t => !before.includes(t));
+      for (const tag of added) sequenceDb.enrollForTriggerTag(companyId, req.params.id, tag).catch(() => {});
     }
     broadcast(req, { type: 'contact_updated', contact: contact || existing });
 

@@ -19,7 +19,7 @@ router.use(requireAuth);
 // contact and belongs on their timeline, it just cannot be queued as outbound
 // work. `canSend` below is the narrower question, and it is derived from the
 // executor registry rather than restated here.
-const CHANNELS = ['email', 'sms', 'whatsapp', 'ai_call', 'linkedin'];
+const CHANNELS = ['email', 'sms', 'whatsapp', 'ai_call', 'linkedin', 'action'];
 const { canSend, CHANNELS: SENDABLE } = require('../lib/executors');
 
 // CP2 D4b.1 — is the sequence's declared stage_writeback chain actually
@@ -94,8 +94,11 @@ router.post('/', async (req, res) => {
   try {
     const companyId = getUserCompanyId(req);
     if (!companyId) return res.status(401).json({ error: 'Authentication required' });
-    const { name, pipeline_key, trigger_stage } = req.body || {};
+    const { name, pipeline_key, trigger_stage, trigger_tag } = req.body || {};
     if (!name || !String(name).trim()) return res.status(400).json({ error: 'name required' });
+    if (trigger_stage && trigger_tag) {
+      return res.status(400).json({ error: 'a sequence can trigger on a stage OR a tag, not both' });
+    }
     // Config-driven (CP1 decision 9): any pipeline this tenant can resolve is
     // a valid trigger source. getPipelineConfig's (company_id = $2 OR
     // company_id IS NULL) scoping IS the tenant-isolation guarantee here —
@@ -116,6 +119,7 @@ router.post('/', async (req, res) => {
     }
     const sequence = await seqDb.createSequence({
       companyId, name: String(name).trim(), pipelineKey: pipeline_key || null, triggerStage: trigger_stage || null,
+      triggerTag: trigger_tag ? String(trigger_tag).trim() : null,
     });
     res.status(201).json(sequence);
   } catch (err) {
@@ -176,7 +180,7 @@ router.post('/:id/steps', async (req, res) => {
   try {
     const companyId = getUserCompanyId(req);
     if (!companyId) return res.status(401).json({ error: 'Authentication required' });
-    const { step_order, channel, delay_seconds, anchor_offset_seconds, template_ref, entry_conditions, exit_conditions, stage_writeback, subject, body, linkedin_action } = req.body || {};
+    const { step_order, channel, delay_seconds, anchor_offset_seconds, template_ref, entry_conditions, exit_conditions, stage_writeback, subject, body, linkedin_action, action_type, action_config } = req.body || {};
     if (!Number.isInteger(step_order) || step_order < 1) {
       return res.status(400).json({ error: 'step_order must be a positive integer' });
     }
@@ -257,6 +261,24 @@ router.post('/:id/steps', async (req, res) => {
       }
     }
 
+    // F-WF: an 'action' step performs a DB effect instead of sending a
+    // message — action_type is REQUIRED on that channel (mirrors migration
+    // 034's DB constraint) and meaningless on every other one.
+    if (channel === 'action') {
+      if (!action_type || !['add_tag', 'remove_tag', 'change_stage', 'create_task', 'webhook_out'].includes(action_type)) {
+        return res.status(400).json({ error: "an 'action' step requires action_type: 'add_tag' | 'remove_tag' | 'change_stage' | 'create_task' | 'webhook_out'" });
+      }
+      const cfg = action_config || {};
+      const need = {
+        add_tag: ['tag'], remove_tag: ['tag'], change_stage: ['pipeline_key', 'stage'],
+        create_task: ['title'], webhook_out: ['url'],
+      }[action_type];
+      const missing = need.filter(k => !cfg[k]);
+      if (missing.length) return res.status(400).json({ error: `action_type '${action_type}' requires action_config.${missing.join(', .')}` });
+    } else if (action_type !== undefined && action_type !== null) {
+      return res.status(400).json({ error: `action_type is only meaningful on an 'action' step (this step is '${channel}')` });
+    }
+
     let step;
     try {
       step = await seqDb.addStep(req.params.id, companyId, {
@@ -275,6 +297,8 @@ router.post('/:id/steps', async (req, res) => {
         // building a LinkedIn ladder through the API got a silent stall and no
         // way to say "this rung is the invite".
         linkedinAction: linkedin_action || null,
+        actionType: channel === 'action' ? action_type : null,
+        actionConfig: channel === 'action' ? (action_config || {}) : {},
       });
     } catch (dbErr) {
       // sequence_steps has UNIQUE(sequence_id, step_order) with no
