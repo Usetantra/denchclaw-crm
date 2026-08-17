@@ -10,7 +10,7 @@
 <style>
   :root{
     --bg:#ffffff;--bg-rgb:255,255,255;--ink:#0a0a0a;--ink-2:#2a2a2a;--ink-3:#4a4a4a;--ink-4:#6b6b6b;--ink-5:#d0d0d0;
-    --hair:#ececec;--hair-2:#f4f4f4;--radius:2px;--nav-h:64px;--maxw:1120px;
+    --hair:#ececec;--hair-2:#f4f4f4;--radius:2px;--nav-h:64px;--maxw:1520px;
     --sans:"Inter",-apple-system,BlinkMacSystemFont,"Helvetica Neue",Arial,sans-serif;
     --serif:"Fraunces",Georgia,serif;
     --hot:#b42318;--hot-bg:#fef3f2;--warm:#b54708;--warm-bg:#fffaeb;
@@ -50,7 +50,8 @@
      for color+background — more specific rules elsewhere (.toolbar select,
      .field input, etc.) still win by specificity; this only fills the gaps. */
   input,select,textarea{color:var(--ink);background:var(--surface);font-family:var(--sans)}
-  body{margin:0;background:var(--bg);color:var(--ink);font:16px/1.6 var(--sans);-webkit-font-smoothing:antialiased}
+  body{margin:0;background:var(--bg);color:var(--ink);font:16px/1.6 var(--sans);-webkit-font-smoothing:antialiased;
+       min-height:100vh;display:flex;flex-direction:column}
   .eyebrow{font-size:11px;letter-spacing:.18em;text-transform:uppercase;color:var(--ink-4);font-weight:500}
 
   header{height:var(--nav-h);display:flex;align-items:center;justify-content:space-between;
@@ -70,7 +71,7 @@
   .tabbar button:hover{color:var(--ink-2)}
   .tabbar button.active{color:var(--ink);border-bottom-color:var(--ink)}
 
-  main{padding:34px 32px 0;max-width:var(--maxw);margin:0 auto}
+  main{padding:34px 32px 0;max-width:var(--maxw);margin:0 auto;width:100%;box-sizing:border-box;flex:1 0 auto}
   .err-banner{display:none;border:1px solid var(--hot);background:var(--hot-bg);color:var(--hot);
               padding:12px 16px;border-radius:var(--radius);margin-bottom:22px;font-size:14px}
   .layout{display:grid;grid-template-columns:1fr 372px;gap:28px;align-items:start}
