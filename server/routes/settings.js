@@ -227,6 +227,127 @@ router.post('/tantra-webhook/regenerate', async (req, res) => {
   }
 });
 
+// ── WebinarGeek (pull-only — see migration 037's header for why there's no
+// inbound route here) ───────────────────────────────────────────────────────
+const channelsDb = require('../db/models/channels');
+const webinargeekClient = require('../lib/webinargeek-client');
+const webinargeekSyncDb = require('../db/models/webinargeek-sync');
+const webinargeekSyncEngine = require('../lib/webinargeek-sync-engine');
+const crmRouter = require('./crm');
+
+router.get('/webinargeek', async (req, res) => {
+  try {
+    const companyId = getUserCompanyId(req);
+    const conn = await channelsDb.getConnection(companyId, 'webinargeek');
+    // Never echo the API key back to the client.
+    res.json({
+      connection: conn ? { connected: conn.status === 'connected', account_ref: conn.account_ref, status: conn.status, verified_at: conn.verified_at, last_error: conn.last_error } : { connected: false },
+    });
+  } catch (e) {
+    console.error('[Settings] GET webinargeek', e.message);
+    res.status(500).json({ error: 'failed to load WebinarGeek connection' });
+  }
+});
+
+router.post('/webinargeek/connect', async (req, res) => {
+  try {
+    const companyId = getUserCompanyId(req);
+    const apiKey = req.body && req.body.api_key && String(req.body.api_key).trim();
+    if (!apiKey) return res.status(400).json({ error: 'api_key is required' });
+    // GET /account is the cheapest real call that proves the key works —
+    // fail the connect attempt loudly instead of storing a key that 401s later.
+    let account;
+    try {
+      account = await webinargeekClient.getAccount(apiKey);
+    } catch (err) {
+      return res.status(400).json({ error: `WebinarGeek rejected this key: ${err.message}` });
+    }
+    const conn = await channelsDb.upsertConnection(companyId, 'webinargeek', {
+      accountRef: account.company || account.email || null,
+      credentials: { api_key: apiKey },
+      status: 'connected',
+    });
+    res.json({ connection: { connected: true, account_ref: conn.account_ref, status: conn.status, verified_at: conn.verified_at } });
+  } catch (e) {
+    console.error('[Settings] POST webinargeek/connect', e.message);
+    res.status(500).json({ error: 'failed to connect WebinarGeek' });
+  }
+});
+
+router.delete('/webinargeek', async (req, res) => {
+  try {
+    const companyId = getUserCompanyId(req);
+    await channelsDb.disconnect(companyId, 'webinargeek');
+    res.json({ ok: true });
+  } catch (e) {
+    console.error('[Settings] DELETE webinargeek', e.message);
+    res.status(500).json({ error: 'failed to disconnect WebinarGeek' });
+  }
+});
+
+router.get('/webinargeek/broadcasts', async (req, res) => {
+  try {
+    const companyId = getUserCompanyId(req);
+    const conn = await channelsDb.getConnection(companyId, 'webinargeek');
+    if (!conn || conn.status !== 'connected' || !conn.credentials?.api_key) {
+      return res.status(400).json({ error: 'WebinarGeek is not connected' });
+    }
+    const data = await webinargeekClient.listBroadcasts(conn.credentials.api_key);
+    const broadcasts = (data.broadcasts || []).map(b => ({
+      id: b.id,
+      date: b.date,
+      has_ended: b.has_ended,
+      subscriptions_count: b.subscriptions_count,
+      webinar_title: b.webinar && b.webinar.title || b.episode && b.episode.title || `Broadcast #${b.id}`,
+    }));
+    res.json({ broadcasts });
+  } catch (e) {
+    console.error('[Settings] GET webinargeek/broadcasts', e.message);
+    res.status(502).json({ error: `WebinarGeek: ${e.message}` });
+  }
+});
+
+// POST /webinargeek/sync { broadcast_id } — pulls every subscription for that
+// broadcast and, per subscriber: find-or-create the contact (source
+// 'webinargeek', tagged 'webinargeek'), log 'registered' the first time we
+// see them, and log 'webinar_attended' the moment `watched` flips true —
+// reusing the exact activity types server/lib/scoring.js already weights, so
+// a WebinarGeek attendee scores the same as any other channel's attendee.
+// webinargeek_synced_subscriptions (migration 037) is the dedupe ledger that
+// keeps a repeat click from re-scoring someone who hasn't changed state.
+router.post('/webinargeek/sync', async (req, res) => {
+  try {
+    const companyId = getUserCompanyId(req);
+    const broadcastId = req.body && req.body.broadcast_id;
+    if (!broadcastId) return res.status(400).json({ error: 'broadcast_id is required' });
+    const conn = await channelsDb.getConnection(companyId, 'webinargeek');
+    if (!conn || conn.status !== 'connected' || !conn.credentials?.api_key) {
+      return res.status(400).json({ error: 'WebinarGeek is not connected' });
+    }
+    const apiKey = conn.credentials.api_key;
+
+    let page = 1, totalPages = 1;
+    const totals = { seen: 0, newContacts: 0, newAttendances: 0 };
+    do {
+      const data = await webinargeekClient.listSubscriptions(apiKey, { broadcastId, page, perPage: 200 });
+      totalPages = data.pages && data.pages.total_pages || 1;
+      const r = await webinargeekSyncEngine.processSubscriptions(companyId, data.subscriptions || [], {
+        findOrCreateContact: crmRouter.findOrCreateContact,
+        addContactActivity: crmRouter.addContactActivity,
+        getState: webinargeekSyncDb.getState,
+        upsertState: webinargeekSyncDb.upsertState,
+      });
+      totals.seen += r.seen; totals.newContacts += r.newContacts; totals.newAttendances += r.newAttendances;
+      page++;
+    } while (page <= totalPages);
+
+    res.json({ ok: true, subscribers_seen: totals.seen, new_contacts: totals.newContacts, new_attendances: totals.newAttendances });
+  } catch (e) {
+    console.error('[Settings] POST webinargeek/sync', e.message);
+    res.status(502).json({ error: `WebinarGeek: ${e.message}` });
+  }
+});
+
 // GET /api/crm/settings/webhook-captures — what's actually arrived at
 // POST /webhooks/capture/:tool, for building a real connector from real
 // payloads instead of guessed-at documentation. Not company-scoped (see
