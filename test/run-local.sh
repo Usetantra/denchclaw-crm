@@ -32,6 +32,12 @@ IB_SECRET="ct-inbound-secret-$$"
 # id the test will create.
 MK_RUN="$$"
 MK_SECRETS="{\"$MK_SECRET\":\"cpb_co_$MK_RUN\"}"
+# unit-tsy stands a stub Tantra API on this port. It is exported into the
+# server so tantra-client.js resolves there and the suite can NEVER make a
+# real outbound call to Tantra — the same seam UNIPILE_API_BASE and
+# RESEND_API_BASE already use. Read at call time, so the stub only has to
+# exist while that one suite runs.
+TANTRA_STUB_PORT="${TANTRA_STUB_PORT:-3197}"
 CONTAINER=""
 SERVER_PID=""
 
@@ -81,6 +87,7 @@ MARKETING_WEBHOOK_SECRETS="$MK_SECRETS" \
 MARKETING_PUBLIC_BASE="http://127.0.0.1:${TEST_PORT}" \
 INBOUND_WEBHOOK_SECRET="$IB_SECRET" \
   RESEND_API_KEY="" CLOUDFLARE_AI_TOKEN="" \
+  TANTRA_API_BASE="http://127.0.0.1:${TANTRA_STUB_PORT}" \
 node server/server.js &
 SERVER_PID=$!
 
@@ -147,6 +154,11 @@ SUITES=(
   "unit-cpm4-tasks-webhooks|node test/unit-cpm4-tasks-webhooks.mjs"
   "unit-cpwc-webhook-captures|node test/unit-cpwc-webhook-captures.mjs"
   "unit-cptw-tantra-webhook|node test/unit-cptw-tantra-webhook.mjs"
+  "unit-tsy-tantra-sync|env TANTRA_STUB_PORT=$TANTRA_STUB_PORT node test/unit-tsy-tantra-sync.mjs"
+  "unit-cplim-scale-limits|node test/unit-cplim-scale-limits.mjs"
+  "unit-cpev-event-triggers|node test/unit-cpev-event-triggers.mjs"
+  "unit-cpse-step-editing|node test/unit-cpse-step-editing.mjs"
+  "unit-cpops-visibility|node test/unit-cpops-visibility.mjs"
   "unit-cpwg-webinargeek|node test/unit-cpwg-webinargeek.mjs"
   "unit-cpcd-company-domains|node test/unit-cpcd-company-domains.mjs"
   "unit-cpf38-anchored-scheduling|node test/unit-cpf38-anchored-scheduling.mjs"

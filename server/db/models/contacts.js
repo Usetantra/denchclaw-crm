@@ -2,6 +2,7 @@
 
 const { v4: uuidv4 } = require('uuid');
 const { query } = require('../index');
+const LIMITS = require('../../lib/query-limits');
 
 // ─── Public API ─────────────────────────────────────────────────────────────
 
@@ -21,11 +22,21 @@ function orderByClause(sort, dir) {
   return `ORDER BY ${col} ${direction} NULLS LAST, id ${direction}`;
 }
 
-async function list(companyId, filters = {}) {
-  if (!companyId) throw new Error('contacts.list requires companyId');
+// The WHERE clause for a contact query, built once and shared.
+//
+// `countMatching` used to declare a `filters` parameter and then ignore it,
+// which made the "true total" reported alongside a CAPPED list wrong the moment
+// a search or tag filter was applied — it returned the tenant's entire contact
+// count as though it were the match count. That is precisely the silent-lie the
+// capping rules exist to prevent, and it could only happen because the filter
+// logic lived in one function and the count in another. Now there is one.
+function buildContactFilter(companyId, filters = {}) {
   const conditions = [];
   const params = [];
   let idx = 1;
+
+  conditions.push(`company_id = $${idx++}`);
+  params.push(companyId);
 
   conditions.push(`company_id = $${idx++}`);
   params.push(companyId);
@@ -76,11 +87,23 @@ async function list(companyId, filters = {}) {
   }
 
   conditions.push('deleted_at IS NULL');
-  const where = `WHERE ${conditions.join(' AND ')}`;
+  return { where: `WHERE ${conditions.join(' AND ')}`, params, idx };
+}
+
+async function list(companyId, filters = {}) {
+  if (!companyId) throw new Error('contacts.list requires companyId');
+  const built = buildContactFilter(companyId, filters);
+  const where = built.where;
+  const params = built.params;
+  let idx = built.idx;
   const orderBy = orderByClause(filters.sort, filters.dir);
 
   if (filters.limit !== undefined || filters.offset !== undefined) {
-    const limit = Math.min(parseInt(filters.limit, 10) || 50, 500);
+    // Uses the shared ceiling, not a hardcoded 500 — otherwise raising
+    // CRM_MAX_PAGE_SIZE would silently clamp here while the UI, which validates
+    // its page sizes against that same constant, believed the larger page was
+    // honoured.
+    const limit = Math.min(parseInt(filters.limit, 10) || LIMITS.DEFAULT_PAGE, LIMITS.MAX_PAGE);
     const offset = Math.max(parseInt(filters.offset, 10) || 0, 0);
     const result = await query(
       `SELECT * FROM contacts ${where} ${orderBy} LIMIT $${idx++} OFFSET $${idx++}`,
@@ -89,11 +112,69 @@ async function list(companyId, filters = {}) {
     return result.rows;
   }
 
+  // ── The unbounded call form, now bounded ──────────────────────────────────
+  // `list(companyId, {})` used to emit no LIMIT at all and pull every contact a
+  // tenant owned into memory. Nine call sites did that, and with pm2's
+  // max_memory_restart a large tenant did not get a slow response — the process
+  // was killed mid-request.
+  //
+  // We select HARD_CAP + 1 rather than HARD_CAP: the extra row is how we know
+  // the result was truncated without paying for a second COUNT query. It is
+  // sliced off before returning, and `rows.capped` is set so a route can report
+  // `has_more` honestly instead of presenting a partial list as complete.
+  // Callers that ignore the flag are still memory-safe, which is the point of a
+  // backstop — but any caller that can be truncated should either paginate or
+  // stream (see listBatches).
+  const cap = Math.max(parseInt(filters.hardCap, 10) || LIMITS.HARD_CAP, 1);
   const result = await query(
-    `SELECT * FROM contacts ${where} ${orderBy}`,
-    params
+    `SELECT * FROM contacts ${where} ${orderBy} LIMIT $${idx++}`,
+    [...params, cap + 1]
   );
-  return result.rows;
+  const rows = result.rows.slice(0, cap);
+  if (result.rows.length > cap) {
+    // A plain property on the array: invisible to map/filter/JSON, readable by
+    // any caller that needs to know.
+    Object.defineProperty(rows, 'capped', { value: true, enumerable: false });
+  }
+  return rows;
+}
+
+// Exact count for the same filter set, without fetching rows. Used to report a
+// true `total` alongside a capped or paginated page.
+// Exact count for the SAME filter set the list would apply — see
+// buildContactFilter's header for why these must share one implementation.
+async function countMatching(companyId, filters = {}) {
+  if (!companyId) throw new Error('contacts.countMatching requires companyId');
+  const { where, params } = buildContactFilter(companyId, filters);
+  const r = await query(`SELECT count(*)::int AS n FROM contacts ${where}`, params);
+  return r.rows[0] ? r.rows[0].n : 0;
+}
+
+// ─── keyset batch iterator (streaming exports) ───────────────────────────────
+// Yields contacts in id-ordered batches so an export's peak memory is ONE batch
+// regardless of tenant size. Keyset (`id > last`), not OFFSET: OFFSET makes page
+// N cost O(N) in the database and, worse, shifts under concurrent inserts, so a
+// long export can silently skip or repeat rows — exactly the corruption an
+// export must not have.
+async function* listBatches(companyId, { batchSize = 1000, max = Infinity } = {}) {
+  if (!companyId) throw new Error('contacts.listBatches requires companyId');
+  let lastId = '00000000-0000-0000-0000-000000000000';
+  let sent = 0;
+  for (;;) {
+    const take = Math.min(batchSize, max - sent);
+    if (take <= 0) return;
+    const r = await query(
+      `SELECT * FROM contacts
+        WHERE company_id = $1 AND deleted_at IS NULL AND id > $2
+        ORDER BY id ASC LIMIT $3`,
+      [companyId, lastId, take]
+    );
+    if (!r.rows.length) return;
+    yield r.rows;
+    sent += r.rows.length;
+    lastId = r.rows[r.rows.length - 1].id;
+    if (r.rows.length < take) return;
+  }
 }
 
 async function listPaginated(companyId, filters = {}) {
@@ -312,6 +393,8 @@ async function getStats(companyId) {
 module.exports = {
   list,
   listPaginated,
+  countMatching,
+  listBatches,
   getById,
   getByEmail,
   create,

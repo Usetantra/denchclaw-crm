@@ -39,6 +39,7 @@ const { getPipelineConfig } = require('../db/pipeline');
 const { advanceContactStage } = require('./stage-authority');
 const { classifyInterest, normalizeRsvp } = require('./reply-classify');
 const contactDb = require('../db/models/contacts');
+const workflowTriggers = require('./workflow-triggers');
 const limitDb = require('../db/models/limits');
 
 // Which pipeline the marketing stages live on. Overridable per call and per
@@ -383,6 +384,23 @@ async function ingestMarketingEvent(companyId, payload, deps = {}) {
       `UPDATE crm_marketing_events SET outcome=$1, from_stage=$2, to_stage=$3, detail=$4 WHERE id=$5`,
       [result.outcome, result.from_stage || null, result.to_stage || null, result.detail || null, eventId]
     );
+
+    // Workflow triggers (migration 041). Fired here rather than at each caller
+    // because this function is the ONE door every marketing event comes through
+    // — public webhook, WebinarGeek sync, manual entry — and it is already the
+    // place duplicates are rejected, so a redelivered provider event enrols
+    // nobody twice.
+    const WORKFLOW_EVENT = {
+      registration: 'webinar_registered',
+      attendance:   'webinar_attended',
+      no_show:      'webinar_no_show',
+    };
+    if (contact && WORKFLOW_EVENT[eventType]) {
+      workflowTriggers.fire(companyId, contact.id, WORKFLOW_EVENT[eventType], {
+        webinar_key: webinar ? webinar.webinar_key || null : null,
+      });
+    }
+
     return {
       ok: true, duplicate: false, event_id: eventId, dedupe_key: dedupeKey,
       contact_id: contact ? contact.id : null, contact_created: contactCreated,

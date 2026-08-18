@@ -33,7 +33,13 @@
 const { query } = require('../index');
 const { getPipelineConfig } = require('../pipeline');
 
-const CHANNELS = ['email', 'sms', 'whatsapp', 'linkedin', 'ai_call', 'call'];
+// `telegram` is here because the Tantra mirror writes it: Telegram is a live
+// Tantra channel (tantra.md §1) and dropping those threads at the boundary
+// would silently lose real conversations. Adding it is lossless — the CRM
+// sends nothing on Telegram, so it behaves like any other receive-only
+// channel and reports "Logged — not delivered" if a reply is attempted.
+// `sms` deliberately has no Tantra counterpart and stays wholly CRM-side.
+const CHANNELS = ['email', 'sms', 'whatsapp', 'linkedin', 'telegram', 'ai_call', 'call'];
 
 // ─── list ────────────────────────────────────────────────────────────────────
 // Contact-grouped rows for the list pane.
@@ -395,6 +401,54 @@ async function setAssignee(companyId, contactId, assignee) {
 // is AMBIGUOUS: we cannot know its terminal set, so it is returned flagged and
 // the caller must never auto-select it as context. Guessing which deal a message
 // belongs to would corrupt deal history.
+// F18: the batched twin of listOpenDeals. The inbox list ran one deals query
+// PER ROW — 50 rows meant 51 round trips against a modest shared pool, and the
+// per-row call also re-resolved the same pipeline configs over and over. This
+// fetches every contact's deals in ONE query and resolves each pipeline config
+// once for the whole page.
+//
+// It deliberately reuses the same shaping rules as listOpenDeals rather than
+// reimplementing them — terminal stages are excluded, a deal with no resolvable
+// pipeline is `ambiguous` rather than dropped — because the two must not
+// disagree about what "open" means: the list would show a stage chip the thread
+// then refuses to act on.
+async function listOpenDealsForContacts(companyId, contactIds) {
+  if (!companyId) throw new Error('inbox.listOpenDealsForContacts requires companyId');
+  const ids = [...new Set((contactIds || []).filter(Boolean))];
+  if (!ids.length) return new Map();
+  const deals = await query(
+    `SELECT d.id, d.contact_id, d.title, d.stage, d.pipeline_key, d.value, d.currency, d.created_at
+       FROM deals d
+      WHERE d.company_id = $1 AND d.contact_id = ANY($2)
+      ORDER BY d.created_at DESC`,
+    [companyId, ids]
+  );
+  const configs = new Map();
+  for (const key of new Set(deals.rows.map(d => d.pipeline_key).filter(Boolean))) {
+    configs.set(key, await getPipelineConfig(companyId, key));
+  }
+  const out = new Map(ids.map(id => [id, []]));
+  for (const d of deals.rows) {
+    const bucket = out.get(d.contact_id) || [];
+    if (!d.pipeline_key || !configs.get(d.pipeline_key)) {
+      bucket.push({ ...d, open: true, ambiguous: true, pipeline_name: null });
+      out.set(d.contact_id, bucket);
+      continue;
+    }
+    const cfg = configs.get(d.pipeline_key);
+    const terminals = (cfg.stages || []).filter(s => s && s.terminal === true).map(s => s.key);
+    if (terminals.includes(d.stage)) continue;
+    bucket.push({
+      ...d, open: true, ambiguous: false,
+      pipeline_name: cfg.name || d.pipeline_key,
+      funnel_type: cfg.funnel_type || null,
+      stage_label: (cfg.stages || []).find(s => s && s.key === d.stage)?.label || d.stage,
+    });
+    out.set(d.contact_id, bucket);
+  }
+  return out;
+}
+
 async function listOpenDeals(companyId, contactId) {
   if (!companyId) throw new Error('inbox.listOpenDeals requires companyId');
   const deals = await query(
@@ -468,6 +522,7 @@ async function getContactContext(companyId, contactId) {
 
 module.exports = {
   CHANNELS, ASSIGNEES,
+  listOpenDealsForContacts,
   listInbox, getThread, markRead, setStarred, setAssignee,
   listOpenDeals, validateDealScope, getContactContext,
 };

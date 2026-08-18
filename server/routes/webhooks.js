@@ -501,6 +501,7 @@ router.post('/capture/:tool', async (req, res) => {
 // wrong field-name guess below is diagnosable from Settings → Integrations
 // instead of silently mis-filing a lead.
 const tantraWebhooksDb = require('../db/models/tantra-webhooks');
+const tantraSyncDb = require('../db/models/tantra-sync');
 
 // Tantra's envelope nests the recipient inside campaign.events[].attendees[]
 // for webinar-style events; the docs separately say every event "includes
@@ -541,7 +542,50 @@ router.post('/tantra/:token', async (req, res) => {
 
     const companyId = hook.company_id;
     const eventType = req.get('x-tantra-event') || (req.body && req.body.event) || null;
-    if (!eventType) return res.status(200).json({ ok: true, note: 'no X-Tantra-Event header — captured only' });
+
+    // ── Mirror nudge + idempotency (migration 039) ──────────────────────────
+    //
+    // Tantra signs nothing (tantra.md §2.3: no HMAC header), so this body is
+    // untrusted input — anyone who learns the URL can forge it. The nudge path
+    // is therefore deliberately inert: we take at most a THREAD REFERENCE from
+    // it and park that for the executor, which re-reads the thread over the
+    // authenticated API. Every byte we persist comes from that response, never
+    // from here, so a forged event costs one wasted API read and can inject
+    // nothing.
+    //
+    // `X-Tantra-Event-Id` is Tantra's sha256(eventType + dedupeKey). It was
+    // previously ignored entirely, which meant a redelivery wrote a duplicate
+    // activity row — and Tantra retries with exponential backoff and runs a
+    // recovery cron for orphans, so redelivery is expected traffic. The partial
+    // unique index on (company_id, event_id) makes a repeat a no-op.
+    //
+    // ADDITIVE ON PURPOSE: the legacy handling below is untouched and still
+    // runs. Until a tenant connects the Tantra API (Phase 1) there is nothing
+    // to poll, so removing it would strand every tenant using the connector
+    // today. Once connected, the mirror is authoritative and the legacy path
+    // is a redundant-but-harmless second writer — every message it produces
+    // carries no provider_message_id, so it cannot collide with mirrored rows.
+    const eventId = req.get('x-tantra-event-id') || null;
+    let nudgeCreated = false;
+    try {
+      const threadRef = pick(req.body || {}, 'threadId', 'thread_id', 'chatId', 'chat_id', 'conversationId');
+      const { created } = await tantraSyncDb.enqueueNudge(companyId, {
+        eventId, eventType, threadRef: threadRef || null,
+      });
+      nudgeCreated = created;
+      if (eventId && !created) {
+        // A recognised redelivery. Stop here: the first delivery already
+        // enqueued the poll, and re-running the legacy handler below would
+        // duplicate its activity/message rows.
+        return res.status(200).json({ ok: true, event: eventType, duplicate: true, note: 'already seen this event id' });
+      }
+    } catch (err) {
+      // A nudge is an optimisation, never a precondition — the sweep finds the
+      // same thread on its next pass. Never fail the delivery over it.
+      console.error('[Webhooks] tantra nudge enqueue failed:', err.message);
+    }
+
+    if (!eventType) return res.status(200).json({ ok: true, note: 'no X-Tantra-Event header — captured only', nudged: nudgeCreated });
 
     const body = req.body || {};
     const campaignName = body.campaign && body.campaign.name;

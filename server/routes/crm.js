@@ -8,6 +8,8 @@ const tenantDb = require('../db/models/tenants');
 const sequenceDb = require('../db/models/sequences');
 const limitDb = require('../db/models/limits');
 const { query } = require('../db/index');
+const LIMITS = require('../lib/query-limits');
+const workflowTriggers = require('../lib/workflow-triggers');
 // CP-M union (D3): the branch's full pipeline surface (CP1's stage authority
 // needs all six) plus main's scoring imports. Main moved ENGAGEMENT_WEIGHTS out
 // of this file into lib/scoring — that move must survive, because the in-file
@@ -312,7 +314,10 @@ router.get('/contacts', async (req, res) => {
       ? undefined
       : (Array.isArray(tags) ? tags : String(tags).split(',')).map(s => String(s).trim()).filter(Boolean);
 
-    const contacts = await contactDb.list(companyId, {
+    // Built once and reused for the count below — passing a different filter set
+    // to the count than to the query is how a filtered list ends up reporting
+    // the tenant's whole contact total as its match count.
+    const contactFilters = {
       search,
       dealStage: stage,
       leadScore: score,
@@ -321,6 +326,9 @@ router.get('/contacts', async (req, res) => {
       ...(tagList && tagList.length ? { tags: tagList } : {}),
       ...(phone ? { phone } : {}),
       ...(cf_key ? { customFieldKey: cf_key, customFieldValue: cf_value } : {}),
+    };
+    const contacts = await contactDb.list(companyId, {
+      ...contactFilters,
       ...(paginated ? { limit, offset } : {}),
     });
 
@@ -343,17 +351,37 @@ router.get('/contacts', async (req, res) => {
     if (paginated) {
       const lim = Math.min(parseInt(limit, 10) || 50, 500);
       const off = Math.max(parseInt(offset, 10) || 0, 0);
-      const aggregate = await contactDb.getStats(companyId).catch(() => null);
+      // Count the SAME filter set, not the tenant total: `getStats()` is
+      // unfiltered, so a filtered page used to report the whole contact count as
+      // its total and the pager rendered "1–50 of 4,312" for a search matching 3.
+      const matched = await contactDb.countMatching(companyId, contactFilters).catch(() => null);
       return res.json({
         data: contacts,
         contacts,
-        total: aggregate?.totalContacts ?? contacts.length,
+        total: matched ?? contacts.length,
         limit: lim,
         offset: off,
         stats,
       });
     }
-    res.json({ total: contacts.length, contacts, stats });
+    // The unpaginated form is still supported (external consumers rely on it),
+    // but it is now bounded by HARD_CAP. If that bound bit, say so explicitly —
+    // `total` reports the TRUE count and `has_more` tells the caller to paginate.
+    // Returning the first N rows while reporting `total: N` is the one outcome
+    // this must never have: a silently partial list that looks complete.
+    if (contacts.capped) {
+      const trueTotal = await contactDb.countMatching(companyId, contactFilters).catch(() => null);
+      return res.json({
+        total: trueTotal ?? contacts.length,
+        returned: contacts.length,
+        contacts,
+        stats,
+        has_more: true,
+        cap: LIMITS.HARD_CAP,
+        note: `Result capped at ${LIMITS.HARD_CAP} rows. Use ?limit= and ?offset= to page through the rest.`,
+      });
+    }
+    res.json({ total: contacts.length, contacts, stats, has_more: false });
   } catch (err) {
     console.error('[CRM] GET /contacts error:', err.message);
     res.status(500).json({ error: 'failed to load contacts' });
@@ -461,6 +489,22 @@ router.post('/contacts', validate(), async (req, res) => {
     if (company) contact.company_ref_id = await companyDb.identifyAndLink(companyId, company);
     broadcast(req, { type: 'contact_created', contact });
 
+    // ── Workflow triggers ────────────────────────────────────────────────
+    // `contact_created` fires for every new contact regardless of origin —
+    // manual, bulk import, lead webhook, the Tantra mirror.
+    workflowTriggers.fire(companyId, contact.id, 'contact_created', { source: contact.source || null });
+
+    // ...and the TAG trigger fires for tags present at creation. This was a real
+    // gap: enrollForTriggerTag was called from the bulk-tag action and from
+    // PATCH /contacts/:id, but not from creation — so a contact born WITH a tag
+    // never started a tag-triggered workflow. That is exactly the lead-webhook
+    // path (webhooks.js builds `default_tags` + payload tags and POSTs here),
+    // which the workflow builder's own help text promises will fire. Tagging an
+    // existing contact worked, which is why it went unnoticed.
+    for (const tag of (contact.tags || [])) {
+      sequenceDb.enrollForTriggerTag(companyId, contact.id, tag).catch(() => {});
+    }
+
     res.status(201).json(contact);
   } catch (err) {
     if (isTenantNotProvisioned(err)) {
@@ -478,24 +522,40 @@ router.get('/contacts/follow-ups', async (req, res) => {
   try {
     const companyId = getUserCompanyId(req);
     if (!companyId) return res.status(401).json({ error: 'Authentication required' });
-    const contacts = await contactDb.list(companyId, {});
-    const now = new Date();
-    const sevenDaysAgo = new Date(now - 7 * 86400000);
-    const needsFollowUp = contacts.filter(c => {
-      if (c.deal_stage === 'won' || c.deal_stage === 'lost') return false;
-      if (c.next_follow_up && new Date(c.next_follow_up) <= now) return true;
-      if ((c.lead_score === 'hot' || c.lead_score === 'warm') && c.last_contacted) {
-        const daysSince = (now - new Date(c.last_contacted)) / 86400000;
-        if (c.lead_score === 'hot' && daysSince >= 2) return true;
-        if (c.lead_score === 'warm' && daysSince >= 5) return true;
-      }
-      if (!c.last_contacted || new Date(c.last_contacted) < sevenDaysAgo) return true;
-      return false;
-    }).sort((a, b) => {
-      const scoreOrder = { hot: 0, warm: 1, neutral: 2, cold: 3 };
-      return (scoreOrder[a.lead_score] || 3) - (scoreOrder[b.lead_score] || 3);
+    // The same predicate as before, expressed in SQL instead of by loading every
+    // contact and filtering in Node. The rule set is unchanged — overdue
+    // follow-up date, or hot/warm gone quiet for 2/5 days, or no contact in 7
+    // days — but the database now does the selecting, so memory is bounded by
+    // the page rather than by the tenant.
+    const limit = Math.min(parseInt(req.query.limit, 10) || LIMITS.MAX_PAGE, LIMITS.MAX_PAGE);
+    const offset = Math.max(parseInt(req.query.offset, 10) || 0, 0);
+    const predicate = `
+        company_id = $1 AND deleted_at IS NULL
+        AND coalesce(deal_stage,'') NOT IN ('won','lost')
+        AND (
+              (next_follow_up IS NOT NULL AND next_follow_up <= now())
+           OR (lead_score = 'hot'  AND last_contacted IS NOT NULL AND last_contacted <= now() - interval '2 days')
+           OR (lead_score = 'warm' AND last_contacted IS NOT NULL AND last_contacted <= now() - interval '5 days')
+           OR  last_contacted IS NULL
+           OR  last_contacted < now() - interval '7 days'
+        )`;
+    const [rows, counted] = await Promise.all([
+      query(
+        `SELECT * FROM contacts WHERE ${predicate}
+          ORDER BY CASE lead_score WHEN 'hot' THEN 0 WHEN 'warm' THEN 1 WHEN 'neutral' THEN 2 ELSE 3 END,
+                   next_follow_up ASC NULLS LAST, id
+          LIMIT $2 OFFSET $3`,
+        [companyId, limit, offset]
+      ),
+      query(`SELECT count(*)::int AS n FROM contacts WHERE ${predicate}`, [companyId]),
+    ]);
+    const total = counted.rows[0] ? counted.rows[0].n : 0;
+    res.json({
+      total,
+      contacts: rows.rows,
+      limit, offset,
+      has_more: offset + rows.rows.length < total,
     });
-    res.json({ total: needsFollowUp.length, contacts: needsFollowUp });
   } catch (err) {
     console.error('[CRM] GET /contacts/follow-ups error:', err.message);
     res.status(500).json({ error: 'failed to load follow-ups' });
@@ -507,25 +567,62 @@ router.get('/contacts/export', async (req, res) => {
   try {
     const companyId = getUserCompanyId(req);
     if (!companyId) return res.status(401).json({ error: 'Authentication required' });
-    const contacts = await contactDb.list(companyId, {});
+    // ── Streamed, not buffered ─────────────────────────────────────────────
+    // This used to load every contact into memory and build one giant string.
+    // It now writes keyset batches straight to the socket, so peak memory is
+    // ONE batch whatever the tenant's size — a 250k export costs the same as a
+    // 500-row one. Keyset (id > last) rather than OFFSET: OFFSET shifts under
+    // concurrent inserts, so a long export can silently skip or duplicate rows.
+    const total = await contactDb.countMatching(companyId);
+    if (total > LIMITS.EXPORT_MAX) {
+      // Refuse loudly rather than start a response that will time out behind a
+      // proxy half-written — a truncated CSV that looks complete is worse.
+      return res.status(413).json({
+        error: `export is limited to ${LIMITS.EXPORT_MAX} contacts and this tenant has ${total}. ` +
+               `Filter the export, or raise CRM_EXPORT_MAX_ROWS.`,
+        total, limit: LIMITS.EXPORT_MAX,
+      });
+    }
+
     const { format } = req.query;
+    let sent = 0;
     if (format === 'csv') {
       const csvSafe = (val) => {
         const s = String(val || '').replace(/"/g, '""');
         if (/^[=+\-@\t\r]/.test(s)) return `'${s}`;
         return s;
       };
-      const headers = 'name,email,phone,company,source,lead_score,deal_stage,engagementScore,utmSource,tags,created_at';
-      const rows = contacts.map(c =>
-        `"${csvSafe(c.name)}","${csvSafe(c.email)}","${csvSafe(c.phone)}","${csvSafe(c.company_name)}","${csvSafe(c.source)}","${csvSafe(c.lead_score)}","${csvSafe(c.deal_stage)}",${c.lead_score_numeric || 0},"${csvSafe(c.utm_source)}","${csvSafe((c.tags || []).join(';'))}","${csvSafe(c.created_at)}"`
-      );
       res.setHeader('Content-Type', 'text/csv');
-      res.send([headers, ...rows].join('\n'));
-    } else {
-      res.json({ total: contacts.length, contacts });
+      res.setHeader('Content-Disposition', 'attachment; filename="contacts.csv"');
+      res.write('name,email,phone,company,source,lead_score,deal_stage,engagementScore,utmSource,tags,created_at\n');
+      for await (const batch of contactDb.listBatches(companyId, { batchSize: LIMITS.EXPORT_BATCH, max: LIMITS.EXPORT_MAX })) {
+        res.write(batch.map(c =>
+          `"${csvSafe(c.name)}","${csvSafe(c.email)}","${csvSafe(c.phone)}","${csvSafe(c.company_name)}","${csvSafe(c.source)}","${csvSafe(c.lead_score)}","${csvSafe(c.deal_stage)}",${c.lead_score_numeric || 0},"${csvSafe(c.utm_source)}","${csvSafe((c.tags || []).join(';'))}","${csvSafe(c.created_at)}"`
+        ).join('\n') + '\n');
+        sent += batch.length;
+      }
+      return res.end();
     }
+
+    // JSON: same streaming discipline, assembled as an array on the wire so the
+    // whole set never exists as one JS string either.
+    res.setHeader('Content-Type', 'application/json');
+    res.write(`{"total":${total},"contacts":[`);
+    let first = true;
+    for await (const batch of contactDb.listBatches(companyId, { batchSize: LIMITS.EXPORT_BATCH, max: LIMITS.EXPORT_MAX })) {
+      for (const c of batch) {
+        res.write((first ? '' : ',') + JSON.stringify(c));
+        first = false;
+      }
+      sent += batch.length;
+    }
+    res.end(`],"exported":${sent}}`);
   } catch (err) {
     console.error('[CRM] GET /contacts/export error:', err.message);
+    // Headers are already sent once streaming starts, so a mid-stream failure
+    // can only be signalled by destroying the connection. A silently truncated
+    // 200 would read as a complete export.
+    if (res.headersSent) return res.destroy(err);
     res.status(500).json({ error: 'failed to export contacts' });
   }
 });
@@ -1445,12 +1542,33 @@ router.get('/pipeline', async (req, res) => {
       const stages = pipelineConfig
         ? pipelineConfig.stages.map(s => s.key)
         : ['sourced','enriched','segmented','queued','engaged','responded','mql','nurture','suppressed'];
-      const contacts = await contactDb.list(companyId, {});
+      // Per-stage window instead of loading every contact and bucketing in Node.
+      // A board cannot usefully render 100k cards, but the COUNT must still be
+      // exact — so `count(*) OVER (PARTITION BY stage)` gives the true stage
+      // total while only `stage_limit` rows per stage cross the wire.
+      const stageLimit = Math.min(parseInt(req.query.stage_limit, 10) || 100, LIMITS.MAX_PAGE);
+      const { rows } = await query(
+        `WITH ranked AS (
+           SELECT id, name, company_name, lead_score, tags, last_contacted,
+                  linkedin_url, source, created_at,
+                  COALESCE(marketing_stage, deal_stage) AS stage,
+                  row_number() OVER (PARTITION BY COALESCE(marketing_stage, deal_stage)
+                                     ORDER BY updated_at DESC NULLS LAST, id) AS rn,
+                  count(*)     OVER (PARTITION BY COALESCE(marketing_stage, deal_stage)) AS stage_count
+             FROM contacts
+            WHERE company_id = $1 AND deleted_at IS NULL
+         )
+         SELECT * FROM ranked WHERE rn <= $2`,
+        [companyId, stageLimit]
+      );
       const pipeline = {};
       stages.forEach(stage => {
-        const sc = contacts.filter(c => (c.marketing_stage || c.deal_stage) === stage);
+        const sc = rows.filter(c => c.stage === stage);
         pipeline[stage] = {
-          count: sc.length,
+          count: sc.length ? Number(sc[0].stage_count) : 0,
+          // `truncated` so the UI can say "showing 100 of 4,312" rather than
+          // implying the stage holds only what is rendered.
+          truncated: sc.length ? Number(sc[0].stage_count) > sc.length : false,
           contacts: sc.map(c => ({
             id: c.id, name: c.name, company: c.company_name, lead_score: c.lead_score,
             tags: c.tags, last_contacted: c.last_contacted, linkedin_url: c.linkedin_url,
@@ -1458,7 +1576,7 @@ router.get('/pipeline', async (req, res) => {
           }))
         };
       });
-      return res.json({ pipeline_key: 'marketing', pipeline });
+      return res.json({ pipeline_key: 'marketing', pipeline, stage_limit: stageLimit });
     }
 
     if (pipelineKey === 'sales') {
@@ -1494,22 +1612,39 @@ router.get('/pipeline', async (req, res) => {
       return res.json({ pipeline_key: pipelineKey, pipeline });
     }
 
-    // Legacy flat view — no pipeline_key (backward-compat for existing consumers)
-    const contacts = await contactDb.list(companyId, {});
+    // Legacy flat view — no pipeline_key (backward-compat for existing consumers).
+    // Same per-stage window as the marketing branch: `count` and `value` are
+    // exact aggregates over the whole stage, while only `stage_limit` contact
+    // cards per stage are materialised.
+    const stageLimit = Math.min(parseInt(req.query.stage_limit, 10) || 100, LIMITS.MAX_PAGE);
+    const { rows } = await query(
+      `WITH ranked AS (
+         SELECT id, name, company_name, lead_score, deal_value, last_contacted,
+                linkedin_url, source, deal_stage AS stage,
+                row_number() OVER (PARTITION BY deal_stage ORDER BY updated_at DESC NULLS LAST, id) AS rn,
+                count(*)     OVER (PARTITION BY deal_stage) AS stage_count,
+                sum(COALESCE(deal_value,0)) OVER (PARTITION BY deal_stage) AS stage_value
+           FROM contacts
+          WHERE company_id = $1 AND deleted_at IS NULL
+       )
+       SELECT * FROM ranked WHERE rn <= $2`,
+      [companyId, stageLimit]
+    );
     const pipeline = {};
     DEAL_STAGES.forEach(stage => {
-      const stageContacts = contacts.filter(c => (c.deal_stage || c.dealStage) === stage);
+      const stageContacts = rows.filter(c => c.stage === stage);
       pipeline[stage] = {
-        count: stageContacts.length,
-        value: stageContacts.reduce((s, c) => s + (c.deal_value || c.dealValue || 0), 0),
+        count: stageContacts.length ? Number(stageContacts[0].stage_count) : 0,
+        value: stageContacts.length ? Number(stageContacts[0].stage_value) : 0,
+        truncated: stageContacts.length ? Number(stageContacts[0].stage_count) > stageContacts.length : false,
         contacts: stageContacts.map(c => ({
-          id: c.id, name: c.name, company: c.company_name, lead_score: c.lead_score || c.leadScore,
-          deal_value: c.deal_value || c.dealValue, last_contacted: c.last_contacted,
+          id: c.id, name: c.name, company: c.company_name, lead_score: c.lead_score,
+          deal_value: c.deal_value, last_contacted: c.last_contacted,
           linkedin_url: c.linkedin_url, source: c.source
         }))
       };
     });
-    res.json({ pipeline });
+    res.json({ pipeline, stage_limit: stageLimit });
   } catch (err) {
     console.error('[CRM] GET /pipeline error:', err.message);
     res.status(500).json({ error: 'failed to load pipeline' });
@@ -1778,6 +1913,20 @@ router.post('/contacts/bulk-import', async (req, res) => {
   if (!Array.isArray(inputContacts) || inputContacts.length === 0) {
     return res.status(400).json({ error: 'contacts array required' });
   }
+  // Import is a serial per-row loop — find-or-create, activity, scoring — so a
+  // huge array is a long-held request rather than a memory problem, and one that
+  // will be cut by a proxy timeout mid-way with no way to know which rows landed.
+  // Refusing up front, with the limit named, makes the client chunk instead. The
+  // 2mb JSON body limit already caps this loosely; this makes it explicit and
+  // gives a usable error rather than a parser rejection.
+  if (inputContacts.length > LIMITS.IMPORT_MAX) {
+    return res.status(413).json({
+      error: `bulk-import accepts at most ${LIMITS.IMPORT_MAX} contacts per request (received ${inputContacts.length}). ` +
+             `Split the file into batches of ${LIMITS.IMPORT_MAX}.`,
+      limit: LIMITS.IMPORT_MAX,
+      received: inputContacts.length,
+    });
+  }
 
   // Check once, up front: an unprovisioned companyId fails identically for
   // EVERY row (migration 013's FK), so without this a bad company id would
@@ -1851,14 +2000,34 @@ async function findOrCreateContact(email, defaults = {}) {
   // non-empty emails must never merge, even if they share a phone or LinkedIn
   // profile (real case: two prospects on one device / one profile scraped for
   // several dot-alias emails). Mirrors the automation_core BUG-1 fix.
+  // Matched in SQL rather than by loading every contact for the tenant. This ran
+  // on EVERY inbound webhook with no email — the hottest path in the CRM — and
+  // was O(tenant size) per delivery, so a busy tenant paid a full table read per
+  // inbound message. The matching rules are unchanged: digits-only phone
+  // equality, case-insensitive linkedin_url equality, phone first.
   if (!contact && !email && (defaults.phone || defaults.linkedin_url)) {
-    const allContacts = await contactDb.list(companyId, {});
-    if (!contact && defaults.phone) {
-      const normalized = defaults.phone.replace(/\D/g, '');
-      contact = allContacts.find(c => c.phone && c.phone.replace(/\D/g, '') === normalized) || null;
+    if (defaults.phone) {
+      const normalized = String(defaults.phone).replace(/\D/g, '');
+      if (normalized) {
+        const r = await query(
+          `SELECT * FROM contacts
+            WHERE company_id = $1 AND deleted_at IS NULL AND phone IS NOT NULL
+              AND regexp_replace(phone, '[^0-9]', '', 'g') = $2
+            ORDER BY created_at LIMIT 1`,
+          [companyId, normalized]
+        );
+        contact = r.rows[0] || null;
+      }
     }
     if (!contact && defaults.linkedin_url) {
-      contact = allContacts.find(c => c.linkedin_url && c.linkedin_url.toLowerCase() === defaults.linkedin_url.toLowerCase()) || null;
+      const r = await query(
+        `SELECT * FROM contacts
+          WHERE company_id = $1 AND deleted_at IS NULL AND linkedin_url IS NOT NULL
+            AND lower(linkedin_url) = lower($2)
+          ORDER BY created_at LIMIT 1`,
+        [companyId, String(defaults.linkedin_url)]
+      );
+      contact = r.rows[0] || null;
     }
   }
 

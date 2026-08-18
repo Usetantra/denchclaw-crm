@@ -21,14 +21,18 @@ const templatesDb = require('./templates');
 // contact enters stage Y". A sequence has at most one trigger (the DB
 // constraint enforces it too); passing both here is a caller error, not
 // silently resolved by preferring one.
-async function createSequence({ companyId, name, pipelineKey = null, triggerStage = null, triggerTag = null }) {
+async function createSequence({ companyId, name, pipelineKey = null, triggerStage = null, triggerTag = null, triggerEvent = null, triggerConfig = null }) {
   if (!companyId) throw new Error('sequences.createSequence requires companyId');
   if (!name) throw new Error('sequences.createSequence requires name');
-  if (triggerStage && triggerTag) throw new Error('a sequence can have trigger_stage or trigger_tag, not both');
+  // A workflow means ONE thing. The DB enforces this too (migration 041's
+  // three-way `sequences_one_trigger`); rejecting here gives the caller a
+  // usable message instead of a constraint violation.
+  const set = [triggerStage, triggerTag, triggerEvent].filter(Boolean).length;
+  if (set > 1) throw new Error('a sequence can have exactly one of trigger_stage, trigger_tag or trigger_event');
   const result = await query(
-    `INSERT INTO sequences (company_id, name, pipeline_key, trigger_stage, trigger_tag)
-     VALUES ($1,$2,$3,$4,$5) RETURNING *`,
-    [companyId, name, pipelineKey, triggerStage, triggerTag]
+    `INSERT INTO sequences (company_id, name, pipeline_key, trigger_stage, trigger_tag, trigger_event, trigger_config)
+     VALUES ($1,$2,$3,$4,$5,$6,$7) RETURNING *`,
+    [companyId, name, pipelineKey, triggerStage, triggerTag, triggerEvent, JSON.stringify(triggerConfig || {})]
   );
   return result.rows[0];
 }
@@ -148,6 +152,60 @@ async function enrollForTriggerTag(companyId, contactId, tag) {
   }
 }
 
+// ─── Event triggers (migration 041) ──────────────────────────────────────────
+// The third way a workflow starts, alongside a stage and a tag: a domain event
+// the CRM already raises — contact created, inbound reply, webinar
+// registration/attendance/no-show, unsubscribe.
+//
+// `config` is the event's context, matched against each workflow's stored
+// `trigger_config` as a SUBSET: an empty stored config means "any", and a stored
+// {"channel":"whatsapp"} fires only on a WhatsApp reply. Narrowing is done here
+// rather than in SQL because the sensible key set differs per event and a JSONB
+// containment query would still need this shape check.
+//
+// Same never-throws-into-the-caller posture as enrollForTriggerTag, for the same
+// reason: a misconfigured workflow must not turn an otherwise-successful
+// contact write, inbound message or unsubscribe into a 500. A failure is logged
+// AND written to the contact's timeline, because a workflow that silently never
+// ran is the single hardest thing to debug in this product.
+async function enrollForTriggerEvent(companyId, contactId, event, config = {}) {
+  if (!companyId) throw new Error('sequences.enrollForTriggerEvent requires companyId');
+  if (!contactId || !event) return [];
+  try {
+    const matches = await query(
+      `SELECT id, trigger_config FROM sequences
+        WHERE company_id = $1 AND status = 'active' AND trigger_event = $2`,
+      [companyId, event]
+    );
+    const wanted = matches.rows.filter((seq) => {
+      const cfg = seq.trigger_config || {};
+      // Every key the workflow narrowed on must match the event's context.
+      // Unset/empty = fires on every occurrence of the event.
+      return Object.entries(cfg).every(([k, v]) =>
+        v === null || v === undefined || v === '' ||
+        String(config[k] ?? '').toLowerCase() === String(v).toLowerCase());
+    });
+    const results = await Promise.all(
+      wanted.map((seq) => enroll(companyId, { sequenceId: seq.id, contactId }))
+    );
+    return results
+      .map((enrollment, i) => (enrollment ? { sequence_id: wanted[i].id, enrollment_id: enrollment.id } : null))
+      .filter(Boolean);
+  } catch (err) {
+    console.error(`[CRM][workflow-enrollment-failure] company=${companyId} event=${event}: ${err.message}`);
+    try {
+      await contactDb.addActivity(contactId, {
+        type: 'sequence_enrollment_failed',
+        message: `Workflow enrollment failed for event '${event}' — no actions were scheduled`,
+        data: { event, error: err.message },
+      }, companyId);
+    } catch (activityErr) {
+      console.error(`[CRM][workflow-enrollment-failure] could not record activity: ${activityErr.message}`);
+    }
+    return [];
+  }
+}
+
 // CP2 — re-materialize the queue for a sequence coming back from paused/archived.
 //
 // D5b says a non-active sequence enqueues nothing. Without this, that skip is
@@ -236,7 +294,7 @@ async function addStep(sequenceId, companyId, { stepOrder, channel, delaySeconds
 async function listSteps(sequenceId, companyId) {
   if (!companyId) throw new Error('sequences.listSteps requires companyId');
   const result = await query(
-    'SELECT * FROM sequence_steps WHERE sequence_id = $1 AND company_id = $2 ORDER BY step_order ASC',
+    'SELECT * FROM sequence_steps WHERE sequence_id = $1 AND company_id = $2 AND archived_at IS NULL ORDER BY step_order ASC',
     [sequenceId, companyId]
   );
   return result.rows;
@@ -249,13 +307,232 @@ async function listStepsForSequences(sequenceIds, companyId) {
   if (!companyId) throw new Error('sequences.listStepsForSequences requires companyId');
   if (!sequenceIds.length) return {};
   const result = await query(
-    'SELECT * FROM sequence_steps WHERE sequence_id = ANY($1) AND company_id = $2 ORDER BY sequence_id, step_order ASC',
+    'SELECT * FROM sequence_steps WHERE sequence_id = ANY($1) AND company_id = $2 AND archived_at IS NULL ORDER BY sequence_id, step_order ASC',
     [sequenceIds, companyId]
   );
   return result.rows.reduce((acc, step) => {
     (acc[step.sequence_id] = acc[step.sequence_id] || []).push(step);
     return acc;
   }, {});
+}
+
+// ─── step editing (migration 042) ────────────────────────────────────────────
+// A step's CONTENT and timing can be changed freely: `scheduled_actions` carries
+// its own resolved `payload`, so a queued or sent job keeps the words it was
+// created with. Editing a step therefore changes what happens NEXT, and never
+// rewrites what already went out.
+const EDITABLE_STEP_FIELDS = {
+  delaySeconds: 'delay_seconds', subject: 'subject', body: 'body',
+  templateRef: 'template_ref', actionConfig: 'action_config',
+  entryConditions: 'entry_conditions', exitConditions: 'exit_conditions',
+  anchorOffsetSeconds: 'anchor_offset_seconds',
+};
+
+async function updateStep(stepId, companyId, patch = {}) {
+  if (!companyId) throw new Error('sequences.updateStep requires companyId');
+  const sets = [], params = [];
+  let i = 1;
+  for (const [key, column] of Object.entries(EDITABLE_STEP_FIELDS)) {
+    if (patch[key] === undefined) continue;
+    const v = patch[key];
+    sets.push(`${column} = $${i++}`);
+    params.push(['action_config', 'entry_conditions', 'exit_conditions'].includes(column)
+      ? JSON.stringify(v || {}) : v);
+  }
+  // `channel` and `action_type` are deliberately NOT editable. Both are mirrored
+  // onto every scheduled_actions row this step has already produced and are
+  // gated by CHECK constraints on both tables; changing one here would leave
+  // queued jobs describing a different kind of send than the step they came
+  // from. Delete the step and add the right one instead.
+  if (!sets.length) return getStepById(stepId, companyId);
+  params.push(stepId, companyId);
+  const r = await query(
+    `UPDATE sequence_steps SET ${sets.join(', ')}
+      WHERE id = $${i++} AND company_id = $${i} AND archived_at IS NULL
+      RETURNING *`,
+    params
+  );
+  return r.rows[0] || null;
+}
+
+async function getStepById(stepId, companyId) {
+  if (!companyId) throw new Error('sequences.getStepById requires companyId');
+  const r = await query('SELECT * FROM sequence_steps WHERE id = $1 AND company_id = $2', [stepId, companyId]);
+  return r.rows[0] || null;
+}
+
+// How many jobs this step has produced, and how many of those actually went out.
+// This is what decides whether a delete may be hard or must be an archive.
+async function stepUsage(stepId, companyId) {
+  const r = await query(
+    `SELECT count(*)::int AS total,
+            count(*) FILTER (WHERE status IN ('sent','failed','skipped'))::int AS settled,
+            count(*) FILTER (WHERE status IN ('pending','claimed'))::int AS queued
+       FROM scheduled_actions WHERE step_id = $1 AND company_id = $2`,
+    [stepId, companyId]
+  );
+  return r.rows[0] || { total: 0, settled: 0, queued: 0 };
+}
+
+// Compact the live steps to a contiguous 1..n. Two-phase for the same reason
+// reorderSteps is: the partial unique index would reject an intermediate state
+// where two rows briefly share an order.
+async function renumberSteps(sequenceId, companyId) {
+  const live = await listSteps(sequenceId, companyId);
+  const needs = live.some((s, i) => s.step_order !== i + 1);
+  if (!needs) return live;
+  const client = await getClient();
+  try {
+    await client.query('BEGIN');
+    for (let i = 0; i < live.length; i += 1) {
+      await client.query('UPDATE sequence_steps SET step_order=$1 WHERE id=$2 AND company_id=$3',
+        [-(i + 1), live[i].id, companyId]);
+    }
+    for (let i = 0; i < live.length; i += 1) {
+      await client.query('UPDATE sequence_steps SET step_order=$1 WHERE id=$2 AND company_id=$3',
+        [i + 1, live[i].id, companyId]);
+    }
+    await client.query('COMMIT');
+  } catch (e) {
+    await client.query('ROLLBACK').catch(() => {});
+    throw e;
+  } finally {
+    client.release();
+  }
+  return listSteps(sequenceId, companyId);
+}
+
+// Remove a step from the ladder.
+//
+// Archive when the step has ANY history — the FK is ON DELETE CASCADE, so a hard
+// delete would take every sent/failed/skipped row with it and erase the record of
+// messages already delivered. Hard-delete only a step that never fired, where
+// there is genuinely nothing to lose and leaving a tombstone would just be noise.
+//
+// Enrollments currently sitting ON this step are moved forward to the next live
+// step (or completed) so archiving cannot strand anyone mid-ladder forever.
+async function removeStep(stepId, companyId) {
+  const step = await getStepById(stepId, companyId);
+  if (!step) return null;
+  const usage = await stepUsage(stepId, companyId);
+
+  await query(
+    `UPDATE scheduled_actions SET status='skipped', updated_at=now()
+      WHERE step_id=$1 AND company_id=$2 AND status IN ('pending','claimed')`,
+    [stepId, companyId]
+  );
+
+  // Move anyone parked here onto the next live step before the step disappears
+  // from the ladder — otherwise current_step_id points at a retired step and the
+  // enrollment never advances again.
+  const next = await query(
+    `SELECT id FROM sequence_steps
+      WHERE sequence_id=$1 AND company_id=$2 AND archived_at IS NULL
+        AND step_order > $3 AND id <> $4
+      ORDER BY step_order ASC LIMIT 1`,
+    [step.sequence_id, companyId, step.step_order, stepId]
+  );
+  if (next.rows[0]) {
+    await query(`UPDATE enrollments SET current_step_id=$1 WHERE current_step_id=$2 AND company_id=$3`,
+      [next.rows[0].id, stepId, companyId]);
+  } else {
+    await query(
+      `UPDATE enrollments SET status='completed', completed_at=now(), current_step_id=NULL
+        WHERE current_step_id=$1 AND company_id=$2 AND status='active'`,
+      [stepId, companyId]);
+  }
+
+  let mode, preserved;
+  if (usage.total === 0) {
+    await query('DELETE FROM sequence_steps WHERE id=$1 AND company_id=$2', [stepId, companyId]);
+    mode = 'hard'; preserved = 0;
+  } else {
+    await query(`UPDATE sequence_steps SET archived_at=now() WHERE id=$1 AND company_id=$2`, [stepId, companyId]);
+    mode = 'archived'; preserved = usage.settled;
+  }
+
+  // Close the gap the removal left. Without this the live steps keep orders like
+  // (2,3) and every caller that computes "next order = count + 1" produces 3 —
+  // which already exists, so adding a step to an edited workflow fails with a
+  // duplicate-order conflict. Renumbering is safe: scheduled_actions reference a
+  // step by ID, never by order, and the archived rows keep their historical
+  // positions outside the partial unique index.
+  await renumberSteps(step.sequence_id, companyId);
+
+  return { ...step, deleted: mode, history_preserved: preserved };
+}
+
+// Reorder the live steps of a sequence. Two-phase because
+// `uq_sequence_steps_live_step_order` is UNIQUE: writing the new orders directly
+// would collide with a row still holding the target position, so every affected
+// row is first parked in a negative range no live row can occupy.
+async function reorderSteps(sequenceId, companyId, orderedStepIds) {
+  if (!companyId) throw new Error('sequences.reorderSteps requires companyId');
+  const live = await listSteps(sequenceId, companyId);
+  const liveIds = live.map(s => s.id);
+  const given = [...new Set(orderedStepIds.map(String))];
+  // Must be a permutation of the live steps — a partial list would leave the
+  // rest at stale positions and silently reshuffle the ladder.
+  if (given.length !== liveIds.length || !given.every(id => liveIds.includes(id))) {
+    const err = new Error('reorderSteps requires every live step id exactly once');
+    err.code = 'BAD_ORDER';
+    throw err;
+  }
+  const client = await getClient();
+  try {
+    await client.query('BEGIN');
+    for (let i = 0; i < given.length; i += 1) {
+      await client.query('UPDATE sequence_steps SET step_order=$1 WHERE id=$2 AND company_id=$3',
+        [-(i + 1), given[i], companyId]);
+    }
+    for (let i = 0; i < given.length; i += 1) {
+      await client.query('UPDATE sequence_steps SET step_order=$1 WHERE id=$2 AND company_id=$3',
+        [i + 1, given[i], companyId]);
+    }
+    await client.query('COMMIT');
+  } catch (e) {
+    await client.query('ROLLBACK').catch(() => {});
+    throw e;
+  } finally {
+    client.release();
+  }
+  return listSteps(sequenceId, companyId);
+}
+
+// Delete a whole workflow. Same rule as a step, one level up: `enrollments` and
+// `scheduled_actions` both cascade from `sequences`, so hard-deleting one that
+// has ever run destroys its entire send history. Archive it instead; only a
+// sequence that never enrolled anyone is removed outright.
+async function removeSequence(sequenceId, companyId) {
+  if (!companyId) throw new Error('sequences.removeSequence requires companyId');
+  const seq = await getSequenceById(sequenceId, companyId);
+  if (!seq) return null;
+  const used = await query(
+    'SELECT count(*)::int AS n FROM enrollments WHERE sequence_id=$1 AND company_id=$2',
+    [sequenceId, companyId]);
+  const enrollments = used.rows[0] ? used.rows[0].n : 0;
+
+  if (enrollments === 0) {
+    await query('DELETE FROM sequences WHERE id=$1 AND company_id=$2', [sequenceId, companyId]);
+    return { ...seq, deleted: 'hard', enrollments };
+  }
+  // Cancel what has not gone out yet, then retire the workflow. A paused/
+  // archived sequence enqueues nothing (D5b), so this stops it firing again.
+  await query(
+    `UPDATE scheduled_actions SET status='skipped', updated_at=now()
+      WHERE company_id=$2 AND status IN ('pending','claimed')
+        AND enrollment_id IN (SELECT id FROM enrollments WHERE sequence_id=$1)`,
+    [sequenceId, companyId]);
+  // No .catch here: `exit_reason` and the 'exited' status both exist on this
+  // table, so a failure would be a genuine problem — swallowing it would report
+  // a workflow as stopped while its enrolments stayed active and kept advancing.
+  await query(`UPDATE enrollments SET status='exited', exit_reason='workflow deleted'
+                WHERE sequence_id=$1 AND company_id=$2 AND status='active'`,
+    [sequenceId, companyId]);
+  const r = await query(
+    `UPDATE sequences SET status='archived', updated_at=now() WHERE id=$1 AND company_id=$2 RETURNING *`,
+    [sequenceId, companyId]);
+  return { ...(r.rows[0] || seq), deleted: 'archived', enrollments };
 }
 
 // ─── enrollments ───────────────────────────────────────────────────────────
@@ -292,7 +569,7 @@ async function enroll(companyId, { sequenceId, contactId, anchorAt = null }) {
   try {
     await client.query('BEGIN');
     const firstStep = await client.query(
-      'SELECT id FROM sequence_steps WHERE sequence_id = $1 AND company_id = $2 ORDER BY step_order ASC LIMIT 1',
+      'SELECT id FROM sequence_steps WHERE sequence_id = $1 AND company_id = $2 AND archived_at IS NULL ORDER BY step_order ASC LIMIT 1',
       [sequenceId, companyId]
     );
     const stepId = firstStep.rows[0]?.id || null;
@@ -379,6 +656,7 @@ async function skipAnchoredStep(companyId, enrollment, step, { client, reason, c
 
   const next = await run(
     `SELECT id FROM sequence_steps WHERE sequence_id = $1 AND company_id = $2 AND step_order > $3
+       AND archived_at IS NULL
      ORDER BY step_order ASC LIMIT 1`,
     [enrollment.sequence_id, companyId, step.step_order]
   );
@@ -649,5 +927,6 @@ module.exports = {
   addStep, listSteps, listStepsForSequences,
   enroll, getEnrollment, listEnrollments, listEnrollmentsWithQueue, updateEnrollment,
   scheduleAction, listScheduledActions, materializeNextStep,
-  enrollForTriggerStage, enrollForTriggerTag,
+  enrollForTriggerStage, enrollForTriggerTag, enrollForTriggerEvent,
+  updateStep, getStepById, stepUsage, removeStep, reorderSteps, renumberSteps, removeSequence,
 };

@@ -8,6 +8,7 @@ const express = require('express');
 const router = express.Router();
 const seqDb = require('../db/models/sequences');
 const { getPipelineConfig } = require('../db/pipeline');
+const workflowTriggers = require('../lib/workflow-triggers');
 const templatesDb = require('../db/models/templates');
 const contactDb = require('../db/models/contacts');
 const { requireAuth, getUserCompanyId } = require('../middleware/auth');
@@ -94,10 +95,19 @@ router.post('/', async (req, res) => {
   try {
     const companyId = getUserCompanyId(req);
     if (!companyId) return res.status(401).json({ error: 'Authentication required' });
-    const { name, pipeline_key, trigger_stage, trigger_tag } = req.body || {};
+    const { name, pipeline_key, trigger_stage, trigger_tag, trigger_event, trigger_config } = req.body || {};
     if (!name || !String(name).trim()) return res.status(400).json({ error: 'name required' });
-    if (trigger_stage && trigger_tag) {
-      return res.status(400).json({ error: 'a sequence can trigger on a stage OR a tag, not both' });
+    if ([trigger_stage, trigger_tag, trigger_event].filter(Boolean).length > 1) {
+      return res.status(400).json({ error: 'a sequence can trigger on a stage, a tag OR an event — not more than one' });
+    }
+    // A trigger_event with no firing site would be a workflow that silently
+    // never runs, which is indistinguishable to an operator from a broken one.
+    // The allowed set is the one workflow-triggers.js actually fires.
+    if (trigger_event && !workflowTriggers.EVENT_KEYS.includes(trigger_event)) {
+      return res.status(400).json({
+        error: `unknown trigger_event '${trigger_event}'`,
+        allowed_events: workflowTriggers.EVENT_KEYS,
+      });
     }
     // Config-driven (CP1 decision 9): any pipeline this tenant can resolve is
     // a valid trigger source. getPipelineConfig's (company_id = $2 OR
@@ -120,6 +130,8 @@ router.post('/', async (req, res) => {
     const sequence = await seqDb.createSequence({
       companyId, name: String(name).trim(), pipelineKey: pipeline_key || null, triggerStage: trigger_stage || null,
       triggerTag: trigger_tag ? String(trigger_tag).trim() : null,
+      triggerEvent: trigger_event || null,
+      triggerConfig: trigger_config && typeof trigger_config === 'object' ? trigger_config : {},
     });
     res.status(201).json(sequence);
   } catch (err) {
@@ -129,6 +141,22 @@ router.post('/', async (req, res) => {
 });
 
 // GET /api/crm/sequences/:id — detail with steps + enrollment counts
+// GET /api/crm/sequences/trigger-events — the events a workflow can start on.
+// Served rather than hardcoded in the client so the builder's dropdown cannot
+// drift from what the server actually fires; `fires_at` is shown to the
+// operator so "what makes this run?" is answerable in the UI.
+// MUST precede '/:id' or that route captures 'trigger-events'.
+router.get('/trigger-events', (req, res) => {
+  res.json({
+    events: workflowTriggers.EVENT_KEYS.map((key) => ({
+      key,
+      label: workflowTriggers.TRIGGER_EVENTS[key].label,
+      fires_at: workflowTriggers.TRIGGER_EVENTS[key].firesAt,
+      config: workflowTriggers.TRIGGER_EVENTS[key].config || [],
+    })),
+  });
+});
+
 router.get('/:id', async (req, res) => {
   try {
     const companyId = getUserCompanyId(req);
@@ -320,6 +348,122 @@ router.post('/:id/steps', async (req, res) => {
     res.status(500).json({ error: 'failed to add step' });
   }
 });
+
+// ─── Step editing (migration 042) ────────────────────────────────────────────
+// A saved workflow was view-only because deleting a step cascades into its
+// scheduled_actions — including sent ones. These routes make editing possible
+// without that hazard: content is editable freely, removal soft-archives
+// anything with history, and reordering is a permutation, not a free-for-all.
+
+// PATCH /api/crm/sequences/:id/steps/:stepId
+router.patch('/:id/steps/:stepId', async (req, res) => {
+  try {
+    const companyId = getUserCompanyId(req);
+    if (!companyId) return res.status(401).json({ error: 'Authentication required' });
+    const seq = await seqDb.getSequenceById(req.params.id, companyId);
+    if (!seq) return res.status(404).json({ error: 'sequence not found' });
+    const step = await seqDb.getStepById(req.params.stepId, companyId);
+    if (!step || step.sequence_id !== seq.id) return res.status(404).json({ error: 'step not found' });
+    if (step.archived_at) return res.status(409).json({ error: 'this step has been removed from the workflow' });
+
+    const b = req.body || {};
+    // channel/action_type are immutable — they are mirrored onto every job this
+    // step already produced. Say so rather than ignoring the field silently.
+    if (b.channel !== undefined || b.action_type !== undefined) {
+      return res.status(400).json({
+        error: 'channel and action_type cannot be changed — remove this step and add the one you want',
+      });
+    }
+    if (b.delay_seconds !== undefined && (!Number.isFinite(Number(b.delay_seconds)) || Number(b.delay_seconds) < 0)) {
+      return res.status(400).json({ error: 'delay_seconds must be a non-negative number' });
+    }
+    const updated = await seqDb.updateStep(step.id, companyId, {
+      delaySeconds: b.delay_seconds !== undefined ? Math.round(Number(b.delay_seconds)) : undefined,
+      anchorOffsetSeconds: b.anchor_offset_seconds,
+      subject: b.subject, body: b.body, templateRef: b.template_ref,
+      actionConfig: b.action_config, entryConditions: b.entry_conditions, exitConditions: b.exit_conditions,
+    });
+    if (!updated) return res.status(404).json({ error: 'step not found' });
+    res.json(updated);
+  } catch (err) {
+    console.error('[CRM] PATCH /sequences/:id/steps/:stepId error:', err.message);
+    res.status(500).json({ error: 'failed to update step' });
+  }
+});
+
+// DELETE /api/crm/sequences/:id/steps/:stepId
+// Archives rather than deletes whenever the step has produced any job, so send
+// history survives. The response says which happened and how much was kept.
+router.delete('/:id/steps/:stepId', async (req, res) => {
+  try {
+    const companyId = getUserCompanyId(req);
+    if (!companyId) return res.status(401).json({ error: 'Authentication required' });
+    const seq = await seqDb.getSequenceById(req.params.id, companyId);
+    if (!seq) return res.status(404).json({ error: 'sequence not found' });
+    const step = await seqDb.getStepById(req.params.stepId, companyId);
+    if (!step || step.sequence_id !== seq.id) return res.status(404).json({ error: 'step not found' });
+
+    const out = await seqDb.removeStep(step.id, companyId);
+    res.json({
+      ok: true, id: step.id, mode: out.deleted,
+      history_preserved: out.history_preserved || 0,
+      note: out.deleted === 'archived'
+        ? 'Step removed from the workflow. Its send history was kept.'
+        : 'Step deleted — it had never run, so there was no history to keep.',
+    });
+  } catch (err) {
+    console.error('[CRM] DELETE /sequences/:id/steps/:stepId error:', err.message);
+    res.status(500).json({ error: 'failed to remove step' });
+  }
+});
+
+// POST /api/crm/sequences/:id/steps/reorder  { step_ids: [...] }
+router.post('/:id/steps/reorder', async (req, res) => {
+  try {
+    const companyId = getUserCompanyId(req);
+    if (!companyId) return res.status(401).json({ error: 'Authentication required' });
+    const seq = await seqDb.getSequenceById(req.params.id, companyId);
+    if (!seq) return res.status(404).json({ error: 'sequence not found' });
+    const ids = (req.body && req.body.step_ids) || [];
+    if (!Array.isArray(ids) || !ids.length) return res.status(400).json({ error: 'step_ids array required' });
+    try {
+      const steps = await seqDb.reorderSteps(seq.id, companyId, ids);
+      res.json({ ok: true, steps });
+    } catch (e) {
+      if (e.code === 'BAD_ORDER') {
+        return res.status(400).json({
+          error: 'step_ids must list every current step of this workflow exactly once',
+        });
+      }
+      throw e;
+    }
+  } catch (err) {
+    console.error('[CRM] POST /sequences/:id/steps/reorder error:', err.message);
+    res.status(500).json({ error: 'failed to reorder steps' });
+  }
+});
+
+// DELETE /api/crm/sequences/:id — archives a workflow that has run, deletes one
+// that never did. Deleting outright would cascade through enrollments into
+// scheduled_actions and erase the send history.
+router.delete('/:id', async (req, res) => {
+  try {
+    const companyId = getUserCompanyId(req);
+    if (!companyId) return res.status(401).json({ error: 'Authentication required' });
+    const out = await seqDb.removeSequence(req.params.id, companyId);
+    if (!out) return res.status(404).json({ error: 'sequence not found' });
+    res.json({
+      ok: true, id: req.params.id, mode: out.deleted, enrollments: out.enrollments,
+      note: out.deleted === 'archived'
+        ? `Workflow archived and stopped. ${out.enrollments} enrolment(s) kept for history.`
+        : 'Workflow deleted — nobody had ever been enrolled.',
+    });
+  } catch (err) {
+    console.error('[CRM] DELETE /sequences/:id error:', err.message);
+    res.status(500).json({ error: 'failed to delete workflow' });
+  }
+});
+
 
 // POST /api/crm/sequences/:id/enroll  { contact_id, anchor_at? }
 // Manual enrollment — the only path today is stage-triggered

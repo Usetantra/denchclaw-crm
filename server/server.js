@@ -91,6 +91,8 @@ app.use('/api/crm/channel-templates', require('./routes/channel-templates'));
 app.use('/api/crm/settings', require('./routes/settings'));
 app.use('/api/crm/tasks', require('./routes/tasks'));
 app.use('/api/crm/executors', executorsRouter);
+app.use('/api/crm/tantra', require('./routes/tantra'));
+app.use('/api/crm/ops', require('./routes/ops'));
 app.use('/api/crm/automations', automationsRouter);
 app.use('/api/crm', conversationsRouter);
 app.use('/api/crm', analyticsRouter);

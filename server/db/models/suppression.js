@@ -9,6 +9,10 @@ function norm(id) { return String(id || '').trim().toLowerCase(); }
 
 // Add/refresh a suppression. Idempotent on (company, channel, identifier) while active.
 async function add(companyId, channel, identifier, { reason = 'opt_out', scope = 'company', contactId = null, metadata = {} } = {}) {
+  // Read BEFORE the upsert: the ON CONFLICT below cannot distinguish an insert
+  // from a refresh in its RETURNING, and firing the workflow on a refresh would
+  // re-enrol a contact every time an already-unsubscribed person texts STOP again.
+  const alreadySuppressed = await isSuppressed(companyId, channel, identifier);
   const r = await query(
     `INSERT INTO channel_suppression
        (company_id, channel, identifier, contact_id, reason, scope, metadata, suppressed_at)
@@ -18,7 +22,52 @@ async function add(companyId, channel, identifier, { reason = 'opt_out', scope =
      RETURNING *`,
     [companyId, channel, norm(identifier), contactId, reason, scope, JSON.stringify(metadata)]
   );
-  return r.rows[0];
+
+  // Workflow trigger `unsubscribed` (migration 041). Fired from the MODEL, not
+  // from the three routes that call it (compliance, Twilio STOP, Tantra
+  // email.unsubscribed), because the model is the single door — wiring the
+  // routes individually is how the tag trigger ended up missing the
+  // contact-creation path, and a fourth caller added later would silently not
+  // fire.
+  //
+  // Only on a genuinely NEW suppression: the ON CONFLICT above refreshes an
+  // existing one, and re-running an opt-out that is already recorded must not
+  // re-enrol someone into an unsubscribe workflow.
+  const row = r.rows[0];
+  if (row && !alreadySuppressed) {
+    // `contact_id` is optional on this table and two of the three callers do not
+    // have it (Twilio STOP knows only a phone number), so resolve by identifier
+    // when it is absent — otherwise the trigger would fire for manual
+    // unsubscribes and silently not for real ones.
+    let cid = contactId || row.contact_id || null;
+    if (!cid) cid = await resolveContactByIdentifier(companyId, channel, identifier);
+    if (cid) require('../../lib/workflow-triggers').fire(companyId, cid, 'unsubscribed', { channel, reason });
+  }
+  return row;
+}
+
+// Lazy + defensive: a suppression must be recorded even if contact resolution
+// fails. Returns null rather than throwing, and the trigger simply does not fire.
+async function resolveContactByIdentifier(companyId, channel, identifier) {
+  try {
+    const v = norm(identifier);
+    if (!v) return null;
+    if (channel === 'email') {
+      const r = await query(
+        `SELECT id FROM contacts WHERE company_id=$1 AND deleted_at IS NULL AND lower(email)=$2 LIMIT 1`,
+        [companyId, v]);
+      return r.rows[0] ? r.rows[0].id : null;
+    }
+    const digits = v.replace(/\D/g, '');
+    if (!digits) return null;
+    const r = await query(
+      `SELECT id FROM contacts
+        WHERE company_id=$1 AND deleted_at IS NULL AND phone IS NOT NULL
+          AND regexp_replace(phone, '[^0-9]', '', 'g') = $2
+        ORDER BY created_at LIMIT 1`,
+      [companyId, digits]);
+    return r.rows[0] ? r.rows[0].id : null;
+  } catch (_e) { return null; }
 }
 
 // True if there is an active suppression for this identifier on this channel.

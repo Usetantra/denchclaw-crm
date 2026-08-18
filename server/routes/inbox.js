@@ -21,6 +21,8 @@ const aiDraft = require('../lib/ai-draft');
 const templatesDb = require('../db/models/templates');
 const { getPipelineConfig, getPipelineTransitions } = require('../db/pipeline');
 const { requireAuth, getUserCompanyId } = require('../middleware/auth');
+const tantraClient = require('../lib/tantra-client');
+const tantraExecutor = require('../lib/tantra-executor');
 
 router.use(requireAuth);
 
@@ -141,9 +143,11 @@ router.get('/', async (req, res) => {
     });
     // Stage chip per row so the list is stage-aware without opening a thread.
     // Read-only there — the client renders list chips inert.
+    // F18: one deals query for the whole page instead of one per row.
+    const dealsByContact = await inboxDb.listOpenDealsForContacts(companyId, rows.map(r => r.contact_id));
     const out = [];
     for (const r of rows) {
-      const deals = await inboxDb.listOpenDeals(companyId, r.contact_id);
+      const deals = dealsByContact.get(r.contact_id) || [];
       out.push({
         ...r,
         open_deal_count: deals.length,
@@ -309,17 +313,23 @@ router.patch('/:contactId/assignee', async (req, res) => {
   }
 });
 
-// Find-or-create the open conversation for (contact, channel). Mirrors
+// Find-or-create the open conversation for (contact, channel, account). Mirrors
 // conversations.js's own upsert, including the partial unique index's
 // `WHERE status != 'closed'` predicate.
-async function openConversation(companyId, contactId, channel) {
+//
+// `channelAccount` (migration 040) is the B3 grain: one contact can hold two
+// open WhatsApp conversations — Tantra's outreach number and the CRM's own —
+// and '' means "the CRM's own account", which is every pre-040 row. The
+// inference list must match `uq_conversations_contact_channel_account` exactly
+// or this INSERT is a 500, not a fallback, so it is not defaulted away.
+async function openConversation(companyId, contactId, channel, channelAccount = '') {
   const r = await query(
-    `INSERT INTO conversations (company_id, contact_id, channel, status, assignee, metadata)
-     VALUES ($1,$2,$3,'open','human','{}'::jsonb)
-     ON CONFLICT (contact_id, channel) WHERE status != 'closed'
+    `INSERT INTO conversations (company_id, contact_id, channel, channel_account, status, assignee, metadata)
+     VALUES ($1,$2,$3,$4,'open','human','{}'::jsonb)
+     ON CONFLICT (contact_id, channel, channel_account) WHERE status != 'closed'
      DO UPDATE SET updated_at = now()
      RETURNING *`,
-    [companyId, contactId, channel]
+    [companyId, contactId, channel, channelAccount || '']
   );
   return r.rows[0];
 }
@@ -332,7 +342,7 @@ router.post('/:contactId/reply', async (req, res) => {
     const contact = await ownedContact(companyId, req.params.contactId);
     if (!contact) return res.status(404).json({ error: 'contact not found' });
 
-    const { channel, body, deal_id = null, ai_generated = false, subject = null } = req.body || {};
+    const { channel, body, deal_id = null, ai_generated = false, subject = null, channel_account = '' } = req.body || {};
     if (!inboxDb.CHANNELS.includes(channel)) return res.status(400).json({ error: `channel must be one of ${inboxDb.CHANNELS.join(', ')}` });
     if (!body || !String(body).trim()) return res.status(400).json({ error: 'body required' });
 
@@ -350,7 +360,51 @@ router.post('/:contactId/reply', async (req, res) => {
     const scope = await inboxDb.validateDealScope(companyId, contact.id, deal_id);
     if (!scope.ok) return res.status(400).json({ error: scope.error });
 
-    const conv = await openConversation(companyId, contact.id, channel);
+    // `channel_account` (migration 040) selects WHICH account to reply on when a
+    // contact has two open conversations on one channel — the B3 split, e.g.
+    // Tantra's cold-outreach WhatsApp number vs the CRM's own reminder number.
+    // Omitted means '', the CRM's own account, which is what every pre-040
+    // caller meant, so existing behaviour is unchanged.
+    // A NAMED account must already exist; only the CRM's own ('') is created on
+    // demand. Without this, openConversation would happily mint a brand-new
+    // CRM-owned conversation carrying someone else's account string — so passing
+    // Tantra's number for a contact it has never messaged produced a row with
+    // external_system NULL, which reads as "not Tantra-owned" and sends through
+    // the CRM's provider on a number labelled as Tantra's. That is precisely the
+    // bypass the ownership check below exists to prevent, reachable in exactly
+    // the case that matters: before the mirror has seen that thread.
+    let conv;
+    if (channel_account) {
+      const found = await query(
+        `SELECT * FROM conversations
+          WHERE company_id=$1 AND contact_id=$2 AND channel=$3 AND channel_account=$4
+            AND status <> 'closed' LIMIT 1`,
+        [companyId, contact.id, channel, channel_account]
+      );
+      conv = found.rows[0];
+      if (!conv) {
+        return res.status(404).json({
+          error: `no open ${channel} conversation on account '${channel_account}' for this contact. ` +
+                 `Omit channel_account to reply from the CRM's own account.`,
+        });
+      }
+    } else {
+      conv = await openConversation(companyId, contact.id, channel, '');
+    }
+
+    // ── Channel ownership (tantra.md §2.4's hardest rule) ───────────────────
+    // "Anything Tantra owns must send through Tantra." Suppression, one-click
+    // unsubscribe, warmup pacing, per-account quota reservation, domain health
+    // and human-looking send pacing all live on the Tantra side. A second system
+    // sending on a Tantra-owned account bypasses every one of them — that is
+    // burned sending domains and mail to unsubscribed contacts, which is legal
+    // exposure rather than a bug.
+    //
+    // So a Tantra-owned conversation routes to Tantra's reply endpoint, and if
+    // Tantra is not reachable we REFUSE. Falling through to the CRM's own
+    // provider would be precisely the forbidden thing, and it would look like a
+    // success to the rep.
+    const tantraOwned = conv.external_system === 'tantra' && !!conv.external_thread_id;
 
     // D5 — deliver only where a provider genuinely exists; otherwise record and
     // SAY SO. The outcome is stamped into metadata so the thread never guesses.
@@ -358,7 +412,28 @@ router.post('/:contactId/reply', async (req, res) => {
     let delivered = false;
     let note = null;
     const senderTable = await require('./crm').getChannelSenders(companyId);
-    if (canDeliver(channel, senderTable)) {
+    if (tantraOwned) {
+      const apiKey = await tantraExecutor.getApiKey(companyId);
+      if (!apiKey) {
+        return res.status(409).json({
+          error: 'This conversation belongs to a Tantra-owned account and Tantra is not connected. ' +
+                 'Sending it from the CRM would bypass Tantra\'s suppression and pacing — refused. ' +
+                 'Connect Tantra, or reply on the CRM\'s own account instead.',
+          channel, channel_account: conv.channel_account,
+        });
+      }
+      try {
+        const sent = await tantraClient.reply(apiKey, conv.external_thread_id, { bodyText: String(body) });
+        // The social path returns the same envelope keys as the email path
+        // deliberately, so one read covers every channel.
+        providerMessageId = sent && (sent.gmailMessageId || sent.messageIdHeader)
+          ? `tantra:${sent.gmailMessageId || sent.messageIdHeader}` : null;
+        delivered = true;
+      } catch (e) {
+        console.error('[CRM][inbox] Tantra reply failed:', e.message);
+        return res.status(502).json({ error: `Tantra delivery failed — ${e.message}` });
+      }
+    } else if (canDeliver(channel, senderTable)) {
       try {
         const sent = await resendEmail.sendEmail({
           from: pickSender(senderTable, channel),

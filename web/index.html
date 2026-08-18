@@ -46,10 +46,24 @@
      since form controls don't inherit `color` from the page by default. That
      combination is exactly a "text not visible" bug: black text, black-ish bg. */
   :root{color-scheme:light dark}
-  /* Base fallback so no input/select/textarea is EVER left to browser defaults
-     for color+background — more specific rules elsewhere (.toolbar select,
-     .field input, etc.) still win by specificity; this only fills the gaps. */
-  input,select,textarea{color:var(--ink);background:var(--surface);font-family:var(--sans)}
+  /* Base fallback so no input/select/textarea is EVER left to browser defaults —
+     more specific rules elsewhere (.toolbar select, .field input, etc.) still win
+     by specificity, and any inline style wins outright; this only fills the gaps.
+     It originally covered colour/background/font-family only, which left the BOX
+     — font-size, padding, border, radius — at the browser default. A control
+     that was in neither `.field` nor `.cvf` therefore rendered with oversized
+     text and a native inset border matching nothing else on the page (the
+     workflow trigger's Tag field was the visible case). Covering the box here
+     fixes every such control at once rather than one at a time. */
+  input,select,textarea{color:var(--ink);background:var(--surface);font-family:var(--sans);
+    font-size:13px;border:1px solid var(--hair);border-radius:6px;padding:8px 10px;outline:none;max-width:100%}
+  input:focus,select:focus,textarea:focus{border-color:var(--ink)}
+  /* Checkboxes and radios are not text boxes — padding and a border on them
+     produce a distorted control, so they opt back out. */
+  input[type=checkbox],input[type=radio]{padding:0;border:none;border-radius:0;max-width:none;
+    width:auto;accent-color:var(--ink)}
+  input:disabled,select:disabled,textarea:disabled{opacity:.6;cursor:not-allowed}
+  ::placeholder{color:var(--ink-4);opacity:1}
   body{margin:0;background:var(--bg);color:var(--ink);font:16px/1.6 var(--sans);-webkit-font-smoothing:antialiased}
   #app-shell{min-height:100vh;display:flex;flex-direction:column}
   #auth-gate{min-height:100vh;display:none;align-items:center;justify-content:center;padding:24px}
@@ -102,6 +116,20 @@
     justify-content:center;font-size:16px;flex-shrink:0}
   .wf-node-eyebrow{font-size:10px;letter-spacing:.08em;text-transform:uppercase;color:var(--ink-4);margin-bottom:2px}
   .wf-trigger-node{border-color:var(--accent-bg,var(--ink));box-shadow:0 0 0 1px var(--hair) inset}
+  /* Trigger editor: separated from the node header by a rule, and capped in
+     width so a full-bleed canvas does not stretch a single short input across
+     1,200px — a tag name is a few characters, and a field far wider than its
+     content reads as broken rather than spacious. */
+  /* The rule spans the whole card (it separates header from editor), but the
+     FIELDS are capped: a tag name is a few characters, and stretching one
+     short input across a 1,200px canvas reads as broken rather than spacious. */
+  .wf-step-edit{margin-top:14px;padding-top:14px;border-top:1px solid var(--hair)}
+  .wf-step-edit>*{max-width:520px}
+  .wf-trigger-form{margin-top:14px;padding-top:14px;border-top:1px solid var(--hair)}
+  .wf-trigger-form>*{max-width:520px}
+  .wf-trigger-form .field:last-of-type{margin-bottom:0}
+  .field-hint{font-size:11.5px;line-height:1.55;color:var(--ink-4);margin:0 0 4px}
+  .wf-trigger-actions{display:flex;gap:8px;margin-top:14px}
   .wf-step-card{width:100%}
   .wf-step-actions{display:flex;gap:4px;flex-shrink:0}
   .wf-step-actions button{padding:3px 7px;font-size:11px}
@@ -379,7 +407,10 @@
   .bulkbar .btn{background:rgba(var(--accent-fg-rgb),.14);border-color:transparent;color:var(--accent-fg)} .bulkbar .btn:hover{background:rgba(var(--accent-fg-rgb),.26)}
   .bulkbar .btn.danger{background:var(--hot);color:var(--accent-fg)}
 
-  .pager{display:flex;align-items:center;gap:10px;margin-top:14px;font-size:12px;color:var(--ink-4)}
+  .gmore{font-size:11px;color:var(--ink-4);text-align:center;padding:8px 6px;border-top:1px dashed var(--hair);margin-top:6px}
+  .pager{display:flex;align-items:center;gap:10px;margin-top:14px;font-size:12px;color:var(--ink-4);flex-wrap:wrap}
+  .pager-size{margin-left:auto;display:flex;align-items:center;gap:6px}
+  .pager-size select{width:auto;padding:3px 6px;font-size:12px}
   .pager button:disabled{opacity:.4;cursor:default}
 
   .skel{display:flex;flex-direction:column;gap:8px}
@@ -510,6 +541,11 @@
 
   <!-- ── DASHBOARD ─────────────────────────────────────────────────────── -->
   <div id="view-dashboard">
+  <!-- Engine alarm. Deliberately on the DASHBOARD, not buried in Settings: the
+       state it reports (nothing has ever ticked) is the default on a fresh
+       deployment, and nobody goes looking for a problem the product is
+       reporting as success everywhere else. -->
+  <div id="engine-alarm" style="display:none"></div>
   <div class="layout">
     <div>
       <div class="cards" id="cards"></div>
@@ -800,6 +836,7 @@
     <button data-sub="channels">Channels</button>
     <button data-sub="integrations">Integrations</button>
     <button data-sub="sequences">Sequences</button>
+    <button data-sub="system">System health</button>
   </div>
   <div class="settings-content">
 
@@ -811,6 +848,34 @@
       <div id="bp-form"><div class="muted">loading…</div></div>
     </div>
   </div><!-- /settings-sub-profile -->
+
+  <!-- ── System health ──────────────────────────────────────────────────────
+       Answers the one question no other screen can: is anything actually
+       running? Everything here is fail-closed by design, so a silent system is
+       indistinguishable from a healthy idle one without this page. -->
+  <div id="settings-sub-system" style="display:none">
+    <div id="ops-engine"></div>
+    <div class="settings-card" style="margin-top:14px">
+      <h3>Channels</h3>
+      <p class="muted" style="font-size:12px;margin:2px 0 14px;line-height:1.5">
+        Queue depth is what is waiting; <b>due</b> is what should already have gone out.
+        A due count with no recent tick means nothing is reading the queue.
+      </p>
+      <div id="ops-channels"><div class="muted">loading…</div></div>
+    </div>
+    <div class="settings-card" style="margin-top:14px">
+      <h3>Integrations</h3>
+      <div id="ops-integrations"><div class="muted">loading…</div></div>
+    </div>
+    <div class="settings-card" style="margin-top:14px">
+      <h3>Stuck sends</h3>
+      <p class="muted" style="font-size:12px;margin:2px 0 14px;line-height:1.5">
+        Jobs whose outcome was never learned, or held far too long to still be in flight.
+        Each needs a human decision: resend if it never arrived, discard if it did.
+      </p>
+      <div id="ops-quarantine"><div class="muted">loading…</div></div>
+    </div>
+  </div><!-- /settings-sub-system -->
 
   <!-- ── Custom Fields ────────────────────────────────────────────────────── -->
   <div id="settings-sub-fields" style="display:none">
@@ -951,7 +1016,9 @@
       <button class="btn sm" id="wf-back">← Back to Workflows</button>
       <input id="wf-b-name" class="wf-name-input" placeholder="Untitled workflow">
       <span class="spacer" style="flex:1"></span>
-      <span id="wf-b-readonly-note" class="muted" style="font-size:12px;display:none">Viewing only — delete and recreate to change steps</span>
+      <span id="wf-b-readonly-note" class="muted" style="font-size:12px;display:none"></span>
+      <button class="btn sm" id="wf-b-toggle" style="display:none">Pause</button>
+      <button class="btn sm danger" id="wf-b-delete" style="display:none">Delete</button>
       <button class="btn primary" id="wf-b-save">Save workflow</button>
     </div>
     <div class="wf-canvas">
@@ -966,23 +1033,60 @@
             </div>
             <button type="button" class="btn sm" id="wf-trigger-edit">Edit</button>
           </div>
-          <div id="wf-trigger-form" style="display:none;margin-top:12px;padding-top:12px;border-top:1px solid var(--hair)">
-            <select id="wf-b-trigger-type" style="width:100%;margin-bottom:12px">
-              <option value="tag">🏷️ A tag is added</option>
-              <option value="stage">🔀 A contact reaches a pipeline stage</option>
-            </select>
+          <!-- Uses the house `.field` convention (label + control), NOT bare
+               elements with inline widths. The global `input,select,textarea`
+               rule sets only colour/background/font-family — no font-size,
+               padding, border or radius — so a bare control here fell back to
+               the browser's DEFAULT form styling: oversized text and a native
+               2px inset border that matched nothing else on the page. That is
+               why the "Add step" form below looked right and this one did not;
+               it already used `.field`. -->
+          <div id="wf-trigger-form" class="wf-trigger-form" style="display:none">
+            <div class="field">
+              <label for="wf-b-trigger-type">When this happens</label>
+              <select id="wf-b-trigger-type">
+                <option value="tag">🏷️ A tag is added</option>
+                <option value="stage">🔀 A contact reaches a pipeline stage</option>
+                <optgroup label="Events" id="wf-b-trigger-events"></optgroup>
+              </select>
+            </div>
             <div id="wf-b-trigger-tag">
-              <label style="display:block;font-size:11px;color:var(--ink-4);margin-bottom:4px">Tag</label>
-              <input id="wf-b-trigger-tag-value" placeholder="e.g. lead_in" style="width:100%">
-              <p class="muted" style="font-size:11px;margin-top:8px;line-height:1.5">Any tool — a lead webhook, a manual tag, another workflow's "Add tag" action — that applies this tag fires this workflow.</p>
+              <div class="field" style="margin-bottom:6px">
+                <label for="wf-b-trigger-tag-value">Tag</label>
+                <input id="wf-b-trigger-tag-value" list="wf-b-tag-list" placeholder="e.g. lead_in" autocomplete="off">
+                <datalist id="wf-b-tag-list"></datalist>
+              </div>
+              <p class="field-hint">Any tool — a lead webhook, a manual tag, another workflow's “Add tag” action — that applies this tag fires this workflow.</p>
+            </div>
+            <div id="wf-b-trigger-event" style="display:none">
+              <div class="field" id="wf-b-trigger-event-channel-wrap" style="display:none;margin-bottom:6px">
+                <label for="wf-b-trigger-event-channel">Channel</label>
+                <select id="wf-b-trigger-event-channel">
+                  <option value="">Any channel</option>
+                  <option value="email">Email</option>
+                  <option value="sms">SMS</option>
+                  <option value="whatsapp">WhatsApp</option>
+                  <option value="linkedin">LinkedIn</option>
+                  <option value="telegram">Telegram</option>
+                </select>
+              </div>
+              <p class="field-hint" id="wf-b-trigger-event-hint"></p>
             </div>
             <div id="wf-b-trigger-stage" style="display:none">
-              <label style="display:block;font-size:11px;color:var(--ink-4);margin-bottom:4px">Pipeline</label>
-              <select id="wf-b-trigger-pipeline" style="width:100%;margin-bottom:10px"></select>
-              <label style="display:block;font-size:11px;color:var(--ink-4);margin-bottom:4px">Stage key</label>
-              <input id="wf-b-trigger-stage-value" placeholder="e.g. accepted" style="width:100%">
+              <div class="field-row">
+                <div class="field">
+                  <label for="wf-b-trigger-pipeline">Pipeline</label>
+                  <select id="wf-b-trigger-pipeline"></select>
+                </div>
+                <div class="field">
+                  <label for="wf-b-trigger-stage-value">Stage key</label>
+                  <select id="wf-b-trigger-stage-value"></select>
+                </div>
+              </div>
             </div>
-            <button type="button" class="btn sm primary" id="wf-trigger-done" style="margin-top:10px">Done</button>
+            <div class="wf-trigger-actions">
+              <button type="button" class="btn sm primary" id="wf-trigger-done">Done</button>
+            </div>
           </div>
         </div>
       </div>
@@ -1610,7 +1714,11 @@ function buildColumns(stageOrder,pipeline,type){
     const items=(type==="deal"?bucket.deals:bucket.contacts)||[];
     const total=items.reduce((s,it)=>s+(parseFloat(it.value||it.deal_value)||0),0);
     const color=STAGE_COLORS[st]||"#98a2b3";
-    const cards=items.map(it=>gcard(type,it,st)).join("")||`<div class="gempty">—</div>`;
+    // The server caps CARDS per stage but reports the true stage count, so say
+    // so rather than letting a column of 100 imply the stage holds 100.
+    const truncated=bucket.truncated&&(bucket.count||0)>items.length;
+    const more=truncated?`<div class="gmore">Showing ${items.length} of ${bucket.count.toLocaleString()} — open Contacts to see the rest</div>`:"";
+    const cards=(items.map(it=>gcard(type,it,st)).join("")||`<div class="gempty">—</div>`)+more;
     return `<div class="gcol" data-type="${type}" data-stage="${st}" style="--sc:${color}">
       <div class="ghead"><div class="gname"><span class="cdot"></span>${nice(st)}</div>
         <div class="gsum"><b>${bucket.count||items.length}</b>${total>0?` · $${total.toLocaleString()}`:""}
@@ -2454,6 +2562,30 @@ $("#chat-clear").addEventListener("click",()=>{
 loadChatHistory();
 
 // ── Main load ─────────────────────────────────────────────────────────────────
+// One check, shown only when it is bad. A healthy engine gets no banner —
+// a permanent green bar is noise, and noise is what makes a real alarm
+// invisible. Failures here are swallowed: the dashboard must render even if the
+// health endpoint is unavailable.
+async function renderEngineAlarm(){
+  const box=$("#engine-alarm");if(!box)return;
+  let h;try{h=await get("ops/health");}catch{box.style.display="none";return;}
+  if(!h||!h.engine||h.engine.status==="running"){box.style.display="none";return;}
+  const never=h.engine.status==="never_ran";
+  box.style.display="";
+  box.innerHTML=`<div style="border:1px solid var(--hot);border-left:3px solid var(--hot);
+      background:var(--hot-bg);border-radius:var(--radius);padding:13px 16px;margin-bottom:18px">
+    <div style="font-size:13px;font-weight:600;color:var(--hot)">
+      ${never?"Automation has never run on this account":"Automation has stopped"}</div>
+    <div style="font-size:12.5px;color:var(--ink-2);margin-top:5px;line-height:1.55">
+      ${never
+        ? "Sequences, workflow actions and reminders are being queued, but nothing is processing them. The executors run on a schedule that has to be set up — until it is, nothing is sent."
+        : `Nothing has processed the queue for ${h.engine.minutes_since_tick} minutes.`}
+      ${h.totals&&h.totals.due?` <b>${h.totals.due}</b> job(s) are already due.`:""}
+      <a class="linklike" id="engine-alarm-link">Open System health</a>
+    </div></div>`;
+  $("#engine-alarm-link").onclick=()=>{setTab("settings");setSettingsSubtab("system");};
+}
+
 async function load(){
   try{
     const [stats,mktPipeline,salesPipeline,contacts]=await Promise.all([
@@ -2462,6 +2594,7 @@ async function load(){
       get("pipeline?pipeline_key=sales"),
       get("contacts?limit=200"),
     ]);
+    renderEngineAlarm();   // fire-and-forget; never blocks the dashboard
     const clist=contacts.data||contacts.contacts||[];
     BOARD_DATA.marketing=mktPipeline.pipeline||{};
     BOARD_DATA.sales=salesPipeline.pipeline||{};
@@ -2804,10 +2937,21 @@ function wfDelayLabel(delaySeconds){
   if(delaySeconds%60===0)return`${delaySeconds/60}m`;
   return`${delaySeconds}s`;
 }
+// The inverse of wfDelayLabel: seconds → the {value, unit} pair the editor's two
+// controls need. Picks the LARGEST unit that divides exactly, so a step stored
+// as 7200s reopens as "2 hours" rather than "120 minutes" — reopening an editor
+// and seeing a different number than you typed reads as data loss.
+function wfDelayParts(secs){
+  const n=Number(secs)||0;
+  if(n&&n%86400===0)return{value:n/86400,unit:"days"};
+  if(n&&n%3600===0)return{value:n/3600,unit:"hours"};
+  return{value:n?Math.round(n/60):0,unit:"minutes"};
+}
 async function loadWorkflows(){
   let seqs=[];
   try{seqs=(await get("sequences")).sequences||[];}catch(e){$("#wf-list").innerHTML=`<div class="empty">${esc(e.message)}</div>`;return;}
-  const workflows=seqs.filter(s=>(s.trigger_tag||s.trigger_stage)&&s.status!=="archived");
+  await wfLoadTriggerEvents();   // the list renders event LABELS, not raw keys
+  const workflows=seqs.filter(s=>(s.trigger_tag||s.trigger_stage||s.trigger_event)&&s.status!=="archived");
   if(!workflows.length){
     $("#wf-list").innerHTML=`<div class="empty" style="padding:40px 20px;text-align:center">
       <div style="font-size:32px;margin-bottom:10px">⚡</div>
@@ -2818,8 +2962,14 @@ async function loadWorkflows(){
   }
   $("#wf-list").innerHTML=`<div style="display:flex;flex-direction:column;gap:10px">${workflows.map(w=>{
     const steps=(w.steps||[]).slice().sort((a,b)=>a.step_order-b.step_order);
-    const trigIcon=w.trigger_tag?"🏷️":"🔀";
-    const trig=w.trigger_tag?`Tag <b>${esc(w.trigger_tag)}</b> added`:`Reaches <b>${esc(nice(w.trigger_stage))}</b> <span class="muted">(${esc(w.pipeline_key||"sales")})</span>`;
+    const trigIcon=w.trigger_tag?"🏷️":w.trigger_event?(WF_EVENT_ICON[w.trigger_event]||"⚡"):"🔀";
+    const evDef=w.trigger_event?wfTriggerEvents.find(e=>e.key===w.trigger_event):null;
+    const evCh=w.trigger_event&&w.trigger_config&&w.trigger_config.channel;
+    const trig=w.trigger_tag
+      ?`Tag <b>${esc(w.trigger_tag)}</b> added`
+      :w.trigger_event
+        ?`<b>${esc(evDef?evDef.label:w.trigger_event)}</b>${evCh?` <span class="muted">(${esc(evCh)})</span>`:""}`
+        :`Reaches <b>${esc(nice(w.trigger_stage))}</b> <span class="muted">(${esc(w.pipeline_key||"sales")})</span>`;
     const chain=steps.map(s=>{
       const icon=s.channel==="action"?(WF_ACTION_ICON[s.action_type]||"⚙️"):(WF_ACTION_ICON["send_"+s.channel]||"✉️");
       const dly=wfDelayLabel(s.delay_seconds);
@@ -2854,8 +3004,16 @@ async function loadWorkflows(){
   });
   $("#wf-list").querySelectorAll("[data-wf-del]").forEach(b=>b.onclick=(e)=>{
     e.stopPropagation();
-    confirmDelete("Delete this workflow? Contacts already mid-way through keep running, but no one new will be enrolled.",async()=>{
-      await patch(`sequences/${b.dataset.wfDel}`,{status:"archived"});toast("Workflow deleted");loadWorkflows();});
+    // Was a status=archived PATCH — a stand-in for the DELETE that didn't exist.
+    // The real endpoint also cancels anything still queued, so the old copy
+    // ("contacts mid-way keep running") is no longer true and would leave the
+    // operator expecting sends that will not happen.
+    confirmDelete("Delete this workflow? Anything still queued for it is cancelled. Messages already sent are kept.",async()=>{
+      try{
+        const r=await del(`sequences/${b.dataset.wfDel}`);
+        toast(r.note||"Workflow deleted");loadWorkflows();
+      }catch(err){toast(err.message,true);}
+    });
   });
 }
 // ── Workflow builder — a real page (list ⇄ builder inside #view-workflows),
@@ -2863,27 +3021,89 @@ async function loadWorkflows(){
 // down the right. wfActions is the in-progress draft; nothing is written
 // until "Save workflow".
 let wfActions=[];          // [{kind, config, delay_seconds}] — the draft step chain
-let wfTrigger={type:"tag",tag:"",pipeline:"",stage:""};
+let wfTrigger={type:"tag",tag:"",pipeline:"",stage:"",event:"",eventConfig:{}};
+// Served by GET /sequences/trigger-events so the dropdown can never offer a
+// trigger the server does not actually fire — a workflow that silently never
+// runs is indistinguishable from a broken one to whoever built it.
+let wfTriggerEvents=[];
+// Existing tags, so a workflow can be built by PICKING rather than by
+// remembering exactly how a tag was spelled. A mistyped tag is not a visible
+// error — it produces a workflow that is simply never triggered by anything.
+let wfTagOpts=[];
+async function wfLoadTags(){
+  try{wfTagOpts=((await get("settings/tags")).tags||[]).map(t=>typeof t==="object"?(t.tag||t.name||""):t).filter(Boolean);}
+  catch{wfTagOpts=[];}
+  const dl=$("#wf-b-tag-list");
+  if(dl)dl.innerHTML=wfTagOpts.map(t=>`<option value="${esc(t)}"></option>`).join("");
+}
+// Stage keys for one pipeline. GET /pipelines already returns each pipeline's
+// stages, so the client has had this data all along — it just wasn't used.
+function wfStageOptions(pipelineKey,selected){
+  const p=DEAL_PIPES.find(x=>x.key===pipelineKey);
+  const stages=(p&&p.stages)||[];
+  if(!stages.length)return `<option value="">— pick a pipeline first —</option>`;
+  return stages.map(st=>`<option value="${esc(st.key)}"${String(selected)===String(st.key)?" selected":""}>${esc(st.label||nice(st.key))}</option>`).join("");
+}
 let wfPipeOpts=[];
-let wfReadonly=false;      // viewing an already-saved workflow — no destructive step editing
+let wfReadonly=false;
+// Set when the builder is showing a SAVED workflow. Its presence is what routes
+// step edits to the API instead of the local wfActions array.
+let wfSequenceId=null;
+let wfEditingIdx=null;   // which step is open in the inline editor
+let wfStatus=null;       // the saved workflow's status, for the Pause/Activate label
 
-function wfActionFormFor(kind){
-  if(kind==="send_email")return field("Subject","a_subject",{})+field("Body","a_body",{type:"textarea"});
-  if(kind==="send_sms"||kind==="send_whatsapp")return field("Message","a_body",{type:"textarea"});
-  if(kind==="add_tag"||kind==="remove_tag")return field("Tag","a_tag",{placeholder:"e.g. customer"});
-  if(kind==="change_stage")return field("Pipeline","a_pipeline",{type:"select",options:wfPipeOpts})+`<div class="field"><label>Stage key</label><input name="a_stage" placeholder="e.g. qualified"></div>`;
-  if(kind==="create_task")return field("Task title","a_title",{})+field("Due in (days)","a_due_days",{type:"number",value:1});
-  if(kind==="webhook_out")return field("Webhook URL","a_url",{placeholder:"https://…"});
+function wfActionFormFor(kind,cfg){
+  const c=cfg||{};
+  if(kind==="send_email")return field("Subject","a_subject",{value:c.subject})+field("Body","a_body",{type:"textarea",value:c.body});
+  if(kind==="send_sms"||kind==="send_whatsapp")return field("Message","a_body",{type:"textarea",value:c.body});
+  if(kind==="add_tag"||kind==="remove_tag")return field("Tag","a_tag",
+    {type:"datalist",options:wfTagOpts,value:c.tag,placeholder:"e.g. customer",
+     hint:wfTagOpts.length?"Pick an existing tag or type a new one.":"No tags yet — type one to create it."});
+  // Stage is a SELECT, not free text: the server validates a stage key against
+  // the pipeline's real stages, so a typo here is a guaranteed failure — either
+  // a 400 on save (trigger) or an action that silently never advances anyone.
+  if(kind==="change_stage"){
+    const pk=c.pipeline_key||(wfPipeOpts[0]&&wfPipeOpts[0].value);
+    return field("Pipeline","a_pipeline",{type:"select",options:wfPipeOpts,value:pk})
+      +`<div class="field"><label>Stage</label><select name="a_stage" id="wf-b-action-stage">${wfStageOptions(pk,c.stage)}</select></div>`;
+  }
+  if(kind==="create_task")return field("Task title","a_title",{value:c.title})+field("Due in (days)","a_due_days",{type:"number",value:c.due_in_days!=null?c.due_in_days:1});
+  if(kind==="webhook_out")return field("Webhook URL","a_url",{value:c.url,placeholder:"https://…"});
   return "";
 }
+const WF_EVENT_ICON={contact_created:"👤",reply_received:"💬",webinar_registered:"📝",
+  webinar_attended:"🎥",webinar_no_show:"🚪",unsubscribed:"🚫"};
 function wfTriggerSummaryText(){
-  return wfTrigger.type==="tag"
-    ? `Tag "${wfTrigger.tag||"…"}" added`
-    : `Reaches ${nice(wfTrigger.stage||"…")}${wfTrigger.pipeline?` (${wfTrigger.pipeline})`:""}`;
+  if(wfTrigger.type==="tag")return `Tag "${wfTrigger.tag||"…"}" added`;
+  if(wfTrigger.type==="stage")return `Reaches ${nice(wfTrigger.stage||"…")}${wfTrigger.pipeline?` (${wfTrigger.pipeline})`:""}`;
+  const def=wfTriggerEvents.find(e=>e.key===wfTrigger.event);
+  const ch=wfTrigger.eventConfig&&wfTrigger.eventConfig.channel;
+  return `${def?def.label:(wfTrigger.event||"…")}${ch?` (${ch})`:""}`;
 }
 function wfRenderTriggerSummary(){
-  $("#wf-trigger-icon").textContent=wfTrigger.type==="tag"?"🏷️":"🔀";
+  $("#wf-trigger-icon").textContent=wfTrigger.type==="tag"?"🏷️"
+    :wfTrigger.type==="stage"?"🔀":(WF_EVENT_ICON[wfTrigger.event]||"⚡");
   $("#wf-trigger-summary").textContent=wfTriggerSummaryText();
+}
+// One place decides which sub-form is visible, so the three call sites (open,
+// edit, type-change) cannot disagree about it.
+function wfShowTriggerFields(type,event){
+  $("#wf-b-trigger-tag").style.display=type==="tag"?"":"none";
+  $("#wf-b-trigger-stage").style.display=type==="stage"?"":"none";
+  $("#wf-b-trigger-event").style.display=type==="event"?"":"none";
+  if(type!=="event")return;
+  const def=wfTriggerEvents.find(e=>e.key===event);
+  const wantsChannel=!!(def&&(def.config||[]).includes("channel"));
+  $("#wf-b-trigger-event-channel-wrap").style.display=wantsChannel?"":"none";
+  // Say what actually makes this fire — otherwise "A contact replies" is a
+  // guess about which parts of the product are wired to it.
+  $("#wf-b-trigger-event-hint").textContent=def?`Fires from: ${def.fires_at}.`:"";
+}
+async function wfLoadTriggerEvents(){
+  if(wfTriggerEvents.length)return;
+  try{wfTriggerEvents=(await get("sequences/trigger-events")).events||[];}catch{wfTriggerEvents=[];}
+  const og=$("#wf-b-trigger-events");if(!og)return;
+  og.innerHTML=wfTriggerEvents.map(e=>`<option value="event:${esc(e.key)}">${esc(WF_EVENT_ICON[e.key]||"⚡")} ${esc(e.label)}</option>`).join("");
 }
 // Steps render as a connected, centered flow — a numbered/iconed node card,
 // a connector line to the next one (carrying the wait-time as a pill on the
@@ -2907,17 +3127,128 @@ function wfRenderSteps(){
             <div class="muted" style="font-size:11px;margin-top:2px;word-break:break-word">${esc(Object.values(a.config).filter(Boolean).join(" · ")||"—")}</div>
           </div>
           ${wfReadonly?"":`<div class="wf-step-actions">
+            <button type="button" class="btn sm" data-wf-edit="${i}" title="Edit this step">Edit</button>
             <button type="button" class="btn sm" data-wf-up="${i}" ${i===0?"disabled":""} title="Move up">↑</button>
             <button type="button" class="btn sm" data-wf-down="${i}" ${i===wfActions.length-1?"disabled":""} title="Move down">↓</button>
             <button type="button" class="btn sm danger" data-wf-rm="${i}" title="Remove">✕</button>
           </div>`}
         </div>
+        ${wfEditingIdx===i?`
+        <div class="wf-step-edit" id="wf-step-edit-${i}">
+          <div class="field-row">
+            <div class="field"><label>Wait before this step</label>
+              <input name="e_delay" type="number" min="0" step="1" value="${wfDelayParts(a.delay_seconds).value}">
+            </div>
+            <div class="field"><label>Unit</label>
+              <select name="e_unit">${WF_DELAY_UNITS.map(u=>`<option value="${u.value}"${u.value===wfDelayParts(a.delay_seconds).unit?" selected":""}>${esc(u.label)}</option>`).join("")}</select>
+            </div>
+          </div>
+          ${wfActionFormFor(a.kind,a.config)}
+          <div style="display:flex;gap:8px;margin-top:12px">
+            <button type="button" class="btn sm primary" data-wf-save="${i}">Save step</button>
+            <button type="button" class="btn sm" data-wf-cancel="${i}">Cancel</button>
+          </div>
+          <p class="field-hint" style="margin-top:9px">The action type can't be changed — remove this step and add the one you want.</p>
+        </div>`:""}
       </div>
     </div>`;
   }).join("");
-  list.querySelectorAll("[data-wf-rm]").forEach(b=>b.onclick=()=>{wfActions.splice(+b.dataset.wfRm,1);wfRenderSteps();});
-  list.querySelectorAll("[data-wf-up]").forEach(b=>b.onclick=()=>{const i=+b.dataset.wfUp;[wfActions[i-1],wfActions[i]]=[wfActions[i],wfActions[i-1]];wfRenderSteps();});
-  list.querySelectorAll("[data-wf-down]").forEach(b=>b.onclick=()=>{const i=+b.dataset.wfDown;[wfActions[i+1],wfActions[i]]=[wfActions[i],wfActions[i+1]];wfRenderSteps();});
+  // Two modes, one set of controls. Building a NEW workflow mutates the local
+  // array and saves at the end; editing a SAVED one persists each change
+  // immediately, because there is no "Save" button on that screen to defer to.
+  function live(){return !!wfSequenceId;}
+  async function persistOrder(){
+    try{
+      await post(`sequences/${wfSequenceId}/steps/reorder`,{step_ids:wfActions.map(a=>a.id)});
+    }catch(e){toast(e.message,true);}
+  }
+  list.querySelectorAll("[data-wf-rm]").forEach(b=>b.onclick=async()=>{
+    const i=+b.dataset.wfRm,step=wfActions[i];
+    if(!live()){wfActions.splice(i,1);wfRenderSteps();return;}
+    // The server decides delete-vs-archive, so the confirm speaks plainly and
+    // the toast reports what actually happened to the history.
+    confirmDelete(`Remove step ${i+1} from this workflow?`,async()=>{
+      try{
+        const r=await del(`sequences/${wfSequenceId}/steps/${step.id}`);
+        wfActions.splice(i,1);wfRenderSteps();
+        toast(r.note||"Step removed");
+      }catch(e){toast(e.message,true);}
+    });
+  });
+  list.querySelectorAll("[data-wf-edit]").forEach(b=>b.onclick=()=>{
+    wfEditingIdx=(wfEditingIdx===+b.dataset.wfEdit)?null:+b.dataset.wfEdit;wfRenderSteps();
+  });
+  list.querySelectorAll("[data-wf-cancel]").forEach(b=>b.onclick=()=>{wfEditingIdx=null;wfRenderSteps();});
+  // The change_stage editor's stage list has to follow its pipeline select, the
+  // same way the add-step form's does.
+  list.querySelectorAll(".wf-step-edit").forEach(box=>box.addEventListener("change",e=>{
+    if(e.target&&e.target.name==="a_pipeline"){
+      const sel=box.querySelector("#wf-b-action-stage");
+      if(sel)sel.innerHTML=wfStageOptions(e.target.value);
+    }
+  }));
+  list.querySelectorAll("[data-wf-save]").forEach(b=>b.onclick=async()=>{
+    const i=+b.dataset.wfSave,a=wfActions[i],scope=`#wf-step-edit-${i}`;
+    const box=document.querySelector(scope);
+    const secs=Math.round((parseFloat(box.querySelector("[name=e_delay]").value)||0)
+      *((WF_DELAY_UNITS.find(u=>u.value===box.querySelector("[name=e_unit]").value)||{secs:1}).secs));
+    const next={...a,config:wfReadActionConfig(a.kind,scope),delay_seconds:secs};
+    if(live()){
+      try{ await patch(`sequences/${wfSequenceId}/steps/${a.id}`,wfStepPatch(next)); }
+      catch(e){ return toast(e.message,true); }
+      toast("Step updated");
+    }
+    wfActions[i]=next;wfEditingIdx=null;wfRenderSteps();
+  });
+  list.querySelectorAll("[data-wf-up]").forEach(b=>b.onclick=async()=>{
+    const i=+b.dataset.wfUp;[wfActions[i-1],wfActions[i]]=[wfActions[i],wfActions[i-1]];
+    wfRenderSteps();if(live())await persistOrder();
+  });
+  list.querySelectorAll("[data-wf-down]").forEach(b=>b.onclick=async()=>{
+    const i=+b.dataset.wfDown;[wfActions[i+1],wfActions[i]]=[wfActions[i],wfActions[i+1]];
+    wfRenderSteps();if(live())await persistOrder();
+  });
+}
+// The ONE place a builder step becomes an API payload. Both the create flow and
+// "add a step to a live workflow" go through it, so the two cannot drift into
+// disagreeing about how a kind maps to channel/action_type.
+function wfStepPayload(a,order){
+  const step={step_order:order,delay_seconds:a.delay_seconds||0};
+  if(a.kind==="send_email"){step.channel="email";step.subject=a.config.subject||"";step.body=a.config.body||"";}
+  else if(a.kind==="send_sms"){step.channel="sms";step.body=a.config.body||"";}
+  else if(a.kind==="send_whatsapp"){step.channel="whatsapp";step.body=a.config.body||"";}
+  else{step.channel="action";step.action_type=a.kind;step.action_config=a.config;}
+  return step;
+}
+// The editable half of a step, as a PATCH body. `channel`/`action_type` are
+// deliberately absent — the server refuses them, because both are mirrored onto
+// every job the step has already produced.
+function wfStepPatch(a){
+  const patch={delay_seconds:a.delay_seconds||0};
+  if(a.kind==="send_email"){patch.subject=a.config.subject||"";patch.body=a.config.body||"";}
+  else if(a.kind==="send_sms"||a.kind==="send_whatsapp"){patch.body=a.config.body||"";}
+  else patch.action_config=a.config;
+  return patch;
+}
+// Reads an action form back into a config object. Shared by "add step" and the
+// per-step editor so a new field only has to be handled once.
+function wfReadActionConfig(kind,scope){
+  const g=n=>{const el=document.querySelector(`${scope} [name=${n}]`);return el?String(el.value).trim():"";};
+  if(kind==="send_email")return {subject:g("a_subject"),body:g("a_body")};
+  if(kind==="send_sms"||kind==="send_whatsapp")return {body:g("a_body")};
+  if(kind==="add_tag"||kind==="remove_tag")return {tag:g("a_tag")};
+  if(kind==="change_stage")return {pipeline_key:g("a_pipeline"),stage:g("a_stage")};
+  if(kind==="create_task")return {title:g("a_title"),due_in_days:parseFloat(g("a_due_days"))||1};
+  if(kind==="webhook_out")return {url:g("a_url")};
+  return {};
+}
+// Populates the add-step form's two selects. Called from BOTH builder entry
+// points: viewWorkflow shows this card too now that appending to a live workflow
+// is wired up, and without this its Action dropdown renders empty — the form
+// looks available and silently cannot add anything.
+function wfFillAddStepSelects(){
+  $("#wf-b-new-kind").innerHTML=Object.entries(WF_ACTION_LABEL).map(([value,label])=>`<option value="${esc(value)}">${esc((WF_ACTION_ICON[value]||"")+" "+label)}</option>`).join("");
+  $("#wf-b-new-delay-unit").innerHTML=WF_DELAY_UNITS.map(u=>`<option value="${u.value}">${u.label}</option>`).join("");
 }
 function wfResetAddStepForm(){
   $("#wf-b-new-delay-value").value="0";
@@ -2926,6 +3257,8 @@ function wfResetAddStepForm(){
 }
 async function openWorkflowBuilder(){
   await ensureDealPipes();
+  await wfLoadTriggerEvents();
+  await wfLoadTags();
   wfPipeOpts=DEAL_PIPES.map(p=>({value:p.key,label:p.name}));
   wfActions=[];
   wfTrigger={type:"tag",tag:"",pipeline:wfPipeOpts[0]?.value||"",stage:""};
@@ -2943,8 +3276,7 @@ async function openWorkflowBuilder(){
   $("#wf-b-trigger-tag").style.display="";
   $("#wf-b-trigger-stage").style.display="none";
   $("#wf-b-trigger-pipeline").innerHTML=wfPipeOpts.map(o=>`<option value="${esc(o.value)}">${esc(o.label)}</option>`).join("");
-  $("#wf-b-new-kind").innerHTML=Object.entries(WF_ACTION_LABEL).map(([value,label])=>`<option value="${esc(value)}">${esc((WF_ACTION_ICON[value]||"")+" "+label)}</option>`).join("");
-  $("#wf-b-new-delay-unit").innerHTML=WF_DELAY_UNITS.map(u=>`<option value="${u.value}">${u.label}</option>`).join("");
+  wfFillAddStepSelects();
   wfResetAddStepForm();
   wfRenderTriggerSummary();
   wfRenderSteps();
@@ -2961,12 +3293,20 @@ async function openWorkflowBuilder(){
 // rather than offering an edit that could quietly corrupt real send history.
 async function viewWorkflow(seq){
   await ensureDealPipes();
+  await wfLoadTriggerEvents();
+  await wfLoadTags();
   wfPipeOpts=DEAL_PIPES.map(p=>({value:p.key,label:p.name}));
-  wfReadonly=true;
-  wfTrigger=seq.trigger_tag
-    ?{type:"tag",tag:seq.trigger_tag,pipeline:"",stage:""}
+  wfReadonly=false;   // steps ARE editable now (migration 042); the trigger is not
+  wfTrigger=seq.trigger_event
+    ?{type:"event",tag:"",pipeline:"",stage:"",event:seq.trigger_event,eventConfig:seq.trigger_config||{}}
+    :seq.trigger_tag
+    ?{type:"tag",tag:seq.trigger_tag,pipeline:"",stage:"",event:"",eventConfig:{}}
     :{type:"stage",tag:"",pipeline:seq.pipeline_key||"",stage:seq.trigger_stage||""};
+  // `id` is what makes a saved step editable: the builder's create flow works on
+  // a local array, while a live workflow's edits go straight to the API.
+  wfSequenceId=seq.id;
   wfActions=(seq.steps||[]).slice().sort((a,b)=>a.step_order-b.step_order).map(s=>({
+    id:s.id,
     kind:s.channel==="action"?s.action_type:"send_"+s.channel,
     config:s.channel==="action"?(s.action_config||{}):
       (s.channel==="email"?{subject:s.subject,body:s.body}:{body:s.body}),
@@ -2976,9 +3316,18 @@ async function viewWorkflow(seq){
   $("#wf-builder-panel").style.display="block";
   $("#wf-b-name").value=seq.name;$("#wf-b-name").disabled=true;
   $("#wf-b-save").style.display="none";
+  $("#wf-b-readonly-note").textContent="Live workflow — step changes save immediately";
   $("#wf-b-readonly-note").style.display="";
+  wfStatus=seq.status;
+  $("#wf-b-toggle").style.display="";
+  $("#wf-b-toggle").textContent=seq.status==="active"?"Pause":"Activate";
+  $("#wf-b-delete").style.display="";
   $("#wf-trigger-edit").style.display="none";
-  $("#wf-add-step-node").style.display="none"; // adding to a live workflow isn't wired up yet either — same honesty as above
+  $("#wf-add-step-node").style.display="";   // appending to a live workflow is wired up (migration 042)
+  wfFillAddStepSelects();
+  wfResetAddStepForm();
+  $("#wf-add-step-card").style.display="none";
+  $("#wf-plus-btn").style.display="";
   $("#wf-trigger-form").style.display="none";
   wfRenderTriggerSummary();
   wfRenderSteps();
@@ -2987,22 +3336,62 @@ $("#wf-trigger-edit").onclick=()=>{
   $("#wf-b-trigger-type").value=wfTrigger.type;
   $("#wf-b-trigger-tag-value").value=wfTrigger.tag;
   $("#wf-b-trigger-pipeline").value=wfTrigger.pipeline;
-  $("#wf-b-trigger-stage-value").value=wfTrigger.stage;
-  $("#wf-b-trigger-tag").style.display=wfTrigger.type==="tag"?"":"none";
-  $("#wf-b-trigger-stage").style.display=wfTrigger.type==="stage"?"":"none";
+  $("#wf-b-trigger-stage-value").innerHTML=wfStageOptions(wfTrigger.pipeline,wfTrigger.stage);
+  $("#wf-b-trigger-type").value=wfTrigger.type==="event"?`event:${wfTrigger.event}`:wfTrigger.type;
+  $("#wf-b-trigger-event-channel").value=(wfTrigger.eventConfig&&wfTrigger.eventConfig.channel)||"";
+  wfShowTriggerFields(wfTrigger.type,wfTrigger.event);
   $("#wf-trigger-form").style.display="";
 };
+// Repopulating on pipeline change is what makes the stage select correct rather
+// than merely present — otherwise it would keep showing the first pipeline's
+// stages after the operator switches pipeline.
+$("#wf-b-trigger-pipeline").onchange=e=>{
+  $("#wf-b-trigger-stage-value").innerHTML=wfStageOptions(e.target.value);
+};
 $("#wf-b-trigger-type").onchange=e=>{
-  $("#wf-b-trigger-tag").style.display=e.target.value==="tag"?"":"none";
-  $("#wf-b-trigger-stage").style.display=e.target.value==="stage"?"":"none";
+  const v=e.target.value;
+  const isEvent=v.startsWith("event:");
+  wfShowTriggerFields(isEvent?"event":v,isEvent?v.slice(6):"");
 };
 $("#wf-trigger-done").onclick=()=>{
-  const type=$("#wf-b-trigger-type").value;
-  wfTrigger=type==="tag"
-    ?{type,tag:$("#wf-b-trigger-tag-value").value.trim(),pipeline:"",stage:""}
-    :{type,tag:"",pipeline:$("#wf-b-trigger-pipeline").value,stage:$("#wf-b-trigger-stage-value").value.trim()};
+  const v=$("#wf-b-trigger-type").value;
+  if(v.startsWith("event:")){
+    const event=v.slice(6);
+    const ch=$("#wf-b-trigger-event-channel").value;
+    const def=wfTriggerEvents.find(e=>e.key===event);
+    const wantsChannel=!!(def&&(def.config||[]).includes("channel"));
+    wfTrigger={type:"event",tag:"",pipeline:"",stage:"",event,
+      eventConfig:(wantsChannel&&ch)?{channel:ch}:{}};
+  }else if(v==="tag"){
+    wfTrigger={type:"tag",tag:$("#wf-b-trigger-tag-value").value.trim(),pipeline:"",stage:"",event:"",eventConfig:{}};
+  }else{
+    wfTrigger={type:"stage",tag:"",pipeline:$("#wf-b-trigger-pipeline").value,
+      stage:$("#wf-b-trigger-stage-value").value.trim(),event:"",eventConfig:{}};
+  }
   wfRenderTriggerSummary();
   $("#wf-trigger-form").style.display="none";
+};
+// Pausing is the reversible stop: a non-active workflow enqueues nothing, so it
+// takes effect on the next tick without touching anything already queued.
+$("#wf-b-toggle").onclick=async()=>{
+  if(!wfSequenceId)return;
+  const next=wfStatus==="active"?"paused":"active";
+  try{
+    await patch(`sequences/${wfSequenceId}`,{status:next});
+    wfStatus=next;
+    $("#wf-b-toggle").textContent=next==="active"?"Pause":"Activate";
+    toast(next==="active"?"Workflow activated":"Workflow paused");
+  }catch(e){toast(e.message,true);}
+};
+$("#wf-b-delete").onclick=()=>{
+  if(!wfSequenceId)return;
+  confirmDelete("Delete this workflow? Anything still queued for it is cancelled. Messages already sent are kept.",async()=>{
+    try{
+      const r=await del(`sequences/${wfSequenceId}`);
+      toast(r.note||"Workflow deleted");
+      closeWorkflowBuilder();
+    }catch(e){toast(e.message,true);}
+  });
 };
 $("#wf-plus-btn").onclick=()=>{
   $("#wf-plus-btn").style.display="none";
@@ -3014,20 +3403,31 @@ $("#wf-b-cancel-step").onclick=()=>{
   wfResetAddStepForm();
 };
 $("#wf-b-new-kind").onchange=e=>{$("#wf-b-new-config").innerHTML=wfActionFormFor(e.target.value);};
-$("#wf-b-add-step").onclick=()=>{
+// Same repopulation for the change_stage ACTION. Delegated because the form is
+// re-rendered on every action-type change, so a direct handler would be lost.
+$("#wf-b-new-config").addEventListener("change",e=>{
+  if(e.target&&e.target.name==="a_pipeline"){
+    const sel=$("#wf-b-action-stage");
+    if(sel)sel.innerHTML=wfStageOptions(e.target.value);
+  }
+});
+$("#wf-b-add-step").onclick=async()=>{
   const kind=$("#wf-b-new-kind").value;
   const delayVal=parseFloat($("#wf-b-new-delay-value").value)||0;
-  const delayUnit=$("#wf-b-new-delay-unit").value;
-  const unitSecs=(WF_DELAY_UNITS.find(u=>u.value===delayUnit)||{secs:1}).secs;
-  const g=n=>{const el=$(`#wf-b-new-config [name=${n}]`);return el?el.value.trim():"";};
-  let config={};
-  if(kind==="send_email")config={subject:g("a_subject"),body:g("a_body")};
-  else if(kind==="send_sms"||kind==="send_whatsapp")config={body:g("a_body")};
-  else if(kind==="add_tag"||kind==="remove_tag")config={tag:g("a_tag")};
-  else if(kind==="change_stage")config={pipeline_key:g("a_pipeline"),stage:g("a_stage")};
-  else if(kind==="create_task")config={title:g("a_title"),due_in_days:parseFloat(g("a_due_days"))||1};
-  else if(kind==="webhook_out")config={url:g("a_url")};
-  wfActions.push({kind,config,delay_seconds:Math.round(delayVal*unitSecs)});
+  const unitSecs=(WF_DELAY_UNITS.find(u=>u.value===$("#wf-b-new-delay-unit").value)||{secs:1}).secs;
+  const step={kind,config:wfReadActionConfig(kind,"#wf-b-new-config"),
+    delay_seconds:Math.round(delayVal*unitSecs)};
+  // Appending to a LIVE workflow is safe and always was — nothing has queued
+  // against a step that doesn't exist yet — so it persists straight away and
+  // keeps the server's id, which is what makes it editable afterwards.
+  if(wfSequenceId){
+    try{
+      const saved=await post(`sequences/${wfSequenceId}/steps`,wfStepPayload(step,wfActions.length+1));
+      step.id=saved.id;
+      toast("Step added");
+    }catch(e){return toast(e.message,true);}
+  }
+  wfActions.push(step);
   wfRenderSteps();
   wfResetAddStepForm();
   $("#wf-add-step-card").style.display="none";
@@ -3041,6 +3441,10 @@ $("#wf-b-save").onclick=async()=>{
   if(wfTrigger.type==="tag"){
     if(!wfTrigger.tag)return toast("Trigger tag required",true);
     body.trigger_tag=wfTrigger.tag;
+  }else if(wfTrigger.type==="event"){
+    if(!wfTrigger.event)return toast("Pick a trigger event",true);
+    body.trigger_event=wfTrigger.event;
+    body.trigger_config=wfTrigger.eventConfig||{};
   }else{
     if(!wfTrigger.pipeline||!wfTrigger.stage)return toast("Trigger pipeline and stage required",true);
     body.pipeline_key=wfTrigger.pipeline;body.trigger_stage=wfTrigger.stage;
@@ -3050,11 +3454,7 @@ $("#wf-b-save").onclick=async()=>{
     const seq=await post("sequences",body);
     for(let i=0;i<wfActions.length;i++){
       const a=wfActions[i];
-      const step={step_order:i+1,delay_seconds:a.delay_seconds||0};
-      if(a.kind==="send_email"){step.channel="email";step.subject=a.config.subject||"";step.body=a.config.body||"";}
-      else if(a.kind==="send_sms"){step.channel="sms";step.body=a.config.body||"";}
-      else if(a.kind==="send_whatsapp"){step.channel="whatsapp";step.body=a.config.body||"";}
-      else{step.channel="action";step.action_type=a.kind;step.action_config=a.config;}
+      const step=wfStepPayload(a,i+1);
       await post(`sequences/${seq.id}/steps`,step);
     }
     toast("Workflow created");closeWorkflowBuilder();
@@ -3082,7 +3482,7 @@ document.querySelector(".settings-content").appendChild($("#view-sequences"));
 function setSettingsSubtab(sub){
   _settingsSubtab=sub;
   $$("#settings-subtab button").forEach(b=>b.classList.toggle("active",b.dataset.sub===sub));
-  ["profile","fields","tags","channels","integrations","team"].forEach(s=>{
+  ["profile","fields","tags","channels","integrations","team","system"].forEach(s=>{
     const el=$(`#settings-sub-${s}`);if(el)el.style.display=s===sub?"":"none";
   });
   $("#view-sequences").style.display=sub==="sequences"?"":"none";
@@ -3093,8 +3493,98 @@ function setSettingsSubtab(sub){
   if(sub==="channels")loadChannelsSettings();
   if(sub==="integrations")loadLeadWebhooks();
   if(sub==="team")loadTeamSettings();
+  if(sub==="system")loadOpsHealth();
 }
 $("#settings-subtab").addEventListener("click",e=>{const b=e.target.closest("button[data-sub]");if(b)setSettingsSubtab(b.dataset.sub);});
+
+// ── System health ────────────────────────────────────────────────────────────
+// The engine banner is the important part. Everything in this product fails
+// CLOSED, and the executors are cron-driven rather than daemons — so on a fresh
+// deployment the honest state is "nothing has ever run", and every other screen
+// reports that as success. This says it out loud.
+const OPS_STATUS_COPY={
+  never_ran:{tone:"bad",title:"The engine has never run",
+    body:"No channel has ever ticked on this account. Sequences, workflow actions and reminders are queued but nothing is reading them. This is what a missing scheduler looks like — the executor endpoints need to be called on a schedule."},
+  stale:{tone:"bad",title:"The engine has stopped",
+    body:"Nothing has ticked recently. Anything due is sitting in the queue unsent."},
+  running:{tone:"ok",title:"Engine running",body:"Channels are ticking normally."},
+};
+function opsPill(tone,text){
+  const bg=tone==="bad"?"var(--hot-bg)":tone==="warn"?"var(--warm-bg)":"var(--live-bg)";
+  const fg=tone==="bad"?"var(--hot)":tone==="warn"?"var(--warm)":"var(--live)";
+  return `<span class="status-pill" style="background:${bg};color:${fg}">${esc(text)}</span>`;
+}
+async function loadOpsHealth(){
+  let h;
+  try{ h=await get("ops/health"); }
+  catch(e){ $("#ops-engine").innerHTML=`<div class="settings-card"><div class="muted">${esc(e.message)}</div></div>`; return; }
+
+  const c=OPS_STATUS_COPY[h.engine.status]||OPS_STATUS_COPY.running;
+  const since=h.engine.minutes_since_tick==null?"never":`${h.engine.minutes_since_tick} min ago`;
+  $("#ops-engine").innerHTML=`<div class="settings-card" style="border-left:3px solid ${c.tone==="bad"?"var(--hot)":"var(--live)"}">
+    <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap">
+      <h3 style="margin:0">${esc(c.title)}</h3>${opsPill(c.tone,h.engine.status.replace("_"," "))}
+      <span class="spacer" style="flex:1"></span>
+      <span class="muted" style="font-size:12px">last tick ${esc(since)}</span>
+    </div>
+    <p class="muted" style="font-size:12.5px;margin:10px 0 0;line-height:1.55">${esc(c.body)}</p>
+    ${h.backlog_stuck?`<p style="font-size:12.5px;margin:8px 0 0;color:var(--hot)">
+      <b>${h.totals.due}</b> job(s) are already due and nothing is processing them.</p>`:""}</div>`;
+
+  $("#ops-channels").innerHTML=`<div style="overflow-x:auto"><table class="tbl" style="width:100%">
+    <thead><tr><th>Channel</th><th>Last tick</th><th>Due</th><th>Pending</th><th>Stuck</th><th>Sent</th><th>State</th></tr></thead>
+    <tbody>${h.channels.map(ch=>{
+      const state=!ch.ever_ticked?opsPill("bad","never ran")
+        :ch.stale?opsPill("bad","stale")
+        :ch.blocked_reason?opsPill("warn","blocked")
+        :opsPill("ok","ok");
+      return `<tr>
+        <td><b>${esc(ch.channel)}</b></td>
+        <td class="muted">${ch.minutes_since_tick==null?"never":esc(ch.minutes_since_tick+" min ago")}</td>
+        <td>${ch.due?`<b style="color:var(--hot)">${ch.due}</b>`:"0"}</td>
+        <td>${ch.pending}</td>
+        <td>${ch.quarantined?`<b style="color:var(--warm)">${ch.quarantined}</b>`:"0"}</td>
+        <td class="muted">${ch.sent_total}</td>
+        <td>${state}${ch.blocked_reason?`<div class="muted" style="font-size:11px;margin-top:3px">${esc(ch.blocked_reason)}</div>`:""}
+            ${ch.last_error?`<div style="font-size:11px;margin-top:3px;color:var(--hot)">${esc(ch.last_error)}</div>`:""}</td>
+      </tr>`;}).join("")}</tbody></table></div>`;
+
+  const ints=[...h.integrations];
+  if(h.tantra&&h.tantra.connected)ints.push({provider:"tantra (mirror)",status:"connected",
+    verified_at:h.tantra.last_sweep_at,last_error:h.tantra.last_error,healthy:!h.tantra.last_error});
+  $("#ops-integrations").innerHTML=ints.length?`<div style="overflow-x:auto"><table class="tbl" style="width:100%">
+    <thead><tr><th>Provider</th><th>Account</th><th>State</th><th>Last error</th></tr></thead>
+    <tbody>${ints.map(i=>`<tr>
+      <td><b>${esc(i.provider)}</b></td><td class="muted">${esc(i.account_ref||"—")}</td>
+      <td>${i.healthy?opsPill("ok","connected"):opsPill("bad",i.status||"error")}</td>
+      <td class="muted" style="font-size:11.5px">${esc(i.last_error||"—")}</td></tr>`).join("")}</tbody></table></div>`
+    : `<div class="muted" style="font-size:12.5px">Nothing connected yet.</div>`;
+
+  try{
+    const q=await get("ops/quarantine?limit=50");
+    $("#ops-quarantine").innerHTML=q.total?`<div style="overflow-x:auto"><table class="tbl" style="width:100%">
+      <thead><tr><th>Channel</th><th>Contact</th><th>Subject</th><th>Why</th><th></th></tr></thead>
+      <tbody>${q.quarantined.map(j=>`<tr>
+        <td>${esc(j.channel)}</td>
+        <td>${esc(j.contact_name||j.contact_email||"—")}</td>
+        <td class="muted">${esc(j.subject||"—")}</td>
+        <td class="muted" style="font-size:11.5px">${esc(j.outcome_unknown_reason||"held too long in claimed")}</td>
+        <td style="white-space:nowrap">
+          <button class="btn sm" data-qrel="${esc(j.id)}" data-ch="${esc(j.channel)}" data-dec="resend">Resend</button>
+          <button class="btn sm" data-qrel="${esc(j.id)}" data-ch="${esc(j.channel)}" data-dec="discard">Discard</button>
+        </td></tr>`).join("")}</tbody></table></div>`
+      : `<div class="muted" style="font-size:12.5px">Nothing stuck.</div>`;
+    $$("#ops-quarantine [data-qrel]").forEach(b=>b.onclick=async()=>{
+      // The wording is the operator's actual decision, not the API's verb:
+      // "resend" means it never arrived, "discard" means it did.
+      try{
+        await post(`executors/${b.dataset.ch}/quarantine/${b.dataset.qrel}/release`,{decision:b.dataset.dec});
+        toast(b.dataset.dec==="resend"?"Queued to send again":"Marked as delivered");
+        loadOpsHealth();
+      }catch(e){toast(e.message,true);}
+    });
+  }catch(e){ $("#ops-quarantine").innerHTML=`<div class="muted">${esc(e.message)}</div>`; }
+}
 
 // ── Business Profile ─────────────────────────────────────────────────────────
 async function loadBusinessProfile(){
@@ -3718,6 +4208,19 @@ function field(label,name,opts={}){
       return `<option value="${esc(v)}" ${String(opts.value)===String(v)?"selected":""}>${esc(l)}</option>`;}).join("");
     return `<div class="field"><label>${esc(label)}</label><select name="${name}">${o}</select></div>`;
   }
+  // A combo: pick from what already exists, or type something new. Used for
+  // tags, where BOTH are legitimate — a workflow may target a tag no contact
+  // carries yet (one a lead webhook will apply later), so a hard <select> would
+  // make that unbuildable, while plain free text makes a typo silently produce
+  // a workflow that never fires.
+  if(opts.type==="datalist"){
+    const id=`dl-${name}-${Math.random().toString(36).slice(2,7)}`;
+    const o=(opts.options||[]).map(x=>`<option value="${esc(typeof x==="object"?x.value:x)}"></option>`).join("");
+    return `<div class="field"><label>${esc(label)}</label>
+      <input name="${name}" list="${id}" value="${val}" placeholder="${esc(opts.placeholder||"")}" autocomplete="off">
+      <datalist id="${id}">${o}</datalist>
+      ${opts.hint?`<p class="field-hint" style="margin-top:5px">${esc(opts.hint)}</p>`:""}</div>`;
+  }
   if(opts.type==="textarea")return `<div class="field"><label>${esc(label)}</label><textarea name="${name}">${val}</textarea></div>`;
   return `<div class="field"><label>${esc(label)}</label><input name="${name}" type="${opts.type||"text"}" value="${val}" placeholder="${esc(opts.placeholder||"")}"></div>`;
 }
@@ -3727,7 +4230,56 @@ function confirmDelete(msg,fn){openModal("Confirm",`<p style="margin:4px 0 0">${
 
 // ── Contacts ──────────────────────────────────────────────────────────────────
 let cList=[],cSel=new Set(),_srcFilled=false;
-const CONTACT_PAGE_SIZE=50;
+// ─── Shared list pager ───────────────────────────────────────────────────────
+// One pager for every paginated list (Contacts, Companies). These were two
+// near-identical copies that had already drifted in their ids; a third list
+// would have been a third copy. Page size is selectable and remembered per list
+// in localStorage, because an operator who works in 100s should not re-pick it
+// on every load.
+//
+// PAGE_SIZES stops at 200 deliberately: the server caps a page at 500
+// (CRM_MAX_PAGE_SIZE) and silently clamps anything larger, so offering a size
+// the server would quietly shrink would make the range read "1-500 of N" while
+// the selector claimed something else.
+const PAGE_SIZES=[25,50,100,200];
+function pageSizeFor(key,fallback){
+  const v=parseInt(localStorage.getItem(`pageSize:${key}`),10);
+  return PAGE_SIZES.includes(v)?v:fallback;
+}
+function setPageSizeFor(key,n){try{localStorage.setItem(`pageSize:${key}`,String(n));}catch{}}
+
+// `total` is the TRUE row count from the server, never the length of the page —
+// otherwise the range reads "1-50 of 50" on every page of a 4,000-row list.
+function renderPager(el,{key,total,offset,pageSize,onChange}){
+  if(!el)return;
+  const from=total?offset+1:0,to=Math.min(offset+pageSize,total);
+  const sizeSel=`<label class="pager-size">Rows
+    <select class="input sm" id="${key}-size">
+      ${PAGE_SIZES.map(n=>`<option value="${n}"${n===pageSize?" selected":""}>${n}</option>`).join("")}
+    </select></label>`;
+  // The size selector shows even on a single short page — it is how you CHANGE
+  // the page size, so hiding it when the list is small strands anyone who set
+  // 25 and now wants 100.
+  const nav=total>pageSize||offset>0
+    ? `<button class="btn sm" id="${key}-prev" ${offset===0?"disabled":""}>← Prev</button>
+       <span>${from}–${to} of ${total}</span>
+       <button class="btn sm" id="${key}-next" ${offset+pageSize>=total?"disabled":""}>Next →</button>`
+    : `<span>${total} ${total===1?"row":"rows"}</span>`;
+  el.innerHTML=`${nav}${sizeSel}`;
+  const prev=$(`#${key}-prev`),next=$(`#${key}-next`),sel=$(`#${key}-size`);
+  prev&&(prev.onclick=()=>onChange({offset:Math.max(0,offset-pageSize),pageSize}));
+  next&&(next.onclick=()=>onChange({offset:offset+pageSize,pageSize}));
+  sel&&(sel.onchange=()=>{
+    const n=parseInt(sel.value,10);
+    setPageSizeFor(key,n);
+    // Jump to the page containing the row you were already looking at, rather
+    // than to offset 0 — switching 50→100 midway through a long list and being
+    // thrown back to the top loses your place for no reason.
+    onChange({offset:Math.floor(offset/n)*n,pageSize:n});
+  });
+}
+
+let cPageSize=pageSizeFor('contacts',50);
 let cOffset=0,cTotal=0;
 let cSort="updated_at",cDir="desc";
 
@@ -3777,7 +4329,7 @@ function contactQuery(){const p=new URLSearchParams();
   const cfk=$("#filter-cf-key").value;
   if(cfk){p.set("cf_key",cfk);const cfv=$("#filter-cf-value").value.trim();if(cfv)p.set("cf_value",cfv);}
   p.set("sort",cSort);p.set("dir",cDir);
-  p.set("limit",CONTACT_PAGE_SIZE);p.set("offset",cOffset);
+  p.set("limit",cPageSize);p.set("offset",cOffset);
   return p.toString();}
 let _tagFilterFilled=false,_cfFilterFilled=false,contactFieldDefsCache=[];
 async function loadContacts(resetPage){
@@ -3802,13 +4354,8 @@ async function loadContacts(resetPage){
   }catch(e){showRetry($("#contacts-list"),e.message,()=>loadContacts());}
 }
 function renderContactPager(){
-  const from=cTotal?cOffset+1:0,to=Math.min(cOffset+CONTACT_PAGE_SIZE,cTotal);
-  $("#contacts-pager").innerHTML=cTotal<=CONTACT_PAGE_SIZE&&cOffset===0?"":
-    `<button class="btn sm" id="c-prev" ${cOffset===0?"disabled":""}>← Prev</button>
-     <span>${from}–${to} of ${cTotal}</span>
-     <button class="btn sm" id="c-next" ${cOffset+CONTACT_PAGE_SIZE>=cTotal?"disabled":""}>Next →</button>`;
-  $("#c-prev")&&($("#c-prev").onclick=()=>{cOffset=Math.max(0,cOffset-CONTACT_PAGE_SIZE);loadContacts();});
-  $("#c-next")&&($("#c-next").onclick=()=>{cOffset+=CONTACT_PAGE_SIZE;loadContacts();});
+  renderPager($("#contacts-pager"),{key:"contacts",total:cTotal,offset:cOffset,pageSize:cPageSize,
+    onChange:({offset,pageSize})=>{cOffset=offset;cPageSize=pageSize;loadContacts();}});
 }
 function renderContactList(){
   if(!cList.length){$("#contacts-list").innerHTML=`<div class="empty">No contacts match. <a class="linklike" id="empty-nc">Add one</a>.</div>`;
@@ -4104,7 +4651,7 @@ $("#bulk-export").onclick=()=>{const sel=cList.filter(c=>cSel.has(c.id));const c
 
 // ── Companies ─────────────────────────────────────────────────────────────────
 let coList=[],coSel=new Set();
-const COMPANY_PAGE_SIZE=50;
+let coPageSize=pageSizeFor('companies',50);
 let coOffset=0,coTotal=0;
 async function loadCompanies(resetPage){
   if(resetPage)coOffset=0;
@@ -4112,19 +4659,14 @@ async function loadCompanies(resetPage){
   try{
     const p=new URLSearchParams();
     const s=$("#company-search").value.trim();if(s)p.set("search",s);
-    p.set("limit",COMPANY_PAGE_SIZE);p.set("offset",coOffset);
+    p.set("limit",coPageSize);p.set("offset",coOffset);
     const r=await get(`companies?${p.toString()}`);
     coList=r.companies||[];coTotal=r.total??coList.length;coSel.clear();renderCompanyList();renderCompanyPager();}
   catch(e){showRetry($("#companies-list"),e.message,()=>loadCompanies());}
 }
 function renderCompanyPager(){
-  const from=coTotal?coOffset+1:0,to=Math.min(coOffset+COMPANY_PAGE_SIZE,coTotal);
-  $("#companies-pager").innerHTML=coTotal<=COMPANY_PAGE_SIZE&&coOffset===0?"":
-    `<button class="btn sm" id="co-prev" ${coOffset===0?"disabled":""}>← Prev</button>
-     <span>${from}–${to} of ${coTotal}</span>
-     <button class="btn sm" id="co-next" ${coOffset+COMPANY_PAGE_SIZE>=coTotal?"disabled":""}>Next →</button>`;
-  $("#co-prev")&&($("#co-prev").onclick=()=>{coOffset=Math.max(0,coOffset-COMPANY_PAGE_SIZE);loadCompanies();});
-  $("#co-next")&&($("#co-next").onclick=()=>{coOffset+=COMPANY_PAGE_SIZE;loadCompanies();});
+  renderPager($("#companies-pager"),{key:"companies",total:coTotal,offset:coOffset,pageSize:coPageSize,
+    onChange:({offset,pageSize})=>{coOffset=offset;coPageSize=pageSize;loadCompanies();}});
 }
 function renderCompanyList(){
   if(!coList.length){$("#companies-list").innerHTML=`<div class="empty">No companies yet. <a class="linklike" id="empty-nco">Add one</a>.</div>`;

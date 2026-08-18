@@ -69,12 +69,25 @@ function compactContact(c) {
 }
 
 async function buildContext(companyId) {
-  const [stats, contacts] = await Promise.all([
+  // Only MAX_CONTEXT_CONTACTS ever reach the prompt, so fetch exactly that many
+  // rather than loading the whole tenant and slicing. The old form read every
+  // contact into memory on every chat message and threw ~all of them away.
+  //
+  // `contactCount` now comes from the aggregate rather than the fetched array —
+  // otherwise it would report the page size (80) as the tenant's contact total
+  // and the assistant would confidently state a wrong number.
+  const [stats, contacts, trueCount] = await Promise.all([
     contactDb.getStats(companyId).catch(() => null),
-    contactDb.list(companyId, {}).catch(() => []),
+    contactDb.list(companyId, { limit: MAX_CONTEXT_CONTACTS, offset: 0 }).catch(() => []),
+    contactDb.countMatching(companyId).catch(() => null),
   ]);
-  const trimmed = (contacts || []).slice(0, MAX_CONTEXT_CONTACTS).map(compactContact);
-  return { stats, contactCount: (contacts || []).length, contacts: trimmed };
+  const trimmed = (contacts || []).map(compactContact);
+  return {
+    stats,
+    contactCount: trueCount ?? (contacts || []).length,
+    contacts: trimmed,
+    contactsShown: trimmed.length,
+  };
 }
 
 function systemPrompt(ctx) {

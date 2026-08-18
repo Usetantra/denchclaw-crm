@@ -8,6 +8,7 @@ const router = express.Router();
 const emailExecutor = require('../lib/email-executor');
 const { byChannel, CHANNELS } = require('../lib/executors');
 const { requireAuth, getUserCompanyId } = require('../middleware/auth');
+const opsDb = require('../db/models/ops');
 
 router.use(requireAuth);
 
@@ -33,6 +34,10 @@ router.post('/email/tick', async (req, res) => {
       return res.status(400).json({ error: 'max_age_hours must be a positive number' });
     }
     const report = await emailExecutor.tick(companyId, { maxAgeHours });
+    // Recorded at the ROUTE, not inside the executor: this endpoint IS the cron
+    // entry point, and keeping the heartbeat out of the heavily-tested dispatch
+    // internals means observability can never change sending behaviour.
+    await opsDb.recordTick(companyId, 'email', report);
     // A blocked tick is a 200 with `ok:false` — it is a legitimate, expected
     // state (sending is off, or misconfigured), not a request error.
     res.json(report);
@@ -100,7 +105,9 @@ router.post('/:channel/tick', async (req, res) => {
     const companyId = getUserCompanyId(req);
     if (!companyId) return res.status(401).json({ error: 'Authentication required' });
     const ex = resolve(req, res); if (!ex) return;
-    res.json(await ex.tick(companyId));
+    const report = await ex.tick(companyId);
+    await opsDb.recordTick(companyId, ex.channel, report);
+    res.json(report);
   } catch (err) {
     console.error('[CRM] POST /executors/:channel/tick error:', err.message);
     res.status(500).json({ error: 'tick failed' });

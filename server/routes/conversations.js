@@ -5,6 +5,7 @@ const router = express.Router();
 const { v4: uuidv4 } = require('uuid');
 const { query } = require('../db/index');
 const { requireAuth, getUserCompanyId } = require('../middleware/auth');
+const workflowTriggers = require('../lib/workflow-triggers');
 const contactDb = require('../db/models/contacts');
 // CP-M union (D4): both sides added imports here. The branch needs sequenceDb +
 // isManualStage for the inbound-reply auto-advance (the CP1 mode gate and B2's
@@ -47,19 +48,25 @@ router.post('/conversations', async (req, res) => {
   try {
     const companyId = getUserCompanyId(req);
     if (!companyId) return res.status(401).json({ error: 'Authentication required' });
-    const { contact_id, channel, metadata = {} } = req.body;
+    const { contact_id, channel, channel_account, metadata = {} } = req.body;
     if (!contact_id || !channel) return res.status(400).json({ error: 'contact_id and channel required' });
 
     const contact = await contactDb.getById(contact_id, companyId);
     if (!contact) return res.status(404).json({ error: 'contact not found' });
 
+    // `channel_account` (migration 040) is the B3 grain: a contact can hold two
+    // open conversations on ONE channel when two accounts serve different
+    // purposes (Tantra's outreach WhatsApp vs the CRM's own). Omitting it means
+    // '' — the CRM's own account — which is exactly what every caller predating
+    // 040 meant, so this stays backward-compatible. The ON CONFLICT inference
+    // list must match `uq_conversations_contact_channel_account` exactly.
     const r = await query(
-      `INSERT INTO conversations (company_id, contact_id, channel, status, assignee, metadata)
-       VALUES ($1,$2,$3,'open','ai',$4)
-       ON CONFLICT (contact_id, channel) WHERE status != 'closed'
+      `INSERT INTO conversations (company_id, contact_id, channel, channel_account, status, assignee, metadata)
+       VALUES ($1,$2,$3,$4,'open','ai',$5)
+       ON CONFLICT (contact_id, channel, channel_account) WHERE status != 'closed'
        DO UPDATE SET updated_at = now(), metadata = conversations.metadata || EXCLUDED.metadata
        RETURNING *`,
-      [companyId, contact_id, channel, JSON.stringify(metadata)]
+      [companyId, contact_id, channel, channel_account || '', JSON.stringify(metadata)]
     );
     return res.status(201).json(r.rows[0]);
   } catch (err) {
@@ -382,6 +389,12 @@ router.post('/conversations/:id/messages', async (req, res) => {
             data: { conversation_id: req.params.id, provider_message_id: provider_message_id || null, intent: intent || null },
           });
         } catch (_e) { /* non-blocking — message already persisted */ }
+
+        // Workflow trigger: `reply_received`. Guarded by `isNewMessage`, so a
+        // provider redelivering the same message id re-enrols nobody — the
+        // dedupe that protects the messages table protects the workflow too.
+        // A workflow may narrow to one channel via trigger_config.
+        workflowTriggers.fire(companyId, conv.contact_id, 'reply_received', { channel });
 
         // Stage advance: responded is only reachable from engaged per the marketing pipeline.
         try {
