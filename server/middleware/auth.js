@@ -3,6 +3,7 @@ const { v4: uuidv4 } = require('uuid');
 const tenantDb = require('../db/models/tenants');
 const apiKeysDb = require('../db/models/apiKeys');
 const usersDb = require('../db/models/users');
+const clerk = require('../lib/clerk');
 const { readSessionCookie } = require('../lib/session-cookie');
 
 const INTERNAL_API_KEY = process.env.INTERNAL_API_KEY || (() => {
@@ -213,6 +214,63 @@ function requireAuth(req, res, next) {
 }
 
 async function requireAuthAsync(req, res, next) {
+  // ── Clerk (human) branch — FIRST, and TERMINAL ────────────────────────────
+  // A browser session is a complete answer to "who is this and which tenant are
+  // they in", so it never falls through to the internal-key path below, and the
+  // key path never falls through to here. The two are separate populations:
+  // humans authenticate as themselves, machines present a shared secret.
+  //
+  // "Present but invalid is terminal" is the load-bearing half. If an invalid
+  // token fell through instead, then a browser holding an expired token on a
+  // box where the proxy still injects a key would silently authenticate as
+  // 'internal-agent' with full tenant access, instead of being told to sign in.
+  // Determinism beats leniency here. The corollary is an operational rule:
+  // MACHINE CALLERS MUST NOT SEND AN Authorization HEADER. None do — chat.js,
+  // webhooks.js and dev/serve-web.js all build explicit header objects.
+  //
+  // Note also what this branch does NOT do: it never reads X-Company-Id (the
+  // tenant comes from the user's own row, so a forged header cannot hop
+  // tenants), and it returns before the CIDR allowlist below ever runs.
+  if (clerk.isConfigured() && clerk.extractToken(req)) {
+    const identity = await clerk.verifyRequest(req);
+    if (!identity) return res.status(401).json({ error: 'session expired or invalid' });
+
+    // The session token carries no email by default; fall back to the Backend
+    // API. Only the provisioning path needs it, and it is cached.
+    if (!identity.email) identity.email = await clerk.fetchIdentityEmail(identity.clerkUserId);
+
+    let user;
+    try {
+      user = await usersDb.resolveClerkIdentity(identity, {
+        requestedCompanyId: req.headers['x-company-id']
+          ? await canonicalCompanyId(req.headers['x-company-id'])
+          : null,
+      });
+    } catch (err) {
+      // A DB error here must not read as "you are not a member" — that would
+      // tell a legitimate user to go ask for an invite during an outage.
+      console.error('[Auth] Clerk identity resolution failed:', err.message);
+      return res.status(503).json({ error: 'account lookup unavailable' });
+    }
+    if (!user) {
+      return res.status(403).json({
+        error: 'no_workspace',
+        message: 'This account is not a member of any workspace. Ask an owner to invite you.',
+      });
+    }
+    // The business rule Clerk does NOT replicate: revoking a Clerk session is
+    // asynchronous and best-effort, so a suspended person's already-issued
+    // token stays cryptographically valid until it expires. Re-reading status
+    // on every request is the actual guarantee — which is also why nothing
+    // above may cache this row.
+    if (user.status !== 'active') {
+      return res.status(403).json({ error: 'account_suspended', message: 'This account has been suspended.' });
+    }
+    req.auth = { userId: user.id, companyId: user.company_id, role: user.role, via: 'clerk' };
+    req.user = user;
+    return next();
+  }
+
   const key = req.headers['x-internal-key'];
   if (!key) {
     return res.status(401).json({ error: 'Missing or invalid X-Internal-Key' });
@@ -275,6 +333,12 @@ async function requireAuthAsync(req, res, next) {
     return res.status(401).json({ error: 'Missing or invalid X-Internal-Key' });
   }
 
+  // Deliberately NOT applied to the Clerk branch above, which returns before
+  // reaching here. This gate is a property of THE SHARED SECRET ("this key may
+  // only be presented from our own network"), not of a person — and a real
+  // browser arrives from a public address, so running Clerk requests through it
+  // would 403 every single sign-in while looking like "Clerk is broken". Do not
+  // "unify" the two branches to remove the asymmetry; the asymmetry is correct.
   const callerIp = req.ip || req.socket?.remoteAddress || '';
   if (!ipAllowed(callerIp)) {
     console.warn('[Auth] X-Internal-Key rejected from IP:', callerIp);
@@ -285,7 +349,7 @@ async function requireAuthAsync(req, res, next) {
     // X-Company-Id is irrelevant for a DB-backed key — it belongs to exactly
     // one tenant, unlike the legacy env-based keys below which are bound to
     // a SET of companies and still need the header to pick one.
-    req.auth = { userId: 'internal-agent', companyId: dbCompanyId, role: 'agent' };
+    req.auth = { userId: 'internal-agent', companyId: dbCompanyId, role: 'agent', via: 'key' };
     return next();
   }
 
@@ -299,6 +363,7 @@ async function requireAuthAsync(req, res, next) {
     userId: 'internal-agent',
     companyId,
     role: 'agent',
+    via: 'key',
   };
   return next();
 }
@@ -332,8 +397,36 @@ function getUserCompanyId(req) {
 // stronger gate than "bound to this one company": only a key bound to '*'
 // (unrestricted) may manage tenants. Composes with requireAuth rather than
 // duplicating its key/IP checks.
+//
+// The Clerk branch needs its own rule, because a human sends no key at all and
+// would otherwise be refused outright. But it must NOT be a plain
+// `role === 'owner'`: /tenants, /api-keys and /ops/fleet are CROSS-tenant
+// surfaces, so "owner" — the right shape for running YOUR workspace — would
+// make every future tenant's owner an administrator of everyone else's. Today
+// there is one real tenant so the two happen to coincide; this allowlist is
+// what stops them silently diverging the day there are two.
+const SUPERADMIN_COMPANY_IDS = new Set(
+  (process.env.CLERK_SUPERADMIN_COMPANY_IDS || DEFAULT_COMPANY_ID)
+    .split(',').map(s => s.trim()).filter(Boolean)
+);
+const SUPERADMIN_EMAILS = new Set(
+  (process.env.CLERK_SUPERADMIN_EMAILS || '')
+    .split(',').map(s => s.trim().toLowerCase()).filter(Boolean)
+);
+
 function requireAdmin(req, res, next) {
   requireAuth(req, res, () => {
+    if (req.auth?.via === 'clerk') {
+      const u = req.user || {};
+      const byTenant = u.role === 'owner' && SUPERADMIN_COMPANY_IDS.has(req.auth.companyId);
+      // Explicit-email escape hatch: if the operator's tenant id ever changes,
+      // this still gets them in without a DB edit over SSH.
+      const byEmail = SUPERADMIN_EMAILS.has(String(u.email || '').toLowerCase());
+      if (!byTenant && !byEmail) {
+        return res.status(403).json({ error: 'fleet administration requires a superadmin account' });
+      }
+      return next();
+    }
     const allowed = allowedCompaniesFor(req.headers['x-internal-key']);
     if (allowed !== '*') {
       return res.status(403).json({ error: 'tenant management requires a key bound to all companies (*)' });
@@ -342,11 +435,11 @@ function requireAdmin(req, res, next) {
   });
 }
 
-// Requires an actual logged-in person (req.user, set only by a resolved
-// session — see applySessionOverride), not just a valid internal key. Every
+// Requires an actual logged-in person (req.user, set only by the Clerk branch
+// of requireAuthAsync), not just a valid internal key. Every
 // server-to-server/automation caller has no session and is correctly refused
 // here — this gate is for routes a human, not a script, should be doing
-// (managing teammates, changing your own password).
+// (managing teammates, editing your own profile).
 function requireUser(req, res, next) {
   requireAuth(req, res, () => {
     if (!req.user) return res.status(401).json({ error: 'not logged in' });

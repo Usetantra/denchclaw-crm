@@ -10,12 +10,13 @@
     "verify:channel-contract": "node test/verify-channel-contract.mjs"
   },
   "dependencies": {
+    "@clerk/backend": "^3.16.8",
     "dotenv": "^16.4.7",
     "express": "^4.21.2",
     "pg": "^8.13.3",
     "uuid": "^11.0.3"
   },
   "engines": {
-    "node": ">=18"
+    "node": ">=20.9"
   }
 }

@@ -31,6 +31,10 @@ IB_SECRET="ct-inbound-secret-$$"
 # Date.now() default) precisely so the server, booted first, can know the tenant
 # id the test will create.
 MK_RUN="$$"
+# CP-G: the Clerk suite creates tenant cpg_co_<RUN_ID>, and the SERVER must be
+# told that same id at boot as its bootstrap target — so it is pinned here
+# rather than left to the suite's Date.now() default, exactly like MK_RUN above.
+RUN_ID="$$"
 MK_SECRETS="{\"$MK_SECRET\":\"cpb_co_$MK_RUN\"}"
 # unit-tsy stands a stub Tantra API on this port. It is exported into the
 # server so tantra-client.js resolves there and the suite can NEVER make a
@@ -76,6 +80,22 @@ echo "[test] applying schema: migrate.sql + migrations/*.sql (in order)"
 # holds even when that file is run directly rather than through this script.
 node test/apply-schema.mjs || { echo "FATAL: schema failed to apply"; exit 2; }
 
+# CP-G: a per-run RSA keypair so the suite can mint Clerk session tokens that
+# the REAL @clerk/backend verifies. The server gets the PUBLIC half as
+# CLERK_JWT_KEY (which also makes verification networkless — no JWKS fetch, so
+# the suite can never reach out to Clerk); the suite signs with the private
+# half. Nothing here is a real credential.
+echo "[test] generating an ephemeral Clerk signing key"
+CLERK_TEST_AZP="http://127.0.0.1:${TEST_PORT}"
+eval "$(node -e '
+const {generateKeyPairSync}=require("crypto");
+const {publicKey,privateKey}=generateKeyPairSync("rsa",{modulusLength:2048});
+const esc=s=>s.replace(/\n/g,"\\n");
+console.log("CLERK_TEST_PUBLIC_KEY=\""+esc(publicKey.export({type:"spki",format:"pem"}).toString())+"\"");
+console.log("CLERK_TEST_PRIVATE_KEY=\""+esc(privateKey.export({type:"pkcs8",format:"pem"}).toString())+"\"");
+')"
+export CLERK_TEST_PRIVATE_KEY CLERK_TEST_AZP
+
 echo "[test] booting server on :$TEST_PORT"
 DATABASE_URL="$DATABASE_URL_TEST" \
 PORT="$TEST_PORT" \
@@ -88,6 +108,11 @@ MARKETING_PUBLIC_BASE="http://127.0.0.1:${TEST_PORT}" \
 INBOUND_WEBHOOK_SECRET="$IB_SECRET" \
   RESEND_API_KEY="" CLOUDFLARE_AI_TOKEN="" \
   TANTRA_API_BASE="http://127.0.0.1:${TANTRA_STUB_PORT}" \
+  CLERK_JWT_KEY="$CLERK_TEST_PUBLIC_KEY" \
+  CLERK_PUBLISHABLE_KEY="pk_test_contract" \
+  CLERK_AUTHORIZED_PARTIES="$CLERK_TEST_AZP" \
+  CLERK_BOOTSTRAP_COMPANY_ID="cpg_co_${RUN_ID}" \
+  CLERK_SUPERADMIN_COMPANY_IDS="cpg_co_${RUN_ID}" \
 node server/server.js &
 SERVER_PID=$!
 
@@ -163,9 +188,7 @@ SUITES=(
   "unit-cpcd-company-domains|node test/unit-cpcd-company-domains.mjs"
   "unit-cpf38-anchored-scheduling|node test/unit-cpf38-anchored-scheduling.mjs"
   "unit-cpf38b-webinar-anchor|node test/unit-cpf38b-webinar-anchor.mjs"
-  # unit-cpg-auth is disabled for now — the custom auth routes it exercises
-  # are unmounted (server/server.js) pending the Clerk migration. Re-enable
-  # this line if/when server/routes/auth.js is remounted.
+  "unit-cpg-auth|env RUN=$RUN_ID CLERK_TEST_AZP=$CLERK_TEST_AZP node test/unit-cpg-auth.mjs"
   "unit-cpwf-workflows|env ACTION_EXECUTOR_ENABLED=1 node test/unit-cpwf-workflows.mjs"
 )
 

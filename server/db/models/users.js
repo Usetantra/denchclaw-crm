@@ -43,15 +43,21 @@ function sanitize(user) {
 }
 
 // ── users ─────────────────────────────────────────────────────────────────
-async function create({ companyId, email, password, name, role = 'member' }) {
+// A user is identified by a Clerk identity OR a local password, never neither.
+// The password branch is kept (rather than deleted outright) so the pre-Clerk
+// login path stays revertible through burn-in — see migration 044's header.
+async function create({ companyId, email, password, clerkUserId, name, role = 'member' }) {
   if (!companyId) throw new Error('users.create requires companyId');
   if (!email || !String(email).trim()) throw new Error('email required');
-  const problem = passwordProblem(password);
-  if (problem) throw new Error(problem);
+  if (!clerkUserId) {
+    const problem = passwordProblem(password);
+    if (problem) throw new Error(problem);
+  }
   const r = await query(
-    `INSERT INTO users (company_id, email, password_hash, name, role)
-     VALUES ($1,$2,$3,$4,$5) RETURNING *`,
-    [companyId, String(email).trim().toLowerCase(), hashPassword(password), name || null, role]
+    `INSERT INTO users (company_id, email, password_hash, name, role, clerk_user_id)
+     VALUES ($1,$2,$3,$4,$5,$6) RETURNING *`,
+    [companyId, String(email).trim().toLowerCase(), clerkUserId ? null : hashPassword(password),
+     name || null, role, clerkUserId || null]
   );
   return sanitize(r.rows[0]);
 }
@@ -109,6 +115,141 @@ async function verifyLogin(email, password) {
   if (!user || user.status !== 'active') return null;
   if (!verifyPassword(password, user.password_hash)) return null;
   return sanitize(user);
+}
+
+// ── Clerk identity resolution (migration 044) ──────────────────────────────
+// Maps a verified Clerk identity onto a CRM user row. This is the ONLY place
+// that decides which tenant a human belongs to, so the rules live here in one
+// readable block rather than spread across the middleware.
+//
+// Evaluated top to bottom, first match wins:
+//
+//   1. Already linked (clerk_user_id matches)  -> use that row
+//   2. Email matches an UNLINKED row           -> link it, keep its company/role
+//   3. Email matches a DIFFERENTLY-linked row  -> refuse (two identities, one account)
+//   4. A pending invite matches the email      -> create from the invite
+//   5. Target tenant has zero users            -> bootstrap as owner
+//   6. otherwise                               -> refuse
+//
+// Returns a sanitized user row, or null meaning "this identity has no
+// workspace" — which the caller turns into a 403, never a 401. The distinction
+// matters: the token was perfectly valid, the person just is not a member here,
+// and telling them to sign in again would send them round a loop.
+async function findByClerkId(clerkUserId) {
+  const r = await query(
+    `SELECT * FROM users WHERE clerk_user_id = $1 ORDER BY created_at ASC`, [clerkUserId]);
+  return r.rows;
+}
+
+async function findPendingInvite(email) {
+  const r = await query(
+    `SELECT * FROM user_invites
+      WHERE lower(email) = lower($1) AND accepted_at IS NULL AND expires_at > now()
+      ORDER BY created_at DESC LIMIT 1`,
+    [String(email || '').trim()]
+  );
+  return r.rows[0] || null;
+}
+
+// Picks one membership when a person belongs to several tenants. UNREACHABLE
+// today (uq_users_email makes email globally unique), and written anyway so the
+// eventual multi-tenant migration is DB-only — see migration 044's closing note.
+//
+// The load-bearing rule: requestedCompanyId may only SELECT AMONG rows that
+// already exist. It can never widen access to a tenant the person is not
+// already a member of. That is the cross-tenant-hop property.
+function selectMembership(rows, requestedCompanyId) {
+  if (requestedCompanyId) {
+    const match = rows.find(r => r.company_id === requestedCompanyId);
+    if (match) return sanitize(match);
+    return null; // asked for a tenant they are not a member of
+  }
+  return sanitize(rows[0]); // oldest membership as the default workspace
+}
+
+async function bootstrapOwner({ clerkUserId, email, name }) {
+  if (process.env.CLERK_ALLOW_BOOTSTRAP === '0') return null;
+  const target = process.env.CLERK_BOOTSTRAP_COMPANY_ID
+    || process.env.DEFAULT_COMPANY_ID
+    || 'tantra';
+  const t = await query(`SELECT id FROM tenants WHERE id = $1`, [target]);
+  if (!t.rows[0]) return null;
+  // THE safety window, lifted from the /register claim logic in routes/auth.js:
+  // bootstrapping works only while nobody owns this tenant yet. The moment one
+  // user exists, this path is dead forever and the only ways in are an invite
+  // or a hand-inserted row. A stranger who signs up on the Clerk instance after
+  // that gets rule 6.
+  const existing = await query(`SELECT 1 FROM users WHERE company_id = $1 LIMIT 1`, [target]);
+  if (existing.rows[0]) return null;
+  console.warn('[Auth] bootstrapping %s as the first owner of tenant %s', email, target);
+  return create({ companyId: target, email, clerkUserId, name: name || null, role: 'owner' });
+}
+
+async function resolveClerkIdentity({ clerkUserId, email, name }, { requestedCompanyId } = {}) {
+  if (!clerkUserId) return null;
+
+  // 1. Already linked.
+  const linked = await findByClerkId(clerkUserId);
+  if (linked.length === 1) return sanitize(linked[0]);
+  if (linked.length > 1) return selectMembership(linked, requestedCompanyId);
+
+  if (!email) {
+    console.warn('[Auth] Clerk identity %s has no resolvable email — cannot provision', clerkUserId);
+    return null;
+  }
+  const lower = String(email).trim().toLowerCase();
+
+  // 2. Link a pre-Clerk row for this email. Guarded on `clerk_user_id IS NULL`
+  //    so two concurrent first-requests cannot both claim it, and so a row
+  //    already bound to a different identity is never silently re-bound.
+  const linkable = await query(
+    `UPDATE users SET clerk_user_id = $1, updated_at = now()
+      WHERE lower(email) = $2 AND clerk_user_id IS NULL RETURNING *`,
+    [clerkUserId, lower]
+  );
+  if (linkable.rows[0]) {
+    console.warn('[Auth] linked Clerk identity %s to existing user %s', clerkUserId, lower);
+    return sanitize(linkable.rows[0]);
+  }
+
+  // 3. Same email, different Clerk identity. Refuse rather than guess.
+  const collision = await query(`SELECT id FROM users WHERE lower(email) = $1`, [lower]);
+  if (collision.rows[0]) {
+    console.error('[Auth] SECURITY: %s is already bound to a different Clerk identity — refusing', lower);
+    return null;
+  }
+
+  // 4/5. Provision, retrying once on a unique-violation race. The unique
+  //      indexes are the correct serialization point here — a transaction
+  //      spanning the whole function would serialize every login instead.
+  try {
+    const invite = await findPendingInvite(lower);
+    if (invite) return acceptInviteForClerk(invite, { clerkUserId, email: lower, name });
+    return await bootstrapOwner({ clerkUserId, email: lower, name });
+  } catch (err) {
+    if (err && err.code === '23505') {
+      const again = await findByClerkId(clerkUserId);
+      if (again.length) return selectMembership(again, requestedCompanyId);
+    }
+    throw err;
+  }
+}
+
+// Creates the row an invite promised, and stamps the invite used. Idempotent on
+// double-submit: a second call with the same identity returns the existing row
+// rather than colliding.
+async function acceptInviteForClerk(invite, { clerkUserId, email, name }) {
+  const already = await findByClerkId(clerkUserId);
+  if (already.length) return sanitize(already[0]);
+  const user = await create({
+    companyId: invite.company_id,
+    email: email || invite.email,
+    clerkUserId,
+    name: name || null,
+    role: invite.role,
+  });
+  await query(`UPDATE user_invites SET accepted_at = now() WHERE id = $1`, [invite.id]);
+  return user;
 }
 
 // ── sessions ──────────────────────────────────────────────────────────────
@@ -207,5 +348,7 @@ module.exports = {
   create, findByEmail, getById, list, update, remove, verifyLogin,
   createSession, resolveSession, destroySession, destroyAllSessions,
   createInvite, resolveInvite, acceptInvite, listInvites, revokeInvite,
+  // Clerk (migration 044)
+  resolveClerkIdentity, acceptInviteForClerk, findByClerkId, findPendingInvite,
   SESSION_TTL_MS,
 };

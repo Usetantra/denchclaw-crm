@@ -1,106 +1,121 @@
 'use strict';
-// ─── User accounts: register / login / invites / team management ─────────────
-// Layered on top of the existing X-Internal-Key gate (server/middleware/auth.js)
-// — every route here still goes through requireAuth for the key check, exactly
-// like every other router; what's new is req.user (a resolved session) and
-// req.auth.companyId being overridden by it. See migration 033's header for the
-// full reasoning.
+// ─── User accounts: profile / invites / team management ──────────────────────
+// Clerk owns identity (sign-in, sign-up, passwords, MFA, session lifetime).
+// This router owns everything Clerk does not know about: which tenant a person
+// belongs to, what role they hold, who may invite whom, and suspension.
+// See migration 044's header for the split, and middleware/auth.js for the seam
+// that turns a Clerk token into req.user.
+//
+// Register/login/logout used to live here and are gone — Clerk's hosted
+// components replace them entirely.
 const express = require('express');
 const router = express.Router();
-const crypto = require('crypto');
 const usersDb = require('../db/models/users');
 const tenantDb = require('../db/models/tenants');
 const resendEmail = require('../lib/email-resend');
+const clerk = require('../lib/clerk');
 const { requireAuth, requireUser, requireRole, getUserCompanyId } = require('../middleware/auth');
-const { setSessionCookie, clearSessionCookie } = require('../lib/session-cookie');
 
-router.use(requireAuth);
+// ── PUBLIC ROUTES — must stay ABOVE the gate below. Order is load-bearing. ───
+//
+// Before Clerk this whole router sat behind requireAuth, and GET /invite/:token
+// "worked" as a public preview only because the proxy injected an internal key
+// into every browser call. The proxy no longer does that, so an invitee — who
+// by definition has no account yet — would get a 401 on the invite screen if
+// these stayed below the gate.
 
-function slugify(name) {
-  return String(name || 'company').toLowerCase().replace(/[^a-z0-9]+/g, '_').replace(/^_+|_+$/g, '').slice(0, 40) || 'company';
+// GET /api/crm/auth/config — what the browser needs to boot Clerk.
+// The publishable key is not a secret (it ships in every Clerk frontend), and
+// serving it from here rather than hardcoding it in index.html is what lets the
+// same static file work unchanged across dev, staging and production.
+router.get('/config', (_req, res) => {
+  res.json({
+    publishable_key: clerk.publishableKey(),
+    sign_in_enabled: clerk.isConfigured(),
+  });
+});
+
+// GET /api/crm/auth/invite/:token — public preview before accepting.
+// Deliberately minimal: email + role + company name, never anything about the
+// company's actual data.
+router.get('/invite/:token', async (req, res) => {
+  try {
+    const invite = await usersDb.resolveInvite(req.params.token);
+    if (!invite) return res.status(404).json({ error: 'invite not found or expired' });
+    const company = await tenantDb.getById(invite.company_id);
+    res.json({ email: invite.email, role: invite.role, company_name: company?.name || invite.company_id });
+  } catch (e) { res.status(500).json({ error: 'failed to load invite' }); }
+});
+
+// POST /api/crm/auth/accept-invite { token, name? }
+//
+// Needs a VERIFIED Clerk identity but NOT a provisioned users row — which is
+// exactly why it cannot use requireAuth: a person accepting an invite is by
+// definition not yet a member of anything, so requireAuth's `no_workspace`
+// rejection would fire before this handler ever ran. Hence its own thin gate.
+async function requireClerkIdentity(req, res, next) {
+  if (!clerk.isConfigured()) return res.status(503).json({ error: 'sign-in is not configured on this server' });
+  const identity = await clerk.verifyRequest(req);
+  if (!identity) return res.status(401).json({ error: 'sign in first, then open your invite link' });
+  if (!identity.email) identity.email = await clerk.fetchIdentityEmail(identity.clerkUserId);
+  req.clerkIdentity = identity;
+  next();
 }
 
-// POST /api/crm/auth/register { company_name, name, email, password }
-//   OR  { company_id, name, email, password }
-//
-// Two shapes: company_name creates a brand NEW tenant with this user as its
-// first owner (normal self-serve signup). company_id instead CLAIMS an
-// existing, user-less tenant — this is how a tenant that existed before this
-// migration (created the old way, via requireAdmin's /tenants route or by
-// hand) gets its first real login. Claiming is refused the moment the tenant
-// already has one user, which is what makes it safe: a stranger who merely
-// knows a company's id cannot attach themselves to data that already has an
-// owner — the window where claiming works is exactly "nobody owns this yet".
-router.post('/register', async (req, res) => {
+router.post('/accept-invite', requireClerkIdentity, async (req, res) => {
   try {
-    const { company_name, company_id, name, email, password } = req.body || {};
-    if (!email || !String(email).trim()) return res.status(400).json({ error: 'email required' });
-    if (await usersDb.findByEmail(email)) return res.status(409).json({ error: 'an account with this email already exists' });
+    const { token, name } = req.body || {};
+    if (!token) return res.status(400).json({ error: 'token required' });
+    const invite = await usersDb.resolveInvite(token);
+    if (!invite) return res.status(404).json({ error: 'invite not found, already used, or expired' });
 
-    let tenant;
-    if (company_id) {
-      tenant = await tenantDb.getById(company_id);
-      if (!tenant) return res.status(404).json({ error: 'no company with that id exists' });
-      const existing = await usersDb.list(company_id);
-      if (existing.length) return res.status(409).json({ error: 'this company already has an owner — ask them to invite you instead' });
-    } else {
-      if (!company_name || !String(company_name).trim()) return res.status(400).json({ error: 'company_name (or company_id, to claim an existing company) required' });
-      const base = slugify(company_name);
-      const id = `${base}_${crypto.randomBytes(3).toString('hex')}`;
-      tenant = await tenantDb.create({ id, name: String(company_name).trim(), slug: id });
+    const { clerkUserId, email } = req.clerkIdentity;
+    if (!email) return res.status(400).json({ error: 'could not read the email on your account' });
+
+    // The token is a single-use, 7-day, cryptographically-random capability —
+    // the same trust model as the lead-webhook tokens elsewhere in this repo —
+    // so by default possession is enough and a mismatched email is only logged.
+    // Set INVITE_REQUIRE_EMAIL_MATCH=1 if invites will ever be sent to
+    // addresses the recipient does not control.
+    if (String(invite.email).toLowerCase() !== email.toLowerCase()) {
+      if (process.env.INVITE_REQUIRE_EMAIL_MATCH === '1') {
+        return res.status(403).json({ error: `this invite is for ${invite.email}` });
+      }
+      console.warn('[Auth] invite for %s accepted by Clerk identity %s', invite.email, email);
     }
-    const user = await usersDb.create({ companyId: tenant.id, email, password, name: name || null, role: 'owner' });
-
-    const token = await usersDb.createSession(user.id);
-    setSessionCookie(res, token, usersDb.SESSION_TTL_MS);
-    res.status(201).json({ user, company: tenant });
+    const user = await usersDb.acceptInviteForClerk(invite, { clerkUserId, email, name });
+    res.status(201).json({ user });
   } catch (e) {
-    console.error('[Auth] register', e.message);
-    res.status(e.message && /password|email/i.test(e.message) ? 400 : 500).json({ error: e.message || 'registration failed' });
+    console.error('[Auth] accept-invite', e.message);
+    res.status(500).json({ error: e.message || 'failed to accept invite' });
   }
 });
 
-// POST /api/crm/auth/login { email, password }
-router.post('/login', async (req, res) => {
-  try {
-    const { email, password } = req.body || {};
-    if (!email || !password) return res.status(400).json({ error: 'email and password required' });
-    const user = await usersDb.verifyLogin(email, password);
-    if (!user) return res.status(401).json({ error: 'invalid email or password' });
-    const token = await usersDb.createSession(user.id);
-    setSessionCookie(res, token, usersDb.SESSION_TTL_MS);
-    res.json({ user });
-  } catch (e) { console.error('[Auth] login', e.message); res.status(500).json({ error: 'login failed' }); }
+// ── Everything below requires a resolved identity ────────────────────────────
+router.use(requireAuth);
+
+// GET /api/crm/auth/me — who am I, and which workspace am I in.
+router.get('/me', requireUser, async (req, res) => {
+  let company = null;
+  try { company = await tenantDb.getById(req.user.company_id); }
+  catch (e) { /* the header just loses the workspace name; not worth failing on */ }
+  res.json({ user: req.user, company });
 });
 
-// POST /api/crm/auth/logout
-router.post('/logout', async (req, res) => {
-  try {
-    const { readSessionCookie } = require('../lib/session-cookie');
-    const token = readSessionCookie(req);
-    if (token) await usersDb.destroySession(token);
-    clearSessionCookie(res);
-    res.json({ ok: true });
-  } catch (e) { console.error('[Auth] logout', e.message); res.status(500).json({ error: 'logout failed' }); }
-});
-
-// GET /api/crm/auth/me
-router.get('/me', requireUser, (req, res) => res.json({ user: req.user }));
-
-// PATCH /api/crm/auth/me { name?, password?, current_password? }
-// Changing your own password requires current_password — the account owner
-// proving they're still the one in control of the session, not just anyone
-// who found an unlocked browser tab.
+// PATCH /api/crm/auth/me { name? }
+// Passwords, email and MFA are Clerk's business now — the browser sends people
+// to Clerk's own account UI for those. Rejecting a password here explicitly
+// (rather than ignoring it) is what stops a stale client from believing it
+// changed something it did not.
 router.patch('/me', requireUser, async (req, res) => {
   try {
-    const { name, password, current_password } = req.body || {};
+    const { name, password } = req.body || {};
+    if (password !== undefined) {
+      return res.status(400).json({ error: 'password is managed by your sign-in provider' });
+    }
     const fields = {};
     if (name !== undefined) fields.name = name;
-    if (password !== undefined) {
-      const ok = await usersDb.verifyLogin(req.user.email, current_password || '');
-      if (!ok) return res.status(403).json({ error: 'current_password is incorrect' });
-      fields.password = password;
-    }
+    if (!Object.keys(fields).length) return res.status(400).json({ error: 'nothing to update' });
     const updated = await usersDb.update(req.user.company_id, req.user.id, fields);
     res.json({ user: updated });
   } catch (e) { res.status(400).json({ error: e.message || 'update failed' }); }
@@ -134,9 +149,19 @@ router.patch('/users/:id', requireRole('admin'), async (req, res) => {
       if (target.role !== 'member') return res.status(403).json({ error: 'only an owner can manage another admin or owner' });
       if (role !== undefined && role !== 'member') return res.status(403).json({ error: 'only an owner can grant admin/owner role' });
     }
+    const target = await usersDb.getById(req.params.id, companyId);
     const updated = await usersDb.update(companyId, req.params.id, { role, status });
     if (!updated) return res.status(404).json({ error: 'user not found or no fields given' });
-    if (status === 'suspended') await usersDb.destroyAllSessions(req.params.id);
+    if (status === 'suspended') {
+      // Both of these are COURTESIES, not the guarantee. requireAuthAsync
+      // re-reads users.status on every request, so the suspension takes effect
+      // on the target's very next call whether or not either call succeeds —
+      // which matters, because revoking a Clerk session is a network round trip
+      // that can fail. This just logs them out promptly rather than leaving a
+      // dead tab that still looks alive.
+      await usersDb.destroyAllSessions(req.params.id);
+      if (target?.clerk_user_id) await clerk.revokeUserSessions(target.clerk_user_id);
+    }
     res.json({ user: updated });
   } catch (e) { res.status(500).json({ error: 'update failed' }); }
 });
@@ -146,8 +171,16 @@ router.patch('/users/:id', requireRole('admin'), async (req, res) => {
 router.delete('/users/:id', requireRole('owner'), async (req, res) => {
   try {
     if (req.params.id === req.user.id) return res.status(400).json({ error: 'cannot delete your own account' });
+    const companyId = getUserCompanyId(req);
+    // Read the row BEFORE deleting it — the Clerk id is only knowable from here.
+    const target = await usersDb.getById(req.params.id, companyId);
     await usersDb.destroyAllSessions(req.params.id);
-    await usersDb.remove(getUserCompanyId(req), req.params.id);
+    await usersDb.remove(companyId, req.params.id);
+    // Off by default: deleting a Clerk identity is irreversible, and in a
+    // multi-tenant future it would destroy their memberships of other tenants
+    // too. Removing someone from THIS workspace should not, by default, delete
+    // the human. Opt in with CLERK_DELETE_IDENTITY_ON_REMOVE=1.
+    if (target?.clerk_user_id) await clerk.deleteIdentity(target.clerk_user_id);
     res.json({ ok: true });
   } catch (e) { res.status(500).json({ error: 'delete failed' }); }
 });
@@ -204,34 +237,6 @@ router.get('/invites', requireRole('admin'), async (req, res) => {
 router.delete('/invites/:id', requireRole('admin'), async (req, res) => {
   try { await usersDb.revokeInvite(getUserCompanyId(req), req.params.id); res.json({ ok: true }); }
   catch (e) { res.status(500).json({ error: 'failed to revoke invite' }); }
-});
-
-// GET /api/crm/auth/invite/:token — public preview (no session required)
-// before the accept form is submitted. Deliberately minimal: email + role,
-// never anything about the company's actual data.
-router.get('/invite/:token', async (req, res) => {
-  try {
-    const invite = await usersDb.resolveInvite(req.params.token);
-    if (!invite) return res.status(404).json({ error: 'invite not found or expired' });
-    const company = await tenantDb.getById(invite.company_id);
-    res.json({ email: invite.email, role: invite.role, company_name: company?.name || invite.company_id });
-  } catch (e) { res.status(500).json({ error: 'failed to load invite' }); }
-});
-
-// POST /api/crm/auth/accept-invite { token, name, password }
-router.post('/accept-invite', async (req, res) => {
-  try {
-    const { token, name, password } = req.body || {};
-    if (!token) return res.status(400).json({ error: 'token required' });
-    const user = await usersDb.acceptInvite(token, { name, password });
-    if (!user) return res.status(404).json({ error: 'invite not found, already used, or expired' });
-    const sessionToken = await usersDb.createSession(user.id);
-    setSessionCookie(res, sessionToken, usersDb.SESSION_TTL_MS);
-    res.status(201).json({ user });
-  } catch (e) {
-    console.error('[Auth] accept-invite', e.message);
-    res.status(e.message && /password|email|exists/i.test(e.message) ? 400 : 500).json({ error: e.message || 'failed to accept invite' });
-  }
 });
 
 module.exports = router;

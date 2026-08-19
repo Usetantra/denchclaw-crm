@@ -836,6 +836,7 @@
     <button data-sub="channels">Channels</button>
     <button data-sub="integrations">Integrations</button>
     <button data-sub="sequences">Sequences</button>
+    <button data-sub="team">Team</button>
     <button data-sub="system">System health</button>
   </div>
   <div class="settings-content">
@@ -1204,133 +1205,248 @@ const STAGE_COLORS={
 const SCORE_COLORS={hot:"#b42318",warm:"#b54708",neutral:"#98a2b3",cold:"#175cd3"};
 
 // ── API helpers ──────────────────────────────────────────────────────────────
+// Clerk session tokens are SHORT-LIVED (~60s) and getToken() refreshes them
+// transparently, so this is called per request and the result is never cached
+// in a variable — a cached token is a guaranteed 401 a minute later.
+async function authHeaders(){
+  try{
+    if(!window.Clerk||!window.Clerk.session)return {};
+    const tok=await window.Clerk.session.getToken();
+    return tok?{Authorization:`Bearer ${tok}`}:{};
+  }catch{return {};}
+}
 async function get(path){
   // no-store: the CRM changes under you (drags, engine events) — never serve a
   // cached feed/contact, or reopening shows stale activity.
-  const r=await fetch(`${API}/${path}`,{headers:{"Accept":"application/json"},cache:"no-store"});
-  if(!r.ok)throw new Error(`${path} → HTTP ${r.status}`);
+  const r=await fetch(`${API}/${path}`,{headers:{"Accept":"application/json",...(await authHeaders())},cache:"no-store"});
+  if(r.status===401)return onAuthLost(`${path} → 401`);
+  if(!r.ok){
+    let j={};try{j=await r.json();}catch{}
+    if(r.status===403)onAuthDenied(j);
+    throw new Error(j.error||`${path} → HTTP ${r.status}`);
+  }
   return r.json();
 }
 async function apiFetch(method,path,body){
-  const r=await fetch(`${API}/${path}`,{method,headers:{"Content-Type":"application/json"},body:JSON.stringify(body)});
+  const r=await fetch(`${API}/${path}`,{method,
+    headers:{"Content-Type":"application/json",...(await authHeaders())},
+    // Guarded: an unguarded JSON.stringify(undefined) sends the literal string
+    // "undefined" as the body on every del() call.
+    body:body===undefined?undefined:JSON.stringify(body)});
+  if(r.status===401)return onAuthLost(`${method} ${path} → 401`);
   const j=await r.json().catch(()=>({}));
-  if(!r.ok){const e=new Error(j.error||`HTTP ${r.status}`);e.allowed=j.allowed_transitions||j.allowed;throw e;}
+  if(!r.ok){
+    if(r.status===403)onAuthDenied(j);
+    const e=new Error(j.error||`HTTP ${r.status}`);e.allowed=j.allowed_transitions||j.allowed;throw e;
+  }
   return j;
 }
 const post=(p,b)=>apiFetch("POST",p,b);
 const patch=(p,b)=>apiFetch("PATCH",p,b);
 
-// ── Auth gate ────────────────────────────────────────────────────────────────
-// A session cookie (server/lib/session-cookie.js) is the real login layer, on
-// top of the X-Internal-Key the dev proxy / nginx already injects — see
-// migration 033. Every fetch above sends cookies automatically (same-origin
-// default), so no changes were needed there; this just decides whether to show
-// the app or a login/register screen before anything else runs.
-let CURRENT_USER=null;
+// A 401 means the session is gone — stop the 30s poller before it hammers a
+// dead session, then show the gate. Throwing afterwards keeps every existing
+// caller's catch block working unchanged.
+function onAuthLost(why){
+  console.warn("[auth]",why);
+  stopPolling();
+  CURRENT_USER=null;
+  try{showAuthGate();}catch(e){console.error(e);}
+  throw new Error("signed out");
+}
+// A 403 that means "valid identity, no access here" — as opposed to an ordinary
+// per-route permission denial, which callers handle themselves.
+function onAuthDenied(j){
+  if(j&&(j.error==="no_workspace"||j.error==="account_suspended")){stopPolling();showNoAccess(j);}
+}
+
+// ── Auth gate (Clerk) ────────────────────────────────────────────────────────
+// Clerk owns sign-in, sign-up and the session; the server owns which workspace
+// you are in and what you may do there (see server/lib/clerk.js). This page
+// holds no credential of its own: it asks Clerk for a short-lived token per
+// request in authHeaders() above.
+//
+// The publishable key is fetched from the server rather than hardcoded, so this
+// one static file works unchanged across dev, staging and production.
+let CURRENT_USER=null,CURRENT_COMPANY=null,CLERK_READY=null;
+
+async function loadClerk(){
+  if(CLERK_READY)return CLERK_READY;
+  CLERK_READY=(async()=>{
+    const cfg=await get("auth/config");
+    if(!cfg.publishable_key)throw new Error("sign-in is not configured on this server");
+    await new Promise((ok,fail)=>{
+      const s=document.createElement("script");
+      // Major version pinned deliberately: an unpinned CDN URL on the login
+      // path is both a supply-chain surface and a silent breaking-change
+      // vector on a page with no lockfile. Vendor this into web/ to remove the
+      // third-party runtime dependency entirely.
+      s.src="https://cdn.jsdelivr.net/npm/@clerk/clerk-js@5/dist/clerk.browser.js";
+      s.crossOrigin="anonymous";s.async=true;s.type="text/javascript";
+      // The bundle reads the key off this attribute and constructs window.Clerk
+      // during its own evaluation, so it must be set BEFORE the script is
+      // appended.
+      s.setAttribute("data-clerk-publishable-key",cfg.publishable_key);
+      s.onload=ok;s.onerror=()=>fail(new Error("could not load the sign-in library"));
+      document.head.appendChild(s);
+    });
+    // A MALFORMED publishable key fails silently and confusingly: the script
+    // loads and fires onload, but constructing Clerk throws inside the bundle,
+    // so window.Clerk is simply never assigned. Without this check the next
+    // line dies with "Cannot read properties of undefined (reading 'load')",
+    // which tells an operator nothing about the actual cause. A Clerk key is
+    // base64 of its frontend host — "pk_test_mycompany" is not one.
+    if(!window.Clerk){
+      throw new Error("the sign-in library loaded but did not initialise — CLERK_PUBLISHABLE_KEY is probably malformed");
+    }
+    await window.Clerk.load({});
+    return window.Clerk;
+  })();
+  return CLERK_READY;
+}
+
 async function bootAuth(){
   const inviteToken=new URLSearchParams(location.search).get("invite");
+  try{await loadClerk();}
+  catch(e){return showFatalAuth(e.message);}
   if(inviteToken)return showAcceptInvite(inviteToken);
+  if(!window.Clerk.session)return showAuthGate();
   try{
     const r=await get("auth/me");
-    CURRENT_USER=r.user;
+    CURRENT_USER=r.user;CURRENT_COMPANY=r.company||null;
     showApp();
   }catch(e){
-    showAuthGate("login");
+    // 401 -> onAuthLost already showed the gate; 403 no_workspace ->
+    // onAuthDenied already showed the no-access card. Nothing left to do.
   }
 }
-async function showAcceptInvite(token){
+
+// Blowing away a mounted Clerk component's DOM without unmounting it leaks its
+// listeners across a sign-out/sign-in cycle in the same page.
+function unmountClerkUI(){
+  try{
+    const n=$("#clerk-signin");if(n&&window.Clerk?.unmountSignIn)window.Clerk.unmountSignIn(n);
+    const u=$("#clerk-signup");if(u&&window.Clerk?.unmountSignUp)window.Clerk.unmountSignUp(u);
+  }catch{}
+}
+function gateShell(inner){
   $("#app-shell").style.display="none";
   const gate=$("#auth-gate");
   gate.style.display="flex";
+  unmountClerkUI();
+  gate.innerHTML=`<div class="auth-card"><div class="brand"><span class="mark">DenchClaw</span><span class="sub">CRM</span></div>${inner}</div>`;
+  return gate;
+}
+function signOutButton(id){
+  const b=$(id);if(!b)return;
+  b.onclick=async()=>{stopPolling();try{await window.Clerk.signOut();}catch{}location.reload();};
+}
+
+function showAuthGate(){
+  stopPolling();
+  gateShell(`<div id="clerk-signin" style="margin-top:14px"></div>`);
+  window.Clerk.mountSignIn($("#clerk-signin"),{
+    appearance:{elements:{card:{boxShadow:"none",border:"none",background:"transparent"}}},
+  });
+}
+
+// A valid identity that simply has no membership here. Distinct from a 401 on
+// purpose — sending them back to sign in would just loop.
+function showNoAccess(j){
+  const suspended=j&&j.error==="account_suspended";
+  gateShell(`<h2>${suspended?"Account suspended":"No workspace yet"}</h2>
+    <p class="muted">${esc((j&&j.message)||"This account is not a member of any workspace.")}</p>
+    <button class="btn" id="auth-signout" style="margin-top:14px">Sign out</button>`);
+  signOutButton("#auth-signout");
+}
+function showFatalAuth(msg){
+  gateShell(`<h2>Sign-in unavailable</h2>
+    <p class="muted">${esc(msg)}</p>
+    <button class="btn" id="auth-retry" style="margin-top:14px">Try again</button>`);
+  $("#auth-retry").onclick=()=>location.reload();
+}
+
+// Invite flow: the preview is public, so it renders before any sign-in. If the
+// visitor has no Clerk session yet we mount sign-up prefilled with the invited
+// address; once signed in, accepting is a single call carrying the token.
+async function showAcceptInvite(token){
   let preview;
   try{preview=await get(`auth/invite/${token}`);}
   catch(e){
-    gate.innerHTML=`<div class="auth-card"><div class="brand"><span class="mark">DenchClaw</span></div>
-      <h2>Invite not found</h2><p class="muted">${esc(e.message)} — ask whoever invited you to send a new one.</p>
-      <div class="auth-switch"><a id="auth-switch-link">Back to login</a></div></div>`;
-    $("#auth-switch-link").onclick=()=>{history.replaceState({},"",location.pathname);showAuthGate("login");};
+    gateShell(`<h2>Invite not found</h2>
+      <p class="muted">${esc(e.message)} — ask whoever invited you to send a new one.</p>
+      <div class="auth-switch"><a id="auth-switch-link">Back to sign in</a></div>`);
+    $("#auth-switch-link").onclick=()=>{history.replaceState({},"",location.pathname);showAuthGate();};
     return;
   }
-  gate.innerHTML=`
-    <div class="auth-card">
-      <div class="brand"><span class="mark">DenchClaw</span></div>
-      <h2>Join ${esc(preview.company_name)}</h2>
-      <p class="muted">You've been invited as ${esc(ROLE_LABEL[preview.role]||preview.role)} · ${esc(preview.email)}</p>
-      <div class="auth-err" id="auth-err"></div>
-      <div class="field"><label>Your name</label><input id="auth-name" placeholder="Ada Lovelace"></div>
-      <div class="field"><label>Password</label><input id="auth-password" type="password" autocomplete="new-password" placeholder="At least 8 characters"></div>
-      <button class="btn primary" id="auth-submit">Join the team</button>
-    </div>`;
+  if(!window.Clerk.session){
+    gateShell(`<h2>Join ${esc(preview.company_name)}</h2>
+      <p class="muted">Invited as ${esc(ROLE_LABEL[preview.role]||preview.role)} · ${esc(preview.email)}</p>
+      <div id="clerk-signup" style="margin-top:14px"></div>`);
+    window.Clerk.mountSignUp($("#clerk-signup"),{
+      initialValues:{emailAddress:preview.email},
+      appearance:{elements:{card:{boxShadow:"none",border:"none",background:"transparent"}}},
+    });
+    return;
+  }
+  gateShell(`<h2>Join ${esc(preview.company_name)}</h2>
+    <p class="muted">Invited as ${esc(ROLE_LABEL[preview.role]||preview.role)} · ${esc(preview.email)}</p>
+    <div class="auth-err" id="auth-err"></div>
+    <div class="field"><label>Your name</label><input id="auth-name" placeholder="Ada Lovelace"></div>
+    <button class="btn primary" id="auth-submit">Join the team</button>`);
   $("#auth-submit").onclick=async()=>{
-    const name=$("#auth-name").value.trim(),password=$("#auth-password").value;
-    if(!password)return authErr("Password is required");
+    const name=$("#auth-name").value.trim();
     const btn=$("#auth-submit");btn.disabled=true;
     try{
-      const r=await post("auth/accept-invite",{token,name,password});
-      CURRENT_USER=r.user;history.replaceState({},"",location.pathname);showApp();
+      const r=await post("auth/accept-invite",{token,name});
+      CURRENT_USER=r.user;
+      history.replaceState({},"",location.pathname);
+      try{const me=await get("auth/me");CURRENT_COMPANY=me.company||null;}catch{}
+      showApp();
     }catch(e){authErr(e.message);btn.disabled=false;}
   };
 }
+
 function showApp(){
+  unmountClerkUI();
   $("#auth-gate").style.display="none";
   $("#auth-gate").innerHTML="";
   $("#app-shell").style.display="flex";
   const who=$("#auth-whoami");
-  who.textContent=`${CURRENT_USER.name||CURRENT_USER.email} · ${nice(CURRENT_USER.role)}`;
+  who.textContent=`${CURRENT_USER.name||CURRENT_USER.email} · ${nice(CURRENT_USER.role)}`
+                 +(CURRENT_COMPANY&&CURRENT_COMPANY.name?` · ${CURRENT_COMPANY.name}`:"");
   who.onclick=()=>{setTab("settings");setSettingsSubtab("team");};
   const lo=$("#auth-logout");lo.style.display="";
-  lo.onclick=async()=>{try{await post("auth/logout",{});}catch{}CURRENT_USER=null;location.reload();};
-  load();setInterval(load,30000);
+  lo.onclick=async()=>{stopPolling();try{await window.Clerk.signOut();}catch{}location.reload();};
+  startPolling();
 }
 function authErr(msg){const e=$("#auth-err");if(!e)return;e.textContent=msg;e.style.display="block";}
-function showAuthGate(mode){
-  $("#app-shell").style.display="none";
-  const gate=$("#auth-gate");
-  gate.style.display="flex";
-  if(mode==="register")gate.innerHTML=`
-      <div class="auth-card">
-        <div class="brand"><span class="mark">DenchClaw</span></div>
-        <h2>Create your agency account</h2>
-        <p class="muted">Sets you up as the owner of a brand-new workspace.</p>
-        <div class="auth-err" id="auth-err"></div>
-        <div class="field"><label>Company name</label><input id="auth-company" placeholder="Acme Growth"></div>
-        <div class="field"><label>Your name</label><input id="auth-name" placeholder="Ada Lovelace"></div>
-        <div class="field"><label>Email</label><input id="auth-email" type="email" autocomplete="username"></div>
-        <div class="field"><label>Password</label><input id="auth-password" type="password" autocomplete="new-password" placeholder="At least 8 characters"></div>
-        <button class="btn primary" id="auth-submit">Create account</button>
-        <div class="auth-switch">Already have an account? <a id="auth-switch-link">Log in</a></div>
-      </div>`;
-  else gate.innerHTML=`
-      <div class="auth-card">
-        <div class="brand"><span class="mark">DenchClaw</span></div>
-        <h2>Log in</h2>
-        <p class="muted">Welcome back — sign in to your workspace.</p>
-        <div class="auth-err" id="auth-err"></div>
-        <div class="field"><label>Email</label><input id="auth-email" type="email" autocomplete="username"></div>
-        <div class="field"><label>Password</label><input id="auth-password" type="password" autocomplete="current-password"></div>
-        <button class="btn primary" id="auth-submit">Log in</button>
-        <div class="auth-switch">New agency? <a id="auth-switch-link">Create an account</a></div>
-      </div>`;
-  $("#auth-switch-link").onclick=()=>showAuthGate(mode==="register"?"login":"register");
-  const submit=async()=>{
-    const email=$("#auth-email").value.trim(),password=$("#auth-password").value;
-    const btn=$("#auth-submit");btn.disabled=true;
-    try{
-      let r;
-      if(mode==="register"){
-        const company_name=$("#auth-company").value.trim(),name=$("#auth-name").value.trim();
-        if(!company_name||!email||!password){authErr("Company name, email and password are required");btn.disabled=false;return;}
-        r=await post("auth/register",{company_name,name,email,password});
-      }else{
-        if(!email||!password){authErr("Email and password are required");btn.disabled=false;return;}
-        r=await post("auth/login",{email,password});
-      }
-      CURRENT_USER=r.user;showApp();
-    }catch(e){authErr(e.message);btn.disabled=false;}
-  };
-  $("#auth-submit").onclick=submit;
-  gate.querySelectorAll("input").forEach(i=>i.addEventListener("keydown",e=>{if(e.key==="Enter")submit();}));
+
+// The server builds accept_url from APP_URL, which is ABSOLUTE in any real
+// deployment and EMPTY (so the url is relative) when it is unset. Blindly
+// prepending location.origin therefore produced a doubled
+// "https://hosthttps://host/crm?invite=…" in production — and only on the path
+// that renders when the invite email failed to send, i.e. exactly when someone
+// needs to copy the link by hand.
+function absoluteUrl(u){
+  const s=String(u||"");
+  if(/^https?:\/\//i.test(s))return s;
+  return location.origin+(s.startsWith("/")?s:"/"+s);
 }
+
+// ── Polling ──────────────────────────────────────────────────────────────────
+// One handle, one owner. Previously both showApp() and the boot line started
+// their own 30s interval with no reference kept, so a signed-out tab could
+// hammer a dead session forever with nothing able to stop it.
+let POLL=null;
+function startPolling(){stopPolling();load();POLL=setInterval(load,30000);}
+function stopPolling(){if(POLL){clearInterval(POLL);POLL=null;}}
+// A background tab does not need to refresh, and each poll costs a token
+// refresh — so pause while hidden and catch up on return.
+document.addEventListener("visibilitychange",()=>{
+  if(!CURRENT_USER)return;
+  if(document.hidden)stopPolling();else if(!POLL)startPolling();
+});
 
 // ── UI helpers ───────────────────────────────────────────────────────────────
 function setStatus(ok,msg){const el=$("#status");el.className="status "+(ok?"ok":"err");$("#statusText").textContent=msg;}
@@ -2843,19 +2959,16 @@ async function loadTeamSettings(){
     <div class="cvrow">${field("Name","team-name",{value:CURRENT_USER.name||""})}<div class="field"><label>Email</label><input value="${esc(CURRENT_USER.email)}" disabled></div></div>
     <div class="field"><label>Role</label><input value="${esc(ROLE_LABEL[CURRENT_USER.role]||CURRENT_USER.role)}" disabled></div>
     <button class="btn sm primary" id="team-me-save">Save name</button>
-    <div class="sechead" style="margin:20px 0 10px"><span class="eyebrow">Change password</span><span class="rule"></span></div>
-    <div class="cvrow">${field("Current password","cur-pw",{type:"password"})}${field("New password","new-pw",{type:"password"})}</div>
-    <button class="btn sm" id="team-pw-save">Update password</button>`;
+    <div class="sechead" style="margin:20px 0 10px"><span class="eyebrow">Sign-in &amp; security</span><span class="rule"></span></div>
+    <p class="muted" style="margin:0 0 10px">Your password, email and two-factor settings are managed by your sign-in provider.</p>
+    <button class="btn sm" id="team-manage-account">Manage sign-in &amp; security</button>`;
   $("[name=team-name]").value=CURRENT_USER.name||"";
   $("#team-me-save").onclick=async()=>{
     try{const r=await patch("auth/me",{name:$("[name=team-name]").value.trim()});CURRENT_USER=r.user;toast("Saved");loadTeamSettings();}
     catch(e){toast(e.message,true);}
   };
-  $("#team-pw-save").onclick=async()=>{
-    const cur=$("[name=cur-pw]").value,nw=$("[name=new-pw]").value;
-    if(!cur||!nw)return toast("Both fields required",true);
-    try{await patch("auth/me",{current_password:cur,password:nw});toast("Password updated");loadTeamSettings();}
-    catch(e){toast(e.message,true);}
+  $("#team-manage-account").onclick=()=>{
+    try{window.Clerk.openUserProfile();}catch(e){toast("Sign-in settings unavailable",true);}
   };
 
   const canManage=CURRENT_USER.role==="owner"||CURRENT_USER.role==="admin";
@@ -2918,7 +3031,7 @@ $("#team-invite-add").onclick=()=>{
       toast(r.emailed?"Invite emailed":"Invite created — share the link manually");
       if(!r.emailed)openModal("Invite link",
         `<p class="muted" style="font-size:13px">Email isn't configured, so share this link directly:</p>
-         <div class="field"><input readonly value="${esc(location.origin+r.accept_url)}" onclick="this.select()"></div>`,
+         <div class="field"><input readonly value="${esc(absoluteUrl(r.accept_url))}" onclick="this.select()"></div>`,
         `<button class="btn primary" onclick="closeModal()">Done</button>`);
       loadTeamSettings();
     }catch(e){toast(e.message,true);}
@@ -4136,12 +4249,9 @@ function setSeqSubtab(sub){
 }
 $("#seq-subtab").addEventListener("click",e=>{const b=e.target.closest("button[data-sub]");if(b)setSeqSubtab(b.dataset.sub);});
 
-// ── Boot ──────────────────────────────────────────────────────────────────────
-// Login gate disabled for now (Clerk will replace the custom auth entirely,
-// not layer on top of it — no point half-wiring a system about to be
-// swapped). bootAuth()/showAuthGate() are still defined below, dormant, in
-// case they're useful reference when Clerk goes in.
-initBoardDnD();load();setInterval(load,30000);
+// Boot lives at the END of the SECOND script block, not here — see the note
+// there. initBoardDnD() is safe to run now because it only wires listeners.
+initBoardDnD();
 </script>
 
 <script>
@@ -5250,6 +5360,16 @@ async function loadMarketingEvents(){
     tb.innerHTML=rows||`<tr><td colspan="6" class="muted">No events yet.</td></tr>`;
   }catch(e){showRetry(tb,e.message,loadMarketingEvents,{colspan:6});}
 }
+
+// ── Boot ─────────────────────────────────────────────────────────────────────
+// Deliberately the LAST statement in the LAST script block. bootAuth() leads to
+// showApp() -> load(), which touches panels defined in this block ($$ and del
+// above), so booting from the end of the first block relied on bootAuth being
+// async to win a parse-order race it should never have been in.
+//
+// Nothing fetches until we know who the user is: bootAuth loads Clerk, and only
+// a resolved session starts the poller.
+bootAuth();
 </script>
 </body>
 </html>
