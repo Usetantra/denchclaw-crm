@@ -8,3 +8,6 @@ node_modules/
 # cannot be regenerated. The evidence screenshots CAN be: every one of them is
 # produced by re-running a probe in scratchpad/, so 3.5M of PNGs stay out of git.
 .loop/EVIDENCE/
+
+# Operational state from bin/dns-guard.sh — machine- and time-specific.
+.dns-snapshots/

@@ -1,0 +1,57 @@
+# ─── DenchClaw CRM — the crank ───────────────────────────────────────────────
+# Install as the user that owns the app (yogi), NOT root:
+#
+#     crontab -e -u yogi          # paste the block below
+#     crontab -l -u yogi          # confirm
+#
+# Until something here is installed, the CRM looks completely healthy and sends
+# nothing: the executors are one-batch-per-call by design, so an uninstalled
+# cron is indistinguishable from an empty queue. `node bin/preflight.mjs` calls
+# that state out explicitly.
+
+# Mail failures somewhere a human reads. bin/tick.mjs exits non-zero only on a
+# real failure — a blocked channel or an unconnected Tantra tenant is a normal
+# 200 and stays silent, so this will not cry wolf.
+MAILTO=ops@usetantra.com
+PATH=/usr/local/bin:/usr/bin:/bin
+
+# Sends: every 2 minutes. The interval is a latency choice, not a throughput
+# one — each run drains a batch per channel, and the advisory lock inside
+# bin/tick.mjs means a slow run is skipped rather than stacked.
+# TANTRA_TICK_ENABLED=0 here so the mirror is driven by exactly ONE schedule
+# (the 5-minute job below) rather than by both.
+*/2 * * * * cd /home/yogi/denchclaw-crm && TANTRA_TICK_ENABLED=0 /usr/bin/node bin/tick.mjs >> /var/log/denchclaw-tick.log 2>&1
+
+# Tantra mirror: every 5 minutes, separately from sends.
+# The mirror is POLL-driven by design (their webhooks are reply-shaped and would
+# silently miss our own sends, second inbounds and new threads), so this cron IS
+# the mirror — not a backstop for it.
+*/5 * * * * cd /home/yogi/denchclaw-crm && /usr/bin/node bin/tick.mjs --channels= >> /var/log/denchclaw-tick.log 2>&1
+
+# Preflight once a day: catches the slow failures — cron silently dying, a
+# migration applied on one box and not another, a key rotated out from under
+# stored credentials. Mails only when something is BLOCKING (exit 1).
+30 7 * * * cd /home/yogi/denchclaw-crm && /usr/bin/node bin/preflight.mjs > /tmp/denchclaw-preflight.txt 2>&1 || cat /tmp/denchclaw-preflight.txt
+
+# Backups: nightly, verified once a week. --verify actually restores the dump
+# into a scratch database and counts tables, because an unverified backup is a
+# hope rather than a backup.
+# NOTE: this writes to LOCAL DISK. Ship BACKUP_DIR off the box as well, or it
+# does not survive losing the box.
+15 2 * * 1-6 cd /home/yogi/denchclaw-crm && bin/backup.sh >> /var/log/denchclaw-backup.log 2>&1
+15 2 * * 0   cd /home/yogi/denchclaw-crm && bin/backup.sh --verify >> /var/log/denchclaw-backup.log 2>&1
+
+# Log rotation — /var/log/denchclaw-tick.log grows forever otherwise. Prefer a
+# real /etc/logrotate.d entry; this is the zero-dependency version.
+0 4 * * 0 : > /var/log/denchclaw-tick.log
+
+# ── Interval guidance ────────────────────────────────────────────────────────
+# Every run costs one loopback request per (tenant × enabled channel). With one
+# tenant and four channels that is trivial. Before onboarding many tenants,
+# either raise the interval or shard by tenant with --tenant=, because the
+# script walks them serially inside a single lock.
+#
+# Do NOT run this on two boxes at once against the same database expecting the
+# lock to sort it out — it will (the lock is a Postgres advisory lock, so it is
+# genuinely cluster-wide), but the losing box does no work, which makes the
+# second box pure cost.
