@@ -118,20 +118,40 @@ echo "[deploy-claw] installing vhost"
 run sudo cp "$SRC" "$DEST"
 run sudo ln -sf "$DEST" "$LINK"
 
-# ── Stage-1 placeholders must be filled in, or the dashboard 502s silently ───
+# ── Fill in the stage-1 values from the box itself ───────────────────────────
+# Both of these are knowable here, so asking a human to hand-edit a config file
+# mid-deploy just adds a step where a typo produces a silent 502. Read them, or
+# stop with a specific reason — never reload with a placeholder still in place.
 if [ "$DRY" != 1 ]; then
-  if sudo grep -q 'REPLACE_WITH_INTERNAL_API_KEY' "$DEST"; then
-    echo
-    echo "[deploy-claw] ACTION REQUIRED before this will work:"
-    echo "  1. edit $DEST"
-    echo "  2. replace REPLACE_WITH_INTERNAL_API_KEY with the value from .env"
-    echo "  3. confirm auth_basic_user_file points at the real htpasswd:"
-    sudo grep -rh auth_basic_user_file /etc/nginx/sites-available/ 2>/dev/null | sort -u | sed 's/^/       /'
-    echo "  4. re-run: sudo nginx -t && sudo systemctl reload nginx"
-    echo
-    echo "[deploy-claw] stopping here — NOT reloading nginx with a placeholder key."
-    exit 3
+  # The internal key the app is actually running with.
+  KEY=$(grep -E '^INTERNAL_API_KEY=' .env 2>/dev/null | head -1 | cut -d= -f2- | tr -d '"'"'"' \r')
+  if [ -z "$KEY" ]; then
+    fail "INTERNAL_API_KEY not found in $(pwd)/.env — the /crm/api proxy needs it for stage 1. Set it, or fill the placeholder in $DEST by hand."
   fi
+  # The htpasswd the existing site already uses. Reusing it means ONE credential
+  # to rotate rather than two, and no new password to distribute.
+  HTP=$(sudo grep -rhoP '(?<=auth_basic_user_file )[^;]+' /etc/nginx/sites-available/ 2>/dev/null \
+        | tr -d ' ' | sort -u | head -1)
+  if [ -z "$HTP" ]; then
+    echo "  NOTE: no existing auth_basic_user_file found on this box."
+    echo "        Create one, then re-run:  sudo htpasswd -c /etc/nginx/.htpasswd <user>"
+    fail "refusing to install a /crm/ location with no working Basic-auth file — that would publish the dashboard."
+  fi
+  echo "[deploy-claw] using htpasswd: $HTP"
+
+  # Escape for sed: the key is random base64/hex and could contain / or &.
+  esc_key=$(printf '%s' "$KEY" | sed -e 's/[\/&|]/\\&/g')
+  esc_htp=$(printf '%s' "$HTP" | sed -e 's/[\/&|]/\\&/g')
+  sudo sed -i "s|REPLACE_WITH_INTERNAL_API_KEY|$esc_key|g" "$DEST"
+  sudo sed -i "s|auth_basic_user_file /etc/nginx/.htpasswd;|auth_basic_user_file $esc_htp;|g" "$DEST"
+  sudo sed -i "s|auth_basic_user_file /etc/nginx/.htpasswd;   # <- confirm the real path|auth_basic_user_file $esc_htp;|g" "$DEST"
+
+  if sudo grep -q 'REPLACE_WITH_INTERNAL_API_KEY' "$DEST"; then
+    fail "placeholder substitution did not take — refusing to reload with a placeholder key in $DEST"
+  fi
+  # The file now contains a live secret. Make sure it is not world-readable.
+  sudo chmod 640 "$DEST"
+  echo "[deploy-claw] stage-1 values written (config is chmod 640 — it holds the internal key)"
 fi
 
 # ── Test BEFORE reload. A failed test must never reach systemctl. ────────────
