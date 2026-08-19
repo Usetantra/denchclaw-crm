@@ -16,6 +16,7 @@ const channelsModel = require('../db/models/channels');
 const { query } = require('../db/index');
 // CP-B: an interested reply to a cold email invite is auto-registrant path 2.
 const { ingestMarketingEvent } = require('../lib/marketing-events');
+const { createLimiter } = require('../lib/rate-limit');
 const crmRouter = require('./crm');
 const marketingDeps = {
   recordActivity: crmRouter.addContactActivity,
@@ -32,6 +33,27 @@ const DEFAULT_COMPANY = process.env.DEFAULT_COMPANY_ID || 'tantra';
 // So it fails CLOSED — with no secret configured the route is disabled (503)
 // rather than silently accepting anonymous writes from the internet.
 const SECRET = process.env.INBOUND_WEBHOOK_SECRET || '';
+
+// ─── Rate limits ─────────────────────────────────────────────────────────────
+// These endpoints are mounted OUTSIDE requireAuth because a provider has no
+// internal key, so the only thing standing between the internet and them is a
+// shared secret, a URL token, or — for /capture/:tool — nothing at all by
+// design. Each of those fails closed, but failing closed at speed is still a
+// free way to burn database connections from a box with a 200-connection budget.
+//
+// Limits are per-IP-per-minute and generous enough that no real provider will
+// notice: Twilio and Resend fan out from a handful of addresses but nowhere
+// near these rates for one tenant.
+const providerLimiter = createLimiter({
+  name: 'provider-webhook',
+  max: () => process.env.WEBHOOK_RATE_LIMIT || 300,
+});
+// Tighter, because these two are the guessable ones: a lead token is the entire
+// credential, and /capture/:tool has no credential at all.
+const tokenLimiter = createLimiter({
+  name: 'token-webhook',
+  max: () => process.env.WEBHOOK_TOKEN_RATE_LIMIT || 60,
+});
 if (!SECRET) {
   console.warn('[Webhooks] INBOUND_WEBHOOK_SECRET is not set — the inbound email webhook is DISABLED (503). Set it to enable inbound email.');
 }
@@ -147,7 +169,7 @@ function tenantMismatch(res, wanted, what) {
 }
 
 // POST /webhooks/email/inbound
-router.post('/email/inbound', async (req, res) => {
+router.post('/email/inbound', providerLimiter.middleware, async (req, res) => {
   try {
     // Fail closed: unconfigured ⇒ disabled, never open.
     if (!SECRET) {
@@ -308,7 +330,7 @@ async function companyForBusinessNumber(channel, to) {
 }
 
 // POST /webhooks/twilio/inbound — inbound WhatsApp/SMS + STOP/START/HELP.
-router.post('/twilio/inbound', async (req, res) => {
+router.post('/twilio/inbound', providerLimiter.middleware, async (req, res) => {
   const twiml = (x) => res.type('text/xml').send(x || '<Response></Response>');
   try {
     const b = req.body || {};
@@ -370,7 +392,7 @@ router.post('/twilio/inbound', async (req, res) => {
 });
 
 // POST /webhooks/twilio/status — delivery status callbacks.
-router.post('/twilio/status', async (req, res) => {
+router.post('/twilio/status', providerLimiter.middleware, async (req, res) => {
   try {
     const b = req.body || {};
     if (b.MessageSid) {
@@ -402,7 +424,7 @@ function pick(body, ...names) {
   return undefined;
 }
 
-router.post('/leads/:token', async (req, res) => {
+router.post('/leads/:token', tokenLimiter.middleware, async (req, res) => {
   try {
     const hook = await leadWebhooksDb.getByToken(req.params.token);
     // Same shape whether the token is unknown or disabled — a prober learns
@@ -457,7 +479,7 @@ router.post('/leads/:token', async (req, res) => {
 const webhookCaptures = require('../db/models/webhook-captures');
 const zoomCrypto = require('crypto');
 
-router.post('/capture/:tool', async (req, res) => {
+router.post('/capture/:tool', tokenLimiter.middleware, async (req, res) => {
   const tool = String(req.params.tool || 'unknown').toLowerCase().replace(/[^a-z0-9_-]/g, '');
   try {
     await webhookCaptures.record(tool, { method: req.method, headers: req.headers, body: req.body });
@@ -524,7 +546,7 @@ function extractTantraEmails(body) {
   return [...out];
 }
 
-router.post('/tantra/:token', async (req, res) => {
+router.post('/tantra/:token', tokenLimiter.middleware, async (req, res) => {
   try {
     const hook = await tantraWebhooksDb.getByToken(req.params.token);
     if (!hook) return res.status(404).json({ error: 'unknown webhook' });

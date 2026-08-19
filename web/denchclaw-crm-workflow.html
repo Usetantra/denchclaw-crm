@@ -206,7 +206,7 @@
     <!-- transport bar -->
     <rect x="60" y="156" width="972" height="58" rx="4" fill="#f4f4f4" stroke="#ececec"/>
     <text x="76" y="180" font-size="12" font-weight="700" fill="#2a2a2a">TRANSPORT + FRONT DOOR</text>
-    <text x="76" y="198" class="elabel">engines: loopback HTTP with <tspan font-weight="600">X-Internal-Key + X-Company-Id</tspan> headers · humans: nginx at /crm/ does a Basic-auth login, then injects those same headers server-side (the browser never sees the key)</text>
+    <text x="76" y="198" class="elabel">machines: loopback HTTP with <tspan font-weight="600">X-Internal-Key + X-Company-Id</tspan> headers · humans: sign in with Clerk, and the browser sends <tspan font-weight="600">Authorization: Bearer</tspan> — nginx BLANKS the key headers on /crm/api so a browser cannot present them</text>
 
     <path d="M546 214 V 250" stroke="#6b6b6b" stroke-width="1.4" fill="none" marker-end="url(#arr)"/>
 
@@ -984,7 +984,7 @@
     <div class="cell"><div class="k">Schema changes</div><div class="v">numbered files in <code>migrations/</code>, applied by a human operator with a pg_dump backup first — the app never auto-migrates, agents never run DDL on the live DB</div></div>
     <div class="cell"><div class="k">Tests</div><div class="v"><code>npm test</code> boots a throwaway Docker postgres:16, applies every migration from zero, and runs the 46-case contract harness — never against staging</div></div>
     <div class="cell"><div class="k">Drift protection</div><div class="v"><code>GET /pipeline/transitions</code> is byte-pinned by automation_core's CI drift test — the engines' mirror and the CRM must agree or CI fails</div></div>
-    <div class="cell"><div class="k">UI hosting</div><div class="v">nginx serves <code>/var/www/crm/</code> at <code>/crm/</code> with Basic auth and injects the API headers; this page lives there too</div></div>
+    <div class="cell"><div class="k">UI hosting</div><div class="v">nginx serves the dashboard at <code>/crm/</code>. It no longer injects API headers — it blanks them, and humans authenticate with Clerk (see <code>docs/GOING_LIVE.md</code>)</div></div>
     <div class="cell"><div class="k">Verified</div><div class="v">2026-07-02: 46/46 contract + 35/35 live-journey trial + full visual browser run; behavioral smoke test on production staging passed post-deploy</div></div>
   </div>
 

@@ -98,32 +98,17 @@ function companyForSecret(provided) {
   return match ? match.company : null;
 }
 
-// ─── Rate limit (ported) ─────────────────────────────────────────────────────
-const RL_WINDOW_MS = 60_000;
-const RL_MAX = Number(process.env.MARKETING_WEBHOOK_RATE_LIMIT || 60) || 60;
-const rlBuckets = new Map();
-
-function clientIp(req) {
-  const fwd = req.get('x-forwarded-for') || '';
-  if (fwd) return fwd.split(',').pop().trim();
-  return req.ip || 'unknown';
-}
-
-function rateLimited(req, now = Date.now()) {
-  const ip = clientIp(req);
-  const bucket = (rlBuckets.get(ip) || []).filter(t => now - t < RL_WINDOW_MS);
-  const limited = bucket.length >= RL_MAX;
-  if (!limited) bucket.push(now);
-  rlBuckets.set(ip, bucket);
-  if (rlBuckets.size > 10_000) {
-    // Bound memory under IP churn by pruning EXPIRED buckets only — a blanket
-    // clear would reset every live counter, the attacker's included.
-    for (const [k, b] of rlBuckets) {
-      if (!b.length || now - b[b.length - 1] >= RL_WINDOW_MS) rlBuckets.delete(k);
-    }
-  }
-  return limited;
-}
+// ─── Rate limit ──────────────────────────────────────────────────────────────
+// Now shared with the provider webhooks (server/lib/rate-limit.js), which had
+// none. The clientIp() reasoning that used to live here moved with it: nginx
+// APPENDS the true peer to X-Forwarded-For, so only the LAST entry is one an
+// attacker cannot choose.
+const { createLimiter } = require('../lib/rate-limit');
+const marketingLimiter = createLimiter({
+  name: 'marketing-public',
+  max: () => process.env.MARKETING_WEBHOOK_RATE_LIMIT || 60,
+});
+const rateLimited = (req, now = Date.now()) => marketingLimiter.check(req, now);
 
 // Canonicalize a tenant id through its aliases (migration 012 seeds `tantra`
 // with aliases), so a binding written against an alias and a claim written
