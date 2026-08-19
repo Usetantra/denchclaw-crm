@@ -189,6 +189,10 @@ SUITES=(
   "unit-cpf38-anchored-scheduling|node test/unit-cpf38-anchored-scheduling.mjs"
   "unit-cpf38b-webinar-anchor|node test/unit-cpf38b-webinar-anchor.mjs"
   "unit-cpg-auth|env RUN=$RUN_ID CLERK_TEST_AZP=$CLERK_TEST_AZP node test/unit-cpg-auth.mjs"
+  # CP-TOOL exercises bin/ against its OWN throwaway databases (the migration
+  # runner legitimately creates and drops schema), so it does not share the
+  # suite's DB the way every other suite does.
+  "unit-cptool-tooling|env RUN=$RUN_ID node test/unit-cptool-tooling.mjs"
   "unit-cpwf-workflows|env ACTION_EXECUTOR_ENABLED=1 node test/unit-cpwf-workflows.mjs"
 )
 

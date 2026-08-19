@@ -1,0 +1,7 @@
+# Intentionally contains no variables.
+#
+# test/unit-cptool-tooling.mjs points DOTENV_PATH here when it spawns the bin/
+# scripts, so those child processes cannot read the developer's real .env.
+# Without it the suite is not hermetic: a local CREDENTIALS_KEY sends the
+# re-key tests down a refusal path instead of the happy path, and local
+# *_EXECUTOR_ENABLED flags change which channels bin/tick.mjs reports.

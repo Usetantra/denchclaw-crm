@@ -11,3 +11,4 @@ node_modules/
 
 # Operational state from bin/dns-guard.sh — machine- and time-specific.
 .dns-snapshots/
+
