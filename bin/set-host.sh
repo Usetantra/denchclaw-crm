@@ -36,6 +36,35 @@ esac
 HOST="${HOST%/}"
 [ -f .env ] || { echo "FATAL: no .env in $(pwd)"; exit 2; }
 
+# Refuse to rewrite a DEVELOPMENT .env with production URLs.
+#
+# This exists because it happened: a multi-line paste whose `ssh` line silently
+# failed left every following command running on a laptop instead of the server,
+# and this script cheerfully wrote claw.usetantra.com into the local .env. The
+# damage was small and reversible, but CLERK_AUTHORIZED_PARTIES pointing at a
+# host the local browser will never be on breaks local sign-in in a way that
+# looks like a code bug.
+#
+# A DATABASE_URL on loopback is the clearest "this is not the server" signal
+# available, and it is the same heuristic test/apply-schema.mjs already uses to
+# protect production from the test harness — in the opposite direction.
+DBURL=$(grep -E '^DATABASE_URL=' .env 2>/dev/null | head -1 | cut -d= -f2-)
+case "$DBURL" in
+  *localhost*|*127.0.0.1*)
+    if [ "${FORCE_LOCAL:-0}" != 1 ]; then
+      echo "REFUSING: this .env points at a LOCAL database ($(echo "$DBURL" | sed 's|.*@||'))."
+      echo "          Setting production hostnames here would break local sign-in"
+      echo "          (CLERK_AUTHORIZED_PARTIES would name a host your browser is never on)."
+      echo
+      echo "          If you meant to run this on the server, you are not on it —"
+      echo "          check that your ssh actually connected."
+      echo "          To override anyway: FORCE_LOCAL=1 bin/set-host.sh $HOST --write"
+      exit 2
+    fi
+    echo "  (FORCE_LOCAL=1 — proceeding against a local .env)"
+    ;;
+esac
+
 declare -a KEYS=(APP_URL MARKETING_PUBLIC_BASE PUBLIC_BASE_URL TWILIO_WEBHOOK_BASE_URL CLERK_AUTHORIZED_PARTIES)
 declare -a VALS=("$HOST" "$HOST" "$HOST" "$HOST" "$HOST")
 KEYS+=(TWILIO_STATUS_CALLBACK); VALS+=("$HOST/webhooks/twilio/status")
