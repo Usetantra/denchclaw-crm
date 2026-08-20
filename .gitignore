@@ -1,5 +1,9 @@
 node_modules/
 .env
+# Timestamped .env backups written by bin/set-host.sh and bin/rekey-credentials.
+# They contain REAL secrets — CREDENTIALS_KEY, DATABASE_URL, provider keys.
+.env.bak.*
+.env.*.bak
 *.log
 .DS_Store
 
