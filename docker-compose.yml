@@ -1,0 +1,72 @@
+# ─── DenchClaw CRM — single-VM Docker Compose stack ──────────────────────────
+# Three services on one host:
+#   db     — PostgreSQL 16, data on a named volume (the CRM's own denchclaw DB)
+#   app    — server/server.js on :3100 (internal only; never published to host)
+#   proxy  — nginx doing TLS + auth, the ONLY thing bound to 80/443
+#
+# Bring-up order and one-time cert bootstrap are documented in the deploy steps;
+# `deploy/init-letsencrypt.sh` obtains the first Let's Encrypt certificate.
+#
+# All secrets come from ./.env (gitignored). See deploy/env.docker.example.
+
+services:
+  db:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    # NOT published to the host — only the app container reaches it, over the
+    # private compose network. Nothing on the VM's public IP can touch Postgres.
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_DB: ${POSTGRES_DB}
+    volumes:
+      - db-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER} -d ${POSTGRES_DB}"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  app:
+    build: .
+    restart: unless-stopped
+    # env_file injects DATABASE_URL, INTERNAL_API_KEY, Clerk keys, hostnames, …
+    env_file: .env
+    # Not published to the host either. nginx (proxy) reaches it as http://app:3100
+    # over the compose network. This is what makes the internal-key header
+    # discipline in the nginx config load-bearing rather than theatre.
+    depends_on:
+      db:
+        condition: service_healthy
+
+  proxy:
+    image: nginx:1.27-alpine
+    restart: unless-stopped
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./deploy/nginx-claw.docker.conf:/etc/nginx/conf.d/default.conf:ro
+      - ./web:/usr/share/nginx/web:ro
+      - letsencrypt:/etc/letsencrypt
+      - certbot-www:/var/www/certbot
+    depends_on:
+      - app
+    # Pick up renewed certificates without a full restart.
+    command: >-
+      sh -c "while :; do sleep 6h & wait $${!}; nginx -s reload; done & nginx -g 'daemon off;'"
+
+  certbot:
+    image: certbot/certbot
+    restart: unless-stopped
+    volumes:
+      - letsencrypt:/etc/letsencrypt
+      - certbot-www:/var/www/certbot
+    # Attempt renewal twice a day; certbot only acts when a cert is near expiry.
+    entrypoint: >-
+      sh -c "trap exit TERM; while :; do certbot renew --webroot -w /var/www/certbot; sleep 12h & wait $${!}; done"
+
+volumes:
+  db-data:
+  letsencrypt:
+  certbot-www:

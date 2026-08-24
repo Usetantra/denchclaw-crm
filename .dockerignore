@@ -1,0 +1,14 @@
+node_modules
+.git
+.env
+.env.bak.*
+.env.*.bak
+*.log
+.loop
+.dns-snapshots
+.specs
+docs
+examples
+dev
+test
+*.md
